@@ -64,6 +64,7 @@ import GHC.Generics (Generic)
 -- | The complete IR for code generation
 data IR = IR
   { irVersion   :: Text                    -- ^ IR format version
+  , irBackend   :: Text                    -- ^ Backend name (e.g., "substrate", "plexus")
   , irHash      :: Maybe Text              -- ^ Plexus hash for versioning
   , irTypes     :: Map Text TypeDef        -- ^ All types, deduplicated by name
   , irMethods   :: Map Text MethodDef      -- ^ All methods, keyed by full path (e.g., "cone.chat")
@@ -76,6 +77,7 @@ data IR = IR
 emptyIR :: IR
 emptyIR = IR
   { irVersion = "2.0"  -- Bumped: TypeRef now uses structured QualifiedName
+  , irBackend = ""  -- Will be set by buildIR
   , irHash = Nothing
   , irTypes = Map.empty
   , irMethods = Map.empty
@@ -86,6 +88,7 @@ emptyIR = IR
 mergeIR :: IR -> IR -> IR
 mergeIR a b = IR
   { irVersion = irVersion a
+  , irBackend = irBackend a  -- Take from left (parent)
   , irHash = irHash a <|> irHash b  -- Take first available hash
   , irTypes = Map.union (irTypes a) (irTypes b)  -- Left-biased, first definition wins
   , irMethods = Map.union (irMethods a) (irMethods b)

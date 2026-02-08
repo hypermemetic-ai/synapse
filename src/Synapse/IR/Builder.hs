@@ -19,6 +19,7 @@ module Synapse.IR.Builder
   ) where
 
 import Control.Monad (forM)
+import Control.Monad.Reader (asks)
 import Data.Aeson (Value(..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
@@ -45,8 +46,9 @@ import Synapse.IR.Types (QualifiedName(..), qualifiedNameFull)
 -- After walking, deduplicate types that have identical structure
 buildIR :: Path -> SynapseM IR
 buildIR path = do
+  backend <- asks seBackend
   raw <- walkSchema irAlgebra path
-  pure (deduplicateTypes raw)
+  pure $ deduplicateTypes raw { irBackend = backend }
 
 -- | Algebra for building IR from schema tree
 --
@@ -75,6 +77,7 @@ irAlgebra (PluginF schema path childIRs) = do
 
   pure $ IR
     { irVersion = irVersion emptyIR  -- Use version from emptyIR
+    , irBackend = irBackend emptyIR  -- Will be set by buildIR
     , irHash = thisHash
     , irTypes = Map.union localTypes (irTypes childIR)  -- Local wins on conflict
     , irMethods = Map.union localMethods (irMethods childIR)
@@ -87,6 +90,7 @@ irAlgebra (MethodF method namespace path) = do
   let (types, mdef) = extractMethodDef namespace fullPath method
   pure $ IR
     { irVersion = irVersion emptyIR  -- Use version from emptyIR
+    , irBackend = irBackend emptyIR  -- Will be set by buildIR
     , irHash = Nothing  -- Methods don't carry hash
     , irTypes = types
     , irMethods = Map.singleton fullPath mdef
