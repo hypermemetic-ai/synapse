@@ -300,7 +300,7 @@ asteroid_belt: true
 Output raw JSON stream items (useful for piping):
 
 ```bash
-$ synapse plexus solar observe --json
+$ synapse --json plexus solar observe
 {"type":"data","provenance":["solar"],"hash":"abc123","content_type":"solar.observe","data":{"name":"Sol",...}}
 ```
 
@@ -309,7 +309,7 @@ $ synapse plexus solar observe --json
 Output just the content JSON (skip template rendering):
 
 ```bash
-$ synapse plexus solar observe --raw
+$ synapse --raw plexus solar observe
 {"name":"Sol","planet_count":8,"asteroid_belt":true}
 ```
 
@@ -318,7 +318,7 @@ $ synapse plexus solar observe --raw
 Fetch the raw JSON Schema for a path:
 
 ```bash
-$ synapse plexus echo --schema
+$ synapse --schema plexus echo
 {"namespace":"echo","version":"0.1.0","methods":[...],"children":null}
 ```
 
@@ -327,7 +327,7 @@ $ synapse plexus echo --schema
 Preview the Plexus RPC request (JSON-RPC 2.0 format) without sending:
 
 ```bash
-$ synapse plexus echo once --message "test" --dry-run
+$ synapse --dry-run plexus echo once --message "test"
 {"jsonrpc":"2.0","id":1,"method":"plexus.call","params":{"method":"plexus.echo.once","params":{"message":"test"}}}
 ```
 
@@ -446,18 +446,19 @@ Output is formatted using Mustache templates. Templates are resolved by content 
 
 ### Resolution Order
 
-1. **Project-local**: `.substrate/templates/{namespace}/{method}.mustache`
-2. **User global**: `~/.config/synapse/templates/{namespace}/{method}.mustache`
-3. **Namespace default**: `{path}/{namespace}/default.mustache`
-4. **Global default**: `{path}/default.mustache`
+For each search path (`.substrate/templates/` then `~/.config/synapse/templates/`), tries in order:
+
+1. **Exact match**: `{searchPath}/{namespace}/{method}.mustache`
+2. **Namespace default**: `{searchPath}/{namespace}/default.mustache`
+3. **Global default**: `{searchPath}/default.mustache`
 
 ### Generating Templates
 
 Scaffold templates from the schema:
 
 ```bash
-$ synapse plexus --generate-templates
-Generating templates in .substrate/templates...
+$ synapse --generate-templates plexus
+Generating templates in ~/.config/synapse/templates...
   echo/once.mustache
   echo/echo.mustache
   solar/observe.mustache
@@ -481,14 +482,14 @@ Generated templates use the method's return schema to create appropriate Mustach
 Synapse can emit an Intermediate Representation for transpilers:
 
 ```bash
-$ synapse plexus --emit-ir > plexus.ir.json
+$ synapse --emit-ir plexus > plexus.ir.json
 ```
 
 ### IR Structure
 
 ```json
 {
-  "irVersion": "1.0",
+  "irVersion": "2.0",
   "irTypes": {
     "Position": {
       "tdName": "Position",
@@ -611,11 +612,13 @@ cabal build
 cabal test
 ```
 
-Tests are in `test/CLISpec.hs` and use a simple pattern:
+There are 5 test suites:
 
-```haskell
-it "echo once" $ ["plexus", "echo", "once"] `has` ["once", "--message", "required"]
-```
+- **cli-test** (`test/CLISpec.hs`) -- Integration tests, requires running backend on localhost:4444
+- **ir-test** (`test/IRSpec.hs`) -- IR builder tests (type resolution, help text)
+- **parse-test** (`test/ParseSpec.hs`) -- Unit tests for CLI parameter parsing
+- **path-normalization-test** (`test/PathNormalizationSpec.hs`) -- Hyphen/underscore normalization
+- **typeref-json** (`test/TypeRefJson.hs`) -- TypeRef JSON serialization
 
 ### Adding Backends
 
@@ -636,27 +639,42 @@ The registry stores Plexus RPC server metadata (host, port, description) and syn
 ```
 synapse/
   app/
-    Main.hs              -- CLI entry point, argument parsing
+    Main.hs              -- CLI entry point, argument parsing, dispatch
   src/Synapse/
     Monad.hs             -- SynapseM effect stack
-    Transport.hs         -- Network layer
+    Transport.hs         -- Network layer (WebSocket JSON-RPC)
     Cache.hs             -- Content-addressed schema cache
-    Renderer.hs          -- Template-based output
+    Renderer.hs          -- Mustache template-based output rendering
     Schema/
-      Types.hs           -- Core types (Path, SchemaView, NavError)
-      Functor.hs         -- SchemaF base functor
+      Types.hs           -- Core types (Path, SchemaView, NavError, HubStreamItem)
+      Functor.hs         -- SchemaF base functor, Fix, SchemaTree
     Algebra/
-      Recursion.hs       -- Pure recursion schemes (cata, ana, hylo, para, apo)
-      Navigate.hs        -- Navigation (effectful paramorphism)
-      Render.hs          -- Schema rendering to text
+      Recursion.hs       -- Pure & monadic recursion schemes (cata, ana, hylo, para, apo)
+      Navigate.hs        -- Navigation (recursive descent with cycle detection)
+      Render.hs          -- Schema rendering to text (prettyprinter)
       Walk.hs            -- Tree walking (hylomorphism)
-      Complete.hs        -- Shell completion
-      TemplateGen.hs     -- Template generation from schemas
+    CLI/
+      Help.hs            -- IR-based help rendering with type expansion
+      Parse.hs           -- IR-driven parameter parsing (flat flags -> nested JSON)
+      Support.hs         -- CLI representability checks for IR types
+      Template.hs        -- IR-driven Mustache template generation
+      Transform.hs       -- Parameter transforms (path expansion, env vars, defaults)
     IR/
-      Types.hs           -- IR data types
-      Builder.hs         -- Schema -> IR transformation
+      Types.hs           -- IR data types (TypeDef, MethodDef, TypeRef)
+      Builder.hs         -- Schema -> IR transformation (hylomorphism + deduplication)
+    Backend/
+      Discovery.hs       -- Dynamic backend discovery via _info and registry
+    Self/
+      Commands.hs        -- _self meta-command dispatcher (scan, template)
+      Template.hs        -- Template CRUD operations (list, show, generate, delete)
+      Pattern.hs         -- Glob-style pattern matching for method filtering
+      Examples.hs        -- Example value generation for templates
   test/
-    CLISpec.hs           -- Integration tests
+    CLISpec.hs           -- Integration tests (requires running backend)
+    IRSpec.hs            -- IR builder tests (type resolution, help text)
+    ParseSpec.hs         -- Unit tests for CLI parameter parsing
+    PathNormalizationSpec.hs -- Hyphen/underscore normalization tests
+    TypeRefJson.hs       -- TypeRef JSON serialization verification
 ```
 
 ---

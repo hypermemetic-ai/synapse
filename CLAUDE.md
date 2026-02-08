@@ -13,7 +13,7 @@ The stack:
 - **Substrate** (Rust) - The backend hub that hosts activations
 - **Plexus** - The RPC protocol layer (WebSocket, JSON-RPC 2.0, streaming)
 - **Synapse** (this project) - Haskell CLI that discovers and invokes Plexus methods
-- **Meaning** (sibling package) - Shared types for the Plexus protocol
+- **plexus-protocol** (sibling package) - Shared types for the Plexus protocol
 
 Synapse dynamically discovers available commands at runtime by querying `plexus_schema` and `plexus_full_schema`, then builds typed CLI parsers from the JSON Schema.
 
@@ -59,14 +59,11 @@ synapse health check
 # Default: schema-aware rendering (clean output)
 synapse cone list
 
-# Raw JSON data only
+# Raw content JSON (skip template rendering)
 synapse --raw cone list
 
 # Full JSON-RPC stream items
 synapse --json cone list
-
-# Skip template rendering
-synapse --no-render cone list
 ```
 
 ### Inspecting Schemas
@@ -124,16 +121,37 @@ print(f'{filename}_your-title.md')
 
 ```
 synapse/
-├── app/Dyn.hs              # CLI entry point
-├── src/
-│   ├── Plexus.hs           # Re-exports
-│   ├── Plexus/
-│   │   ├── Client.hs       # WebSocket connection
-│   │   ├── Dynamic.hs      # CLI parser generation from schemas
-│   │   ├── Renderer.hs     # Template-based output
-│   │   └── Template/       # Schema-driven template generation
-│   └── Activation/         # Typed APIs per activation
-└── test/                   # Test suites
+├── app/Main.hs                 # CLI entry point, argument parsing, dispatch
+├── src/Synapse/
+│   ├── Monad.hs                # SynapseM effect stack
+│   ├── Transport.hs            # Network layer (WebSocket JSON-RPC)
+│   ├── Cache.hs                # Content-addressed schema cache
+│   ├── Renderer.hs             # Mustache template-based output rendering
+│   ├── Schema/
+│   │   ├── Types.hs            # Core types (Path, SchemaView, NavError)
+│   │   └── Functor.hs          # SchemaF base functor
+│   ├── Algebra/
+│   │   ├── Recursion.hs        # Recursion schemes (cata, ana, hylo, para, apo)
+│   │   ├── Navigate.hs         # Navigation (recursive descent)
+│   │   ├── Render.hs           # Schema rendering to text
+│   │   └── Walk.hs             # Tree walking (hylomorphism)
+│   ├── CLI/
+│   │   ├── Help.hs             # IR-based help rendering
+│   │   ├── Parse.hs            # IR-driven parameter parsing
+│   │   ├── Transform.hs        # Parameter transforms (paths, env vars)
+│   │   ├── Template.hs         # Template generation from IR
+│   │   └── Support.hs          # CLI representability checks
+│   ├── IR/
+│   │   ├── Types.hs            # IR data types
+│   │   └── Builder.hs          # Schema -> IR transformation
+│   ├── Backend/
+│   │   └── Discovery.hs        # Backend discovery via registry
+│   └── Self/
+│       ├── Commands.hs          # _self meta-command dispatcher
+│       ├── Template.hs          # Template CRUD operations
+│       ├── Pattern.hs           # Glob-style pattern matching
+│       └── Examples.hs          # Example value generation
+└── test/                        # 5 test suites
 
-../substrate-protocol/      # Shared protocol types (sibling package)
+../plexus-protocol/              # Shared protocol types (sibling package)
 ```
