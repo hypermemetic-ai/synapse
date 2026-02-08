@@ -11,7 +11,7 @@ This document describes two related improvements to the plexus RPC system:
 
 ### The Problem
 
-The enriched schema exposed via `plexus_activation_schema` was missing the `required` array at the params level. Clients received:
+The enriched schema exposed via `substrate.activation_schema` was missing the `required` array at the params level. Clients received:
 
 ```json
 {
@@ -193,9 +193,9 @@ currentHash <- call "plexus_hash" []
 
 if cachedHash /= currentHash then do
     -- Refresh all activation schemas
-    schema <- call "plexus_schema" []
+    schema <- call "substrate.schema" []
     forM_ (activations schema) $ \activation -> do
-        enriched <- call "plexus_activation_schema" [namespace activation]
+        enriched <- call "substrate.activation_schema" [namespace activation]
         writeCacheFile (namespace activation) enriched
     writeCacheFile "plexus_hash" currentHash
 else
@@ -209,8 +209,8 @@ After this change, the plexus exposes three methods:
 
 | Method | Purpose |
 |--------|---------|
-| `plexus_schema` | List all activations and method counts |
-| `plexus_activation_schema` | Get enriched schema for one activation |
+| `substrate.schema` | List all activations and method counts |
+| `substrate.activation_schema` | Get enriched schema for one activation |
 | `plexus_hash` | Get cache invalidation hash |
 
 ## Testing
@@ -220,7 +220,7 @@ After this change, the plexus exposes three methods:
 echo '{"jsonrpc":"2.0","id":1,"method":"plexus_hash","params":[]}' | websocat ws://127.0.0.1:4444
 
 # Get schema and verify required field
-echo '{"jsonrpc":"2.0","id":1,"method":"plexus_activation_schema","params":["arbor"]}' | \
+echo '{"jsonrpc":"2.0","id":1,"method":"substrate.activation_schema","params":["arbor"]}' | \
   websocat ws://127.0.0.1:4444 | \
   jq '.params.result.data.oneOf[] | select(.properties.method.const == "node_create_text") | .properties.params.required'
 # Expected: ["tree_id", "content"]

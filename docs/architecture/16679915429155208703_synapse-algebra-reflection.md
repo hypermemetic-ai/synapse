@@ -20,7 +20,7 @@ Both produce similar output. The difference is internal: the algebraic version m
 
 1. **Shallow schemas arrived** — Substrate changed from recursive `PluginSchema` to shallow schemas where children are `ChildSummary` references (namespace, description, hash). This broke the original code.
 
-2. **Pragmatic fix** — We updated `Main.hs` to fetch schemas lazily via `plexus_call`. It worked. It was ugly.
+2. **Pragmatic fix** — We updated `Main.hs` to fetch schemas lazily via `substrate.call`. It worked. It was ugly.
 
 3. **You asked for the algebra** — "We prefer the abstracted algebras." This was the right call. Instead of patching, we built it properly.
 

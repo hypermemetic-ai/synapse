@@ -34,7 +34,7 @@ data ChildSummary = ChildSummary
 ### CLI (`synapse/app/Algebra.hs`)
 
 - Changed from nested optparse-applicative subcommands to positional path arguments
-- Schema fetched lazily via `plexus_call` with `{path}.schema`
+- Schema fetched lazily via `substrate.call` with `{path}.schema`
 - Multiple parameter input modes (see below)
 
 ```bash
@@ -70,30 +70,30 @@ When synapse isn't available or for debugging, use `websocat` directly. The Plex
 ### Get Root Schema
 
 ```bash
-(echo '{"jsonrpc":"2.0","id":1,"method":"plexus_call","params":{"method":"plexus.schema"}}'; sleep 1) | websocat ws://127.0.0.1:4444
+(echo '{"jsonrpc":"2.0","id":1,"method":"substrate.call","params":{"method":"substrate.schema"}}'; sleep 1) | websocat ws://127.0.0.1:4444
 ```
 
 ### Get Child Schema
 
 ```bash
 # Solar system schema
-(echo '{"jsonrpc":"2.0","id":1,"method":"plexus_call","params":{"method":"solar.schema"}}'; sleep 1) | websocat ws://127.0.0.1:4444
+(echo '{"jsonrpc":"2.0","id":1,"method":"substrate.call","params":{"method":"solar.schema"}}'; sleep 1) | websocat ws://127.0.0.1:4444
 
 # Nested child schema
-(echo '{"jsonrpc":"2.0","id":1,"method":"plexus_call","params":{"method":"solar.earth.schema"}}'; sleep 1) | websocat ws://127.0.0.1:4444
+(echo '{"jsonrpc":"2.0","id":1,"method":"substrate.call","params":{"method":"solar.earth.schema"}}'; sleep 1) | websocat ws://127.0.0.1:4444
 ```
 
 ### Invoke Methods
 
 ```bash
 # Health check
-(echo '{"jsonrpc":"2.0","id":1,"method":"plexus_call","params":{"method":"health.check"}}'; sleep 1) | websocat ws://127.0.0.1:4444
+(echo '{"jsonrpc":"2.0","id":1,"method":"substrate.call","params":{"method":"health.check"}}'; sleep 1) | websocat ws://127.0.0.1:4444
 
 # Echo with params
-(echo '{"jsonrpc":"2.0","id":1,"method":"plexus_call","params":{"method":"echo.once","params":{"message":"hello"}}}'; sleep 1) | websocat ws://127.0.0.1:4444
+(echo '{"jsonrpc":"2.0","id":1,"method":"substrate.call","params":{"method":"echo.once","params":{"message":"hello"}}}'; sleep 1) | websocat ws://127.0.0.1:4444
 
 # Observe solar system
-(echo '{"jsonrpc":"2.0","id":1,"method":"plexus_call","params":{"method":"solar.observe"}}'; sleep 1) | websocat ws://127.0.0.1:4444
+(echo '{"jsonrpc":"2.0","id":1,"method":"substrate.call","params":{"method":"solar.observe"}}'; sleep 1) | websocat ws://127.0.0.1:4444
 ```
 
 ### Interactive Session

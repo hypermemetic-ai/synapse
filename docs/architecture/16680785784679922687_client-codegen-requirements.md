@@ -86,8 +86,8 @@ treeCreate :: PlexusConnection -> Maybe Value -> Text -> Stream (Of ArborEvent) 
 
 | Endpoint | Returns | Exposed Via |
 |----------|---------|-------------|
-| `plexus_schema` | Module list + method names | Yes |
-| `plexus_activation_schema` | JSON Schema for method inputs | Yes |
+| `substrate.schema` | Module list + method names | Yes |
+| `substrate.activation_schema` | JSON Schema for method inputs | Yes |
 | `plexus_hash` | Cache invalidation hash | Yes |
 | Response event schemas | **Not exposed** | No |
 | Domain type schemas | **Not exposed** | No |
@@ -168,7 +168,7 @@ plexus_activation_response_schema(namespace) -> JSON Schema of event types
 
 **Option B: Extend existing schema endpoint**
 ```
-plexus_activation_schema(namespace) -> {
+substrate.activation_schema(namespace) -> {
   "methods": { ... },       // existing
   "responses": { ... },     // new: event type schema
   "types": { ... }          // new: shared domain types

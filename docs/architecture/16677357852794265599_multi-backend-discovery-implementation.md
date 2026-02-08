@@ -501,7 +501,7 @@ synapse --debug
 }
 ```
 
-Then: `synapse substrate cone list` → calls `plexus.call` with `cone.list`.
+Then: `synapse substrate cone list` → calls `substrate.call` with `cone.list`.
 
 **Effort**: 4-5 hours (requires registry schema change)
 

@@ -22,7 +22,7 @@ Errors were returned as JSON-RPC errors with guidance in the error data:
     "message": "Activation 'foo' not found",
     "data": {
       "try": {
-        "method": "plexus_schema",
+        "method": "substrate.schema",
         "params": []
       },
       "context": {
@@ -56,7 +56,7 @@ Errors are returned as **successful subscriptions** that yield guidance streams:
   },
   "error_kind": "activation_not_found",
   "activation": "foo",
-  "action": "call_plexus_schema"
+  "action": "call_substrate.schema"
 }
 
 // Stream event 2: Error
@@ -105,7 +105,7 @@ interface GuidanceEvent {
   method_schema?: Schema;
 
   // Flattened suggestion (one of these groups)
-  action: "call_plexus_schema" | "call_activation_schema" | "try_method" | "custom";
+  action: "call_substrate.schema" | "call_activation_schema" | "try_method" | "custom";
 }
 ```
 
@@ -120,11 +120,11 @@ Triggered when namespace doesn't exist (e.g., `foo.bar` where `foo` is unknown).
   "type": "guidance",
   "error_kind": "activation_not_found",
   "activation": "foo",
-  "action": "call_plexus_schema"
+  "action": "call_substrate.schema"
 }
 ```
 
-**Frontend action**: Suggest running `plexus_schema` to discover available activations.
+**Frontend action**: Suggest running `substrate.schema` to discover available activations.
 
 #### 2. MethodNotFound
 
@@ -176,7 +176,7 @@ Triggered when method parameters don't match schema.
 **Frontend action**:
 - Show the schema for the attempted method
 - Highlight required vs optional parameters
-- Suggest calling `plexus_activation_schema` for full details
+- Suggest calling `substrate.activation_schema` for full details
 
 ### Suggestion Actions
 
@@ -186,11 +186,11 @@ The `action` field tells frontends what to suggest:
 
 ```json
 {
-  "action": "call_plexus_schema"
+  "action": "call_substrate.schema"
 }
 ```
 
-**Meaning**: User should call `plexus_schema` to discover available activations.
+**Meaning**: User should call `substrate.schema` to discover available activations.
 
 **Example CLI output**:
 ```
@@ -209,7 +209,7 @@ Or:  synapse schema
 }
 ```
 
-**Meaning**: User should call `plexus_activation_schema` with the namespace.
+**Meaning**: User should call `substrate.activation_schema` with the namespace.
 
 **Example CLI output**:
 ```
@@ -343,7 +343,7 @@ function parseGuidance(event: GuidanceEvent): GuidanceInfo {
       return {
         problem: `Activation '${event.activation}' not found`,
         suggestion: "Run 'synapse --help' to see available activations",
-        nextAction: "call_plexus_schema"
+        nextAction: "call_substrate.schema"
       };
 
     case "method_not_found":
@@ -510,7 +510,7 @@ synapse foo bar
 **Verify**:
 - Guidance event arrives first
 - Error event includes "Activation not found"
-- Suggestion points to `plexus_schema`
+- Suggestion points to `substrate.schema`
 
 ### Test 2: Unknown Method
 
@@ -613,7 +613,7 @@ parseSuggestionAction :: Object -> Parser SuggestionAction
 parseSuggestionAction o = do
   action <- o .: "action"
   case action of
-    "call_plexus_schema" -> pure CallPlexusSchema
+    "call_substrate.schema" -> pure CallPlexusSchema
     "call_activation_schema" -> CallActivationSchema <$> o .: "namespace"
     "try_method" -> TryMethod <$> o .: "method" <*> o .:? "example_params"
     "custom" -> Custom <$> o .: "message"

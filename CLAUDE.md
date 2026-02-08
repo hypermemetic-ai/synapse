@@ -15,7 +15,7 @@ The stack:
 - **Synapse** (this project) - Haskell CLI that discovers and invokes Plexus methods
 - **plexus-protocol** (sibling package) - Shared types for the Plexus protocol
 
-Synapse dynamically discovers available commands at runtime by querying `plexus_schema` and `plexus_full_schema`, then builds typed CLI parsers from the JSON Schema.
+Synapse dynamically discovers available commands at runtime by querying `substrate.schema` and `substrate.full_schema`, then builds typed CLI parsers from the JSON Schema.
 
 ## Using Synapse CLI
 
@@ -92,10 +92,10 @@ The plexus server runs on `ws://localhost:4444`.
 
 ```bash
 # List all activations
-(echo '{"jsonrpc":"2.0","id":1,"method":"plexus_schema","params":[]}'; sleep 1) | websocat ws://localhost:4444
+(echo '{"jsonrpc":"2.0","id":1,"method":"substrate.schema","params":[]}'; sleep 1) | websocat ws://localhost:4444
 
 # Get full schema with params and return types
-(echo '{"jsonrpc":"2.0","id":1,"method":"plexus_full_schema","params":["cone"]}'; sleep 1) | websocat ws://localhost:4444
+(echo '{"jsonrpc":"2.0","id":1,"method":"substrate.full_schema","params":["cone"]}'; sleep 1) | websocat ws://localhost:4444
 
 # Call a method
 (echo '{"jsonrpc":"2.0","id":1,"method":"bash_execute","params":{"command":"echo hello"}}'; sleep 2) | websocat ws://localhost:4444

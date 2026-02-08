@@ -14,8 +14,8 @@ module Synapse.Schema.Types
     -- * Query helpers
   , pluginChildren
   , childNamespaces
-  , isHub
-  , isLeaf
+  , isHubActivation
+  , isLeafActivation
 
     -- * Navigation Types
   , Path
@@ -49,8 +49,8 @@ import Plexus.Schema.Recursive
   , SchemaResult(..)
   , pluginChildren
   , childNamespaces
-  , isHub
-  , isLeaf
+  , isHubActivation
+  , isLeafActivation
   )
 
 import Plexus.Types

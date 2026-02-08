@@ -373,7 +373,7 @@ The substrate exposes WebSocket JSON-RPC with streaming:
 ```
 ws://127.0.0.1:4444
 
-{"jsonrpc":"2.0","method":"plexus_call","params":{"method":"..."},"id":1}
+{"jsonrpc":"2.0","method":"substrate.call","params":{"method":"..."},"id":1}
 ```
 
 Response streams as subscription notifications.
@@ -384,8 +384,8 @@ Response streams as subscription notifications.
 -- Fetch a schema by path
 fetchSchema :: Text -> SynapseM PluginSchema
 fetchSchema path = do
-  let method = if T.null path then "plexus.schema" else path <> ".schema"
-  result <- rpcCall "plexus_call" (object ["method" .= method])
+  let method = if T.null path then "substrate.schema" else path <> ".schema"
+  result <- rpcCall "substrate.call" (object ["method" .= method])
   parseSchema result
 
 -- Resolve a child summary to full schema
@@ -408,7 +408,7 @@ Method invocation streams results:
 ```haskell
 invoke :: Text -> Value -> ConduitT () StreamItem SynapseM ()
 invoke method params = do
-  response <- rpcCallStreaming "plexus_call"
+  response <- rpcCallStreaming "substrate.call"
     (object ["method" .= method, "params" .= params])
   parseStreamItems response
 ```

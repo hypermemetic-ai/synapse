@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 **Date:** 2025-12-18
-**Affects:** `plexus_activation_schema` parsing, CLI parameter generation
+**Affects:** `substrate.activation_schema` parsing, CLI parameter generation
 
 ## Overview
 
@@ -307,9 +307,9 @@ let resolved = resolveSchemaRefs cachedSchema
 
 ## Trade-offs
 
-### vs `plexus_full_schema` Endpoint
+### vs `substrate.full_schema` Endpoint
 
-| Aspect | `$ref` Resolution | `plexus_full_schema` |
+| Aspect | `$ref` Resolution | `substrate.full_schema` |
 |--------|-------------------|----------------------|
 | **Implementation** | Client-side resolution | Server sends resolved |
 | **Complexity** | Complex recursive logic | Simple parsing |
@@ -321,11 +321,11 @@ let resolved = resolveSchemaRefs cachedSchema
 ### When to Use Which
 
 **Use `$ref` resolution when:**
-- Working with `plexus_activation_schema` (current format)
+- Working with `substrate.activation_schema` (current format)
 - Need backward compatibility
 - Substrate might not send resolved schemas
 
-**Use `plexus_full_schema` when:**
+**Use `substrate.full_schema` when:**
 - Need return type information
 - Want cleaner method structure
 - Substrate supports it
@@ -489,10 +489,10 @@ jq '.params.properties.identifier | has("oneOf")' cone_chat.json
 
 **2025-12-18:** Implemented `$ref` resolution
 - **Why:** Enables proper handling of `ConeIdentifier` and other enum types
-- **Trade-off:** Added complexity vs waiting for `plexus_full_schema`
-- **Mitigation:** Keep implementation contained, easy to remove if we switch to `plexus_full_schema`
+- **Trade-off:** Added complexity vs waiting for `substrate.full_schema`
+- **Mitigation:** Keep implementation contained, easy to remove if we switch to `substrate.full_schema`
 
-**Future Decision Point:** When substrate supports `plexus_full_schema`
+**Future Decision Point:** When substrate supports `substrate.full_schema`
 - Re-evaluate if `$ref` resolution still needed
 - Consider deprecating in favor of cleaner endpoint
 - Or keep both for backward compatibility

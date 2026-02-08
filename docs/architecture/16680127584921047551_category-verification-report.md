@@ -18,7 +18,7 @@
 
 **Details:**
 
-- `plexus_schema` returns consistent hash `1a82721760a35edd` (method hash)
+- `substrate.schema` returns consistent hash `1a82721760a35edd` (method hash)
 - `plexus_hash` returns `faf843983c8bb62f` (tree hash)
 - These differ because one is the method's schema hash, the other is the recursive tree hash
 
@@ -73,7 +73,7 @@ Schemas NOW fetchable (updated):
 
 With shallow schemas, we can only see one level at a time. Full cycle detection would require:
 1. Recursive schema fetching (not available), OR
-2. Walking the method graph via `plexus_call`
+2. Walking the method graph via `substrate.call`
 
 The current visible structure is a tree (no cycles at depth 1).
 

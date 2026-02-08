@@ -7,7 +7,7 @@ A CLI that discovers its command structure from the substrate at runtime, genera
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1: Schema Types | ✅ Done | `src/Plexus/Schema.hs` - includes EnrichedSchema types |
-| Phase 2: Schema Fetching | ✅ Done | Via `plexus_schema` + `plexus_activation_schema` RPC |
+| Phase 2: Schema Fetching | ✅ Done | Via `substrate.schema` + `substrate.activation_schema` RPC |
 | Phase 3: Schema Caching | ✅ Done | `src/Plexus/Schema/Cache.hs` - caches enriched schemas |
 | Phase 4: Dynamic Parser | ✅ Done | Typed flags via index-based schema lookup |
 | Phase 5: Main Entry Point | ✅ Done | `app/Dyn.hs` |
@@ -18,13 +18,13 @@ A CLI that discovers its command structure from the substrate at runtime, genera
 **Implementation:**
 - `buildTypedMethodParser` generates typed flags from `MethodSchema`
 - `parseMethodVariantByIndex` looks up schema by index, not name
-- Enriched schemas are fetched via `plexus_activation_schema` RPC
+- Enriched schemas are fetched via `substrate.activation_schema` RPC
 - Schemas are cached in `~/.cache/symbols/schema.json`
 - Help shows typed flags: `--tree-id UUID`, `--owner-id TEXT`, etc.
 
 ## Server Schema Types
 
-The substrate exposes these types via `plexus_schema` subscription:
+The substrate exposes these types via `substrate.schema` subscription:
 
 ```rust
 // PlexusSchema - top level response
@@ -100,10 +100,10 @@ data ParamSchema = ParamSchema
 plexusSchema :: PlexusConnection -> Stream (Of PlexusSchema) IO ()
 plexusSchema conn =
   S.mapMaybe extractSchema $
-    plexusRpc conn "plexus_schema" (toJSON ([] :: [Value]))
+    plexusRpc conn "substrate.schema" (toJSON ([] :: [Value]))
 ```
 
-The `plexus_schema` subscription returns schema with content_type `"plexus.schema"`.
+The `substrate.schema` subscription returns schema with content_type `"substrate.schema"`.
 
 ### Phase 3: Schema Caching
 

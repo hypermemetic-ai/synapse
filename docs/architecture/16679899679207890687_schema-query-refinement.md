@@ -45,8 +45,8 @@ solar.jupiter.io.info.schema   → MethodSchema for "info" on io (nested)
 
 ```
 // Alternative: pass method name as parameter
-plexus_call("echo.schema", {"method": "once"})  // Returns MethodSchema
-plexus_call("echo.schema", {})                   // Returns PluginSchema
+substrate.call("echo.schema", {"method": "once"})  // Returns MethodSchema
+substrate.call("echo.schema", {})                   // Returns PluginSchema
 ```
 
 Both approaches return identical `MethodSchema` output.

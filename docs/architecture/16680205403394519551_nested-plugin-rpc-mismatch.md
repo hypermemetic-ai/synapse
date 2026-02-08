@@ -94,10 +94,10 @@ Pros: Schema is self-documenting
 Cons: More complexity
 
 ### Option D: Route Through Plexus
-Use `plexus_call` with the full path:
+Use `substrate.call` with the full path:
 
 ```json
-{"method": "plexus_call", "params": {"method": "solar.mercury.info", "params": {}}}
+{"method": "substrate.call", "params": {"method": "solar.mercury.info", "params": {}}}
 ```
 
 Pros: Single routing point

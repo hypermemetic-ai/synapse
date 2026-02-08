@@ -66,7 +66,7 @@ The same `$defs` appear in every celestial body's schema because each independen
 
 ### 3. No Cross-Plugin Type Sharing
 
-Plexus returns each plugin's schema independently via `plexus.schema` and `<namespace>.schema`. There's no mechanism to:
+Plexus returns each plugin's schema independently via `substrate.schema` and `<namespace>.schema`. There's no mechanism to:
 - Identify types that appear in multiple plugins
 - Reference a canonical definition
 - Deduplicate before returning to clients
@@ -231,7 +231,7 @@ Since `jupiter.SolarEvent` and `io.SolarEvent` have different qualified names, t
 
 2. **Add new RPC method**:
    ```rust
-   // plexus.full_schema_deduplicated or enhance existing plexus.schema
+   // {backend}.full_schema_deduplicated or enhance existing plexus.schema
    #[hub_method]
    async fn full_schema(&self) -> PlexusFullSchema {
        let deduped = self.collect_deduplicated_schemas();
@@ -472,7 +472,7 @@ This allows clients to correctly attribute types to their defining namespace.
 
 ### Regression Tests
 - Existing schemas continue to work
-- No breaking changes to `plexus.schema` response
+- No breaking changes to `substrate.schema` response
 
 ## Appendix: Affected Files
 

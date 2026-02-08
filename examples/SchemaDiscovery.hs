@@ -3,8 +3,8 @@
 
 -- | Demonstrates the two-call schema discovery pattern
 --
--- 1. Call plexus_schema → get list of activations
--- 2. For each activation, call plexus_activation_schema → get method schemas
+-- 1. Call substrate.schema → get list of activations
+-- 2. For each activation, call substrate.activation_schema → get method schemas
 --
 -- The ActivationInfo structure drives both:
 -- - CLI subcommand generation (arbor, cone, health)
@@ -38,9 +38,9 @@ main = do
   conn <- connect defaultConfig
 
   -- STEP 1: Discover all activations
-  putStrLn "Step 1: Calling plexus_schema to discover activations..."
+  putStrLn "Step 1: Calling substrate.schema to discover activations..."
   mSchema <- S.head_ $ S.mapMaybe extractSchemaEvent $
-    substrateRpc conn "plexus_schema" (toJSON ([] :: [Value]))
+    substrateRpc conn "substrate.schema" (toJSON ([] :: [Value]))
 
   case mSchema of
     Nothing -> putStrLn "Failed to get schema"
@@ -68,7 +68,7 @@ demonstrateActivation plexusConn act = do
   putStrLn $ "  → Requesting enriched schema for '" <> T.unpack ns <> "'..."
 
   mEnriched <- S.head_ $ S.mapMaybe extractActivationSchemaEvent $
-    substrateRpc plexusConn "plexus_activation_schema" (toJSON [ns])
+    substrateRpc plexusConn "substrate.activation_schema" (toJSON [ns])
 
   case mEnriched of
     Nothing -> putStrLn "    Failed to get enriched schema"
@@ -87,7 +87,7 @@ demonstrateActivation plexusConn act = do
       putStrLn ""
 
       -- This demonstrates:
-      -- 1. ActivationInfo.namespace → used for plexus_activation_schema RPC
+      -- 1. ActivationInfo.namespace → used for substrate.activation_schema RPC
       -- 2. ActivationInfo.methods → used to know which method corresponds to which oneOf variant
       -- 3. Same structure drives CLI: "symbols-dyn <namespace> <method>"
 
@@ -98,7 +98,7 @@ demonstrateActivation plexusConn act = do
 --   - activationMethods → sub-subcommand names ("tree-create", "tree-list")
 --
 -- For schema enrichment:
---   - activationNamespace → RPC parameter: plexus_activation_schema("arbor")
+--   - activationNamespace → RPC parameter: substrate.activation_schema("arbor")
 --   - activationMethods[i] → maps to enrichedSchema.oneOf[i]
 --
 -- This creates a direct correspondence:

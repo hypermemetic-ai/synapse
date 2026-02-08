@@ -33,8 +33,8 @@ This document describes the complete architecture of the self-documenting RPC sy
 │                             ▼                                        │
 │  3. Plexus RPC Methods                                              │
 │     ┌─────────────────────────────────────────────────────┐         │
-│     │ plexus_schema          → List activations/methods   │         │
-│     │ plexus_activation_schema → Full schema for one      │         │
+│     │ substrate.schema          → List activations/methods   │         │
+│     │ substrate.activation_schema → Full schema for one      │         │
 │     │ plexus_hash            → Cache invalidation hash    │         │
 │     └─────────────────────────────────────────────────────┘         │
 │                             │                                        │
@@ -48,9 +48,9 @@ This document describes the complete architecture of the self-documenting RPC sy
 │                                                                       │
 │  1. Schema Discovery                                                 │
 │     call plexus_hash        → "7a1a43920ee194e1"                    │
-│     call plexus_schema      → {activations: [...]}                  │
+│     call substrate.schema      → {activations: [...]}                  │
 │     for each activation:                                             │
-│       call plexus_activation_schema(ns) → {oneOf: [...]}            │
+│       call substrate.activation_schema(ns) → {oneOf: [...]}            │
 │                             │                                        │
 │                             ▼                                        │
 │  2. Cache with Hash (TTL removed)                                   │
@@ -167,7 +167,7 @@ The frontend uses a **two-phase discovery** process:
 ### Phase 2.1: Discover Activations
 
 ```json
-Request:  {"method": "plexus_schema", "params": []}
+Request:  {"method": "substrate.schema", "params": []}
 Response: {
   "activations": [
     {
@@ -193,7 +193,7 @@ This tells the frontend:
 ### Phase 2.2: Enrich Each Activation
 
 ```json
-Request:  {"method": "plexus_activation_schema", "params": ["arbor"]}
+Request:  {"method": "substrate.activation_schema", "params": ["arbor"]}
 Response: {
   "oneOf": [
     { /* tree_create schema */ },
@@ -303,11 +303,11 @@ synapse cache refresh
 The frontend uses **index-based mapping** between method lists and enriched schemas:
 
 ```haskell
--- From plexus_schema
+-- From substrate.schema
 activationMethods = ["tree_create", "tree_get", "tree_list", ...]
                      [0]            [1]          [2]
 
--- From plexus_activation_schema
+-- From substrate.activation_schema
 enrichedSchema.oneOf = [treeCreateSchema, treeGetSchema, treeListSchema, ...]
                         [0]               [1]            [2]
 
@@ -431,8 +431,8 @@ Usage: synapse bash execute --command TEXT
 # 1. First run - fetch and cache schemas
 $ synapse arbor tree-list
 # → Calls plexus_hash
-# → Calls plexus_schema
-# → Calls plexus_activation_schema for each activation
+# → Calls substrate.schema
+# → Calls substrate.activation_schema for each activation
 # → Caches to ~/.cache/symbols/schema.json
 # → Executes command
 
