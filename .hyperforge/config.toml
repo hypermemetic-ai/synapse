@@ -1,0 +1,12 @@
+repo_name = "synapse"
+org = "hypermemetic"
+forges = [
+    "github",
+    "codeberg",
+]
+visibility = "public"
+default_branch = "main"
+
+[ssh]
+codeberg = "hypermemetic-claude"
+github = "hypermemetic-claude"
