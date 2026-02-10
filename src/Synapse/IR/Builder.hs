@@ -19,6 +19,7 @@ module Synapse.IR.Builder
   ) where
 
 import Control.Monad (forM)
+import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value(..))
 import qualified Data.Aeson.Key as K
@@ -30,25 +31,55 @@ import Data.Maybe (fromMaybe, mapMaybe, catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Vector as V
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format (formatTime, defaultTimeLocale)
 
 import Synapse.Schema.Types
 import Synapse.Schema.Functor (SchemaF(..))
 import Synapse.Algebra.Walk (walkSchema)
 import Synapse.Monad
 import Synapse.IR.Types hiding (QualifiedName(..), qualifiedNameFull)
-import Synapse.IR.Types (QualifiedName(..), qualifiedNameFull)
+import Synapse.IR.Types (QualifiedName(..), qualifiedNameFull, synapseVersion)
 
 -- ============================================================================
 -- Building IR
 -- ============================================================================
 
+-- | Parse a generator info string "tool:version" into GeneratorInfo
+-- Returns Nothing if the format is invalid
+parseGeneratorInfo :: Text -> Maybe GeneratorInfo
+parseGeneratorInfo s = case T.splitOn ":" s of
+  [tool, version] | not (T.null tool) && not (T.null version) ->
+    Just $ GeneratorInfo tool version
+  _ -> Nothing
+
 -- | Build IR by walking the schema tree from a given path
 -- After walking, deduplicate types that have identical structure
-buildIR :: Path -> SynapseM IR
-buildIR path = do
+-- Accepts generator info strings in "tool:version" format
+buildIR :: [Text] -> Path -> SynapseM IR
+buildIR generatorInfoStrs path = do
   backend <- asks seBackend
   raw <- walkSchema irAlgebra path
-  pure $ deduplicateTypes raw { irBackend = backend }
+
+  -- Parse generator info and add synapse itself
+  let parsedGens = mapMaybe parseGeneratorInfo generatorInfoStrs
+      allGens = parsedGens ++ [GeneratorInfo "synapse" synapseVersion]
+
+  -- Get current timestamp in ISO 8601 format
+  currentTime <- liftIO getCurrentTime
+  let timestamp = T.pack $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" currentTime
+
+  -- Create generation metadata
+  let metadata = GenerationMetadata
+        { gmGenerators = allGens
+        , gmTimestamp = timestamp
+        , gmIrVersion = irVersion emptyIR
+        }
+
+  pure $ deduplicateTypes raw
+    { irBackend = backend
+    , irMetadata = Just metadata
+    }
 
 -- | Algebra for building IR from schema tree
 --
@@ -79,6 +110,7 @@ irAlgebra (PluginF schema path childIRs) = do
     { irVersion = irVersion emptyIR  -- Use version from emptyIR
     , irBackend = irBackend emptyIR  -- Will be set by buildIR
     , irHash = thisHash
+    , irMetadata = irMetadata childIR  -- Preserve metadata from child
     , irTypes = Map.union localTypes (irTypes childIR)  -- Local wins on conflict
     , irMethods = Map.union localMethods (irMethods childIR)
     , irPlugins = Map.insert namespace pluginMethods (irPlugins childIR)
@@ -92,6 +124,7 @@ irAlgebra (MethodF method namespace path) = do
     { irVersion = irVersion emptyIR  -- Use version from emptyIR
     , irBackend = irBackend emptyIR  -- Will be set by buildIR
     , irHash = Nothing  -- Methods don't carry hash
+    , irMetadata = Nothing  -- Will be set by buildIR
     , irTypes = types
     , irMethods = Map.singleton fullPath mdef
     , irPlugins = Map.singleton namespace [methodName method]

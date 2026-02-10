@@ -27,6 +27,13 @@ module Synapse.IR.Types
   , emptyIR
   , mergeIR
 
+    -- * Version Information
+  , synapseVersion
+
+    -- * Generation Metadata
+  , GeneratorInfo(..)
+  , GenerationMetadata(..)
+
     -- * Type Definitions
   , TypeDef(..)
   , tdFullName
@@ -58,6 +65,35 @@ import qualified Data.Text as T
 import GHC.Generics (Generic)
 
 -- ============================================================================
+-- Version Information
+-- ============================================================================
+
+-- | Synapse version (from cabal file: plexus-synapse.cabal)
+synapseVersion :: Text
+synapseVersion = "0.2.0.0"
+
+-- ============================================================================
+-- Generation Metadata
+-- ============================================================================
+
+-- | Generator tool version information
+data GeneratorInfo = GeneratorInfo
+  { giTool    :: Text  -- ^ Tool name (e.g., "synapse", "synapse-cc")
+  , giVersion :: Text  -- ^ Version string (e.g., "0.2.0.0")
+  }
+  deriving stock (Show, Eq, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
+-- | Generation metadata tracking the full toolchain
+data GenerationMetadata = GenerationMetadata
+  { gmGenerators :: [GeneratorInfo]  -- ^ All tools in the generation chain
+  , gmTimestamp  :: Text             -- ^ ISO 8601 timestamp of generation
+  , gmIrVersion  :: Text             -- ^ IR format version
+  }
+  deriving stock (Show, Eq, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
+-- ============================================================================
 -- Top-level IR
 -- ============================================================================
 
@@ -66,6 +102,7 @@ data IR = IR
   { irVersion   :: Text                    -- ^ IR format version
   , irBackend   :: Text                    -- ^ Backend name (e.g., "substrate", "plexus")
   , irHash      :: Maybe Text              -- ^ Plexus hash for versioning
+  , irMetadata  :: Maybe GenerationMetadata  -- ^ Generation toolchain metadata
   , irTypes     :: Map Text TypeDef        -- ^ All types, deduplicated by name
   , irMethods   :: Map Text MethodDef      -- ^ All methods, keyed by full path (e.g., "cone.chat")
   , irPlugins   :: Map Text [Text]         -- ^ Plugin -> method names mapping
@@ -79,6 +116,7 @@ emptyIR = IR
   { irVersion = "2.0"  -- Bumped: TypeRef now uses structured QualifiedName
   , irBackend = ""  -- Will be set by buildIR
   , irHash = Nothing
+  , irMetadata = Nothing
   , irTypes = Map.empty
   , irMethods = Map.empty
   , irPlugins = Map.empty
@@ -90,6 +128,7 @@ mergeIR a b = IR
   { irVersion = irVersion a
   , irBackend = irBackend a  -- Take from left (parent)
   , irHash = irHash a <|> irHash b  -- Take first available hash
+  , irMetadata = irMetadata a <|> irMetadata b  -- Take first available metadata
   , irTypes = Map.union (irTypes a) (irTypes b)  -- Left-biased, first definition wins
   , irMethods = Map.union (irMethods a) (irMethods b)
   , irPlugins = Map.unionWith (++) (irPlugins a) (irPlugins b)

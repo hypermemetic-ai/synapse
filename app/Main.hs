@@ -56,16 +56,17 @@ import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDis
 -- | Synapse-level options (must appear before backend)
 -- Controls connection settings and output format
 data SynapseOpts = SynapseOpts
-  { soHost     :: Text          -- ^ Registry host for discovery
-  , soPort     :: Int           -- ^ Registry port for discovery
-  , soJson     :: Bool          -- ^ Output raw JSON stream items
-  , soRaw      :: Bool          -- ^ Output raw content (no templates)
-  , soDryRun   :: Bool          -- ^ Show request without sending
-  , soSchema   :: Bool          -- ^ Fetch raw schema JSON
-  , soGenerate :: Bool          -- ^ Generate templates from IR
-  , soEmitIR   :: Bool          -- ^ Emit IR for code generation
-  , soParams   :: Maybe Text    -- ^ JSON params via -p
-  , soRpc      :: Maybe Text    -- ^ Raw JSON-RPC passthrough
+  { soHost          :: Text          -- ^ Registry host for discovery
+  , soPort          :: Int           -- ^ Registry port for discovery
+  , soJson          :: Bool          -- ^ Output raw JSON stream items
+  , soRaw           :: Bool          -- ^ Output raw content (no templates)
+  , soDryRun        :: Bool          -- ^ Show request without sending
+  , soSchema        :: Bool          -- ^ Fetch raw schema JSON
+  , soGenerate      :: Bool          -- ^ Generate templates from IR
+  , soEmitIR        :: Bool          -- ^ Emit IR for code generation
+  , soParams        :: Maybe Text    -- ^ JSON params via -p
+  , soRpc           :: Maybe Text    -- ^ Raw JSON-RPC passthrough
+  , soGeneratorInfo :: [Text]        -- ^ Generator tool info (tool:version pairs)
   }
   deriving Show
 
@@ -231,7 +232,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
               -- Mode 4: Emit IR for code generation
               else if soEmitIR
                 then do
-                  ir <- buildIR pathSegs
+                  ir <- buildIR soGeneratorInfo pathSegs
                   liftIO $ LBS.putStrLn $ encode ir
 
                 else do
@@ -256,7 +257,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                         -- Landed on a method: invoke or show help
                         ViewMethod method path -> do
                           -- Build IR for this method's namespace
-                          ir <- buildIR (init path)
+                          ir <- buildIR soGeneratorInfo (init path)
                           let fullPath = T.intercalate "." path
 
                           -- If --help was explicitly requested, show help and exit
@@ -622,4 +623,7 @@ optsParser = do
   soRpc <- optional $ T.pack <$> strOption
     ( long "rpc" <> short 'r' <> metavar "JSON"
    <> help "Raw JSON-RPC request (bypass navigation)" )
+  soGeneratorInfo <- many $ T.pack <$> strOption
+    ( long "generator-info" <> metavar "TOOL:VERSION"
+   <> help "Generator tool version info (can be specified multiple times)" )
   pure SynapseOpts{..}

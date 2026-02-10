@@ -176,7 +176,7 @@ generateAllTemplates = generateTemplatesFor AllTemplates
 -- | Generate templates with filtering
 generateTemplatesFor :: TemplateFilter -> Path -> SynapseM [GeneratedTemplate]
 generateTemplatesFor filt path = do
-  ir <- buildIR path
+  ir <- buildIR [] path  -- No generator info for internal template generation
   let methods = Map.elems (irMethods ir)
       filtered = filterMethods filt methods
       templates = map (generateTemplate ir) filtered
