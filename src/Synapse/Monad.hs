@@ -31,7 +31,6 @@ module Synapse.Monad
   , throwNav
   , throwTransport
   , throwTransportWith
-  , categorizeTransportError
   , throwParse
   , throwBackend
 
@@ -165,14 +164,6 @@ throwBackend errorType backends = throwError (BackendError errorType backends)
 -- | Throw a transport error with context
 throwTransportWith :: TransportContext -> SynapseM a
 throwTransportWith = throwError . TransportErrorContext
-
--- | Categorize transport errors from exception messages
-categorizeTransportError :: Text -> TransportErrorCategory
-categorizeTransportError msg
-  | "refused" `T.isInfixOf` T.toLower msg = ConnectionRefused
-  | "timeout" `T.isInfixOf` T.toLower msg = ConnectionTimeout
-  | "protocol" `T.isInfixOf` T.toLower msg = ProtocolError
-  | otherwise = UnknownTransportError
 
 -- ============================================================================
 -- Cycle Detection

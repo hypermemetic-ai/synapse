@@ -25,6 +25,7 @@ import qualified Data.Text as T
 
 import Plexus.Client (SubstrateConfig(..))
 import qualified Plexus.Transport as ST
+import qualified Plexus.Types as PT
 
 import Synapse.Schema.Types
 import Synapse.Monad
@@ -33,13 +34,29 @@ import Synapse.Monad
 fetchSchema :: SynapseM PluginSchema
 fetchSchema = fetchSchemaAt []
 
+-- | Convert plexus-protocol TransportError to error message
+transportErrorToText :: PT.TransportError -> Text
+transportErrorToText (PT.ConnectionRefused host port) =
+  "Connection refused to " <> host <> ":" <> T.pack (show port)
+transportErrorToText (PT.ConnectionTimeout host port) =
+  "Connection timeout to " <> host <> ":" <> T.pack (show port)
+transportErrorToText (PT.ProtocolError msg) = "Protocol error: " <> msg
+transportErrorToText (PT.NetworkError msg) = "Network error: " <> msg
+
+-- | Convert plexus-protocol TransportError to TransportCategory
+transportErrorToCategory :: PT.TransportError -> TransportErrorCategory
+transportErrorToCategory (PT.ConnectionRefused _ _) = ConnectionRefused
+transportErrorToCategory (PT.ConnectionTimeout _ _) = ConnectionTimeout
+transportErrorToCategory (PT.ProtocolError _) = ProtocolError
+transportErrorToCategory (PT.NetworkError _) = UnknownTransportError
+
 -- | Fetch schema at a specific path
 fetchSchemaAt :: Path -> SynapseM PluginSchema
 fetchSchemaAt path = do
   cfg <- getConfig
   result <- liftIO $ ST.fetchSchemaAt cfg path
   case result of
-    Left err -> throwNav $ FetchError err path
+    Left err -> throwNav $ FetchError (transportErrorToText err) path
     Right schema -> pure schema
 
 -- | Fetch a specific method's schema (more efficient than full plugin schema)
@@ -49,7 +66,7 @@ fetchMethodSchema path methodName = do
   cfg <- getConfig
   result <- liftIO $ ST.fetchMethodSchemaAt cfg path methodName
   case result of
-    Left err -> throwNav $ FetchError err path
+    Left err -> throwNav $ FetchError (transportErrorToText err) path
     Right schema -> pure schema
 
 -- | Invoke a method and return stream items
@@ -58,22 +75,27 @@ invoke namespacePath method params = do
   cfg <- getConfig
   result <- liftIO $ ST.invokeMethod cfg namespacePath method params
   case result of
-    Left err -> do
-      -- Build context from environment
-      host <- asks seHost
-      port <- asks sePort
+    Left transportErr -> do
+      -- Build context from typed transport error and environment
       backend <- asks seBackend
       let path = namespacePath ++ [method]
       let ctx = TransportContext
-            { tcMessage  = err
-            , tcHost     = host
-            , tcPort     = port
+            { tcMessage  = transportErrorToText transportErr
+            , tcHost     = getHost transportErr cfg
+            , tcPort     = getPort transportErr cfg
             , tcBackend  = backend
             , tcPath     = path
-            , tcCategory = categorizeTransportError err
+            , tcCategory = transportErrorToCategory transportErr
             }
       throwTransportWith ctx
     Right items -> pure items
+  where
+    getHost (PT.ConnectionRefused h _) _ = h
+    getHost (PT.ConnectionTimeout h _) _ = h
+    getHost _ c = T.pack $ substrateHost c
+    getPort (PT.ConnectionRefused _ p) _ = p
+    getPort (PT.ConnectionTimeout _ p) _ = p
+    getPort _ c = substratePort c
 
 -- | Invoke with raw method path
 invokeRaw :: Text -> Value -> SynapseM [HubStreamItem]
@@ -81,22 +103,27 @@ invokeRaw method params = do
   cfg <- getConfig
   result <- liftIO $ ST.invokeRaw cfg method params
   case result of
-    Left err -> do
-      -- Build context from environment
-      host <- asks seHost
-      port <- asks sePort
+    Left transportErr -> do
+      -- Build context from typed transport error and environment
       backend <- asks seBackend
       let path = T.splitOn "." method
       let ctx = TransportContext
-            { tcMessage  = err
-            , tcHost     = host
-            , tcPort     = port
+            { tcMessage  = transportErrorToText transportErr
+            , tcHost     = getHost transportErr cfg
+            , tcPort     = getPort transportErr cfg
             , tcBackend  = backend
             , tcPath     = path
-            , tcCategory = categorizeTransportError err
+            , tcCategory = transportErrorToCategory transportErr
             }
       throwTransportWith ctx
     Right items -> pure items
+  where
+    getHost (PT.ConnectionRefused h _) _ = h
+    getHost (PT.ConnectionTimeout h _) _ = h
+    getHost _ c = T.pack $ substrateHost c
+    getPort (PT.ConnectionRefused _ p) _ = p
+    getPort (PT.ConnectionTimeout _ p) _ = p
+    getPort _ c = substratePort c
 
 -- | Invoke a method with streaming output - calls callback for each item
 invokeStreaming :: Path -> Text -> Value -> (HubStreamItem -> IO ()) -> SynapseM ()
@@ -104,22 +131,27 @@ invokeStreaming namespacePath method params onItem = do
   cfg <- getConfig
   result <- liftIO $ ST.invokeMethodStreaming cfg namespacePath method params onItem
   case result of
-    Left err -> do
-      -- Build context from environment
-      host <- asks seHost
-      port <- asks sePort
+    Left transportErr -> do
+      -- Build context from typed transport error and environment
       backend <- asks seBackend
       let path = namespacePath ++ [method]
       let ctx = TransportContext
-            { tcMessage  = err
-            , tcHost     = host
-            , tcPort     = port
+            { tcMessage  = transportErrorToText transportErr
+            , tcHost     = getHost transportErr cfg
+            , tcPort     = getPort transportErr cfg
             , tcBackend  = backend
             , tcPath     = path
-            , tcCategory = categorizeTransportError err
+            , tcCategory = transportErrorToCategory transportErr
             }
       throwTransportWith ctx
     Right () -> pure ()
+  where
+    getHost (PT.ConnectionRefused h _) _ = h
+    getHost (PT.ConnectionTimeout h _) _ = h
+    getHost _ c = T.pack $ substrateHost c
+    getPort (PT.ConnectionRefused _ p) _ = p
+    getPort (PT.ConnectionTimeout _ p) _ = p
+    getPort _ c = substratePort c
 
 -- | Get SubstrateConfig from environment
 getConfig :: SynapseM SubstrateConfig

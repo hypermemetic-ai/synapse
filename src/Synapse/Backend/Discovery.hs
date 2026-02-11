@@ -67,7 +67,7 @@ import Data.IORef (newIORef, writeIORef, readIORef)
 import Control.Monad (void)
 import Plexus.Client (SubstrateConfig(..))
 import qualified Plexus.Transport as ST
-import Plexus.Types (PlexusStreamItem(..))
+import Plexus.Types (PlexusStreamItem(..), TransportError(..))
 
 -- ============================================================================
 -- Backend Type
@@ -225,7 +225,7 @@ discoverBackendName host port = do
         , substrateBackend = "" -- Not used for _info
         }
   result <- ST.rpcCallWith cfg "_info" Aeson.Null
-    `catch` \(_e :: SomeException) -> pure (Left "Connection failed")
+    `catch` \(_e :: SomeException) -> pure (Left $ NetworkError "Connection failed")
 
   case result of
     Left _err -> pure Nothing
@@ -332,9 +332,9 @@ pingBackend backend = do
         , substratePath = "/"
         , substrateBackend = ""  -- _info has no namespace prefix
         }
-      timeout = threadDelay 300000 >> pure (Left "Timeout")
+      timeout = threadDelay 300000 >> pure (Left $ ConnectionTimeout (backendHost backend) (backendPort backend))
       rpcCall = ST.rpcCallWith cfg "_info" Aeson.Null
-        `catch` \(_e :: SomeException) -> pure (Left "Connection failed")
+        `catch` \(_e :: SomeException) -> pure (Left $ NetworkError "Connection failed")
 
   -- Race the RPC call against a 300ms timeout
   result <- race timeout rpcCall
