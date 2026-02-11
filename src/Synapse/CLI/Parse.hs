@@ -64,6 +64,7 @@ import qualified Data.Vector as V
 import Text.Read (readMaybe)
 
 import Synapse.IR.Types
+import Synapse.CLI.Similarity (suggestCorrections)
 
 -- ============================================================================
 -- Error Types
@@ -71,8 +72,8 @@ import Synapse.IR.Types
 
 -- | Errors that can occur during parameter parsing
 data ParseError
-  = UnknownParam Text
-      -- ^ Flag doesn't match any known parameter
+  = UnknownParam Text [Text]
+      -- ^ Flag doesn't match any known parameter (param name, suggestions)
   | MissingRequired Text
       -- ^ Required parameter was not provided
   | InvalidValue Text Text
@@ -81,8 +82,8 @@ data ParseError
       -- ^ Multiple variants could match (discriminator, variant names)
   | MissingDiscriminator Text Text
       -- ^ Enum type missing discriminator value (param name, discriminator field)
-  | UnknownVariant Text Text [Text]
-      -- ^ Unknown variant name (param name, provided value, valid variants)
+  | UnknownVariant Text Text [Text] [Text]
+      -- ^ Unknown variant name (param name, provided value, valid variants, suggestions)
   | TypeNotFound Text
       -- ^ Referenced type not found in IR
   deriving (Show, Eq)
@@ -133,7 +134,10 @@ parseParams ir method kvPairs = do
 processGroup :: IR -> Map Text ParamDef -> (Text, [(Text, Text)]) -> Either ParseError (K.Key, Value)
 processGroup ir paramMap (paramName, subKeys) =
   case Map.lookup paramName paramMap of
-    Nothing -> Left $ UnknownParam paramName
+    Nothing ->
+      let validParams = Map.keys paramMap
+          suggestions = suggestCorrections paramName validParams
+      in Left $ UnknownParam paramName suggestions
     Just paramDef -> do
       val <- buildParamValue ir paramDef subKeys
       Right (K.fromText paramName, val)
@@ -226,7 +230,10 @@ buildFromTypeDef ir paramName TypeDef{..} kvs = case tdKind of
       Just variantName ->
         case find (\v -> vdName v == variantName) variants of
           Just variant -> buildVariant ir paramName discriminator variant kvs
-          Nothing -> Left $ UnknownVariant paramName variantName (map vdName variants)
+          Nothing ->
+            let validVariants = map vdName variants
+                suggestions = suggestCorrections variantName validVariants
+            in Left $ UnknownVariant paramName variantName validVariants suggestions
       Nothing -> Left $ MissingDiscriminator paramName discriminator
 
   KindStruct fields ->

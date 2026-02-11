@@ -25,9 +25,15 @@ module Synapse.Monad
 
     -- * Errors
   , SynapseError(..)
+  , BackendErrorType(..)
+  , TransportContext(..)
+  , TransportErrorCategory(..)
   , throwNav
   , throwTransport
+  , throwTransportWith
+  , categorizeTransportError
   , throwParse
+  , throwBackend
 
     -- * Cycle Detection
   , checkCycle
@@ -49,8 +55,10 @@ import qualified Data.HashSet as HS
 import Data.Hashable (Hashable)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import Data.Text (Text)
+import qualified Data.Text as T
 
 import Synapse.Schema.Types
+import Synapse.Backend.Discovery (Backend(..))
 
 -- | Environment for Synapse operations
 data SynapseEnv = SynapseEnv
@@ -64,9 +72,36 @@ data SynapseEnv = SynapseEnv
 -- | Errors that can occur during Synapse operations
 data SynapseError
   = NavError NavError
-  | TransportError Text
+  | TransportError Text                    -- Keep for compatibility
+  | TransportErrorContext TransportContext -- NEW: with context
   | ParseError Text
   | ValidationError Text
+  | BackendError BackendErrorType [Backend]
+  deriving stock (Show, Eq)
+
+-- | Backend-specific error types
+data BackendErrorType
+  = BackendNotFound Text
+  | BackendUnreachable Text
+  | NoBackendsAvailable
+  deriving stock (Show, Eq)
+
+-- | Transport error with connection details and categorization
+data TransportContext = TransportContext
+  { tcMessage  :: Text
+  , tcHost     :: Text
+  , tcPort     :: Int
+  , tcBackend  :: Text
+  , tcPath     :: Path
+  , tcCategory :: TransportErrorCategory
+  } deriving stock (Show, Eq)
+
+-- | Categories of transport errors
+data TransportErrorCategory
+  = ConnectionRefused
+  | ConnectionTimeout
+  | ProtocolError
+  | UnknownTransportError
   deriving stock (Show, Eq)
 
 -- | The Synapse monad stack
@@ -122,6 +157,22 @@ throwTransport = throwError . TransportError
 -- | Throw a parse error
 throwParse :: Text -> SynapseM a
 throwParse = throwError . ParseError
+
+-- | Throw a backend error
+throwBackend :: BackendErrorType -> [Backend] -> SynapseM a
+throwBackend errorType backends = throwError (BackendError errorType backends)
+
+-- | Throw a transport error with context
+throwTransportWith :: TransportContext -> SynapseM a
+throwTransportWith = throwError . TransportErrorContext
+
+-- | Categorize transport errors from exception messages
+categorizeTransportError :: Text -> TransportErrorCategory
+categorizeTransportError msg
+  | "refused" `T.isInfixOf` T.toLower msg = ConnectionRefused
+  | "timeout" `T.isInfixOf` T.toLower msg = ConnectionTimeout
+  | "protocol" `T.isInfixOf` T.toLower msg = ProtocolError
+  | otherwise = UnknownTransportError
 
 -- ============================================================================
 -- Cycle Detection

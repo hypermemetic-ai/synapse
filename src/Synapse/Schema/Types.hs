@@ -71,10 +71,10 @@ data SchemaView
 
 -- | Navigation errors
 data NavError
-  = NotFound Text Path             -- ^ Segment not found at path
-  | MethodNotTerminal Text Path    -- ^ Method with trailing path segments
-  | Cycle PluginHash Path          -- ^ Cycle detected (hash seen before)
-  | FetchError Text Path           -- ^ Failed to fetch schema
+  = NotFound Text Path (Maybe PluginSchema)  -- ^ Segment not found at path (with schema context)
+  | MethodNotTerminal Text Path              -- ^ Method with trailing path segments
+  | Cycle PluginHash Path                    -- ^ Cycle detected (hash seen before)
+  | FetchError Text Path                     -- ^ Failed to fetch schema
   deriving stock (Show, Eq)
 
 -- | Metadata from stream events

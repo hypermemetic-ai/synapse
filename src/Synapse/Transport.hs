@@ -58,7 +58,21 @@ invoke namespacePath method params = do
   cfg <- getConfig
   result <- liftIO $ ST.invokeMethod cfg namespacePath method params
   case result of
-    Left err -> throwTransport err
+    Left err -> do
+      -- Build context from environment
+      host <- asks seHost
+      port <- asks sePort
+      backend <- asks seBackend
+      let path = namespacePath ++ [method]
+      let ctx = TransportContext
+            { tcMessage  = err
+            , tcHost     = host
+            , tcPort     = port
+            , tcBackend  = backend
+            , tcPath     = path
+            , tcCategory = categorizeTransportError err
+            }
+      throwTransportWith ctx
     Right items -> pure items
 
 -- | Invoke with raw method path
@@ -67,7 +81,21 @@ invokeRaw method params = do
   cfg <- getConfig
   result <- liftIO $ ST.invokeRaw cfg method params
   case result of
-    Left err -> throwTransport err
+    Left err -> do
+      -- Build context from environment
+      host <- asks seHost
+      port <- asks sePort
+      backend <- asks seBackend
+      let path = T.splitOn "." method
+      let ctx = TransportContext
+            { tcMessage  = err
+            , tcHost     = host
+            , tcPort     = port
+            , tcBackend  = backend
+            , tcPath     = path
+            , tcCategory = categorizeTransportError err
+            }
+      throwTransportWith ctx
     Right items -> pure items
 
 -- | Invoke a method with streaming output - calls callback for each item
@@ -76,7 +104,21 @@ invokeStreaming namespacePath method params onItem = do
   cfg <- getConfig
   result <- liftIO $ ST.invokeMethodStreaming cfg namespacePath method params onItem
   case result of
-    Left err -> throwTransport err
+    Left err -> do
+      -- Build context from environment
+      host <- asks seHost
+      port <- asks sePort
+      backend <- asks seBackend
+      let path = namespacePath ++ [method]
+      let ctx = TransportContext
+            { tcMessage  = err
+            , tcHost     = host
+            , tcPort     = port
+            , tcBackend  = backend
+            , tcPath     = path
+            , tcCategory = categorizeTransportError err
+            }
+      throwTransportWith ctx
     Right () -> pure ()
 
 -- | Get SubstrateConfig from environment

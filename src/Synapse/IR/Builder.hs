@@ -53,6 +53,16 @@ parseGeneratorInfo s = case T.splitOn ":" s of
     Just $ GeneratorInfo tool version
   _ -> Nothing
 
+-- | Extract V2 hash information from a plugin schema
+-- Since Plexus currently only provides a composite 'hash' field,
+-- we use it for all three hash fields (backward compatible V1 mode)
+extractPluginHashInfo :: PluginSchema -> PluginHashInfo
+extractPluginHashInfo schema = PluginHashInfo
+  { phiHash = psHash schema
+  , phiSelfHash = psHash schema      -- V1 fallback: use composite hash
+  , phiChildrenHash = psHash schema  -- V1 fallback: use composite hash
+  }
+
 -- | Build IR by walking the schema tree from a given path
 -- After walking, deduplicate types that have identical structure
 -- Accepts generator info strings in "tool:version" format
@@ -106,6 +116,11 @@ irAlgebra (PluginF schema path childIRs) = do
                  then Just (psHash schema)
                  else irHash childIR
 
+  -- Extract V2 hash information for this plugin
+  let hashInfo = extractPluginHashInfo schema
+      childHashes = fromMaybe Map.empty (irPluginHashes childIR)
+      allHashes = Map.insert namespace hashInfo childHashes
+
   pure $ IR
     { irVersion = irVersion emptyIR  -- Use version from emptyIR
     , irBackend = irBackend emptyIR  -- Will be set by buildIR
@@ -114,6 +129,7 @@ irAlgebra (PluginF schema path childIRs) = do
     , irTypes = Map.union localTypes (irTypes childIR)  -- Local wins on conflict
     , irMethods = Map.union localMethods (irMethods childIR)
     , irPlugins = Map.insert namespace pluginMethods (irPlugins childIR)
+    , irPluginHashes = Just allHashes  -- V2: Store hash info per plugin
     }
 
 irAlgebra (MethodF method namespace path) = do
@@ -128,6 +144,7 @@ irAlgebra (MethodF method namespace path) = do
     , irTypes = types
     , irMethods = Map.singleton fullPath mdef
     , irPlugins = Map.singleton namespace [methodName method]
+    , irPluginHashes = Nothing  -- Methods don't have plugin-level hashes
     }
 
 -- ============================================================================

@@ -34,6 +34,9 @@ module Synapse.IR.Types
   , GeneratorInfo(..)
   , GenerationMetadata(..)
 
+    -- * Plugin Hash Information
+  , PluginHashInfo(..)
+
     -- * Type Definitions
   , TypeDef(..)
   , tdFullName
@@ -94,18 +97,36 @@ data GenerationMetadata = GenerationMetadata
   deriving anyclass (ToJSON, FromJSON)
 
 -- ============================================================================
+-- Plugin Hash Information
+-- ============================================================================
+
+-- | V2 hash information for a plugin
+-- Supports granular cache invalidation by tracking:
+-- - Composite hash (backward compatible with V1)
+-- - Self hash (methods-only, for detecting method changes)
+-- - Children hash (children-only, for detecting dependency changes)
+data PluginHashInfo = PluginHashInfo
+  { phiHash         :: Text   -- ^ Composite hash (backward compatible)
+  , phiSelfHash     :: Text   -- ^ V2: Methods-only hash
+  , phiChildrenHash :: Text   -- ^ V2: Children-only hash
+  }
+  deriving stock (Show, Eq, Generic)
+  deriving anyclass (ToJSON, FromJSON)
+
+-- ============================================================================
 -- Top-level IR
 -- ============================================================================
 
 -- | The complete IR for code generation
 data IR = IR
-  { irVersion   :: Text                    -- ^ IR format version
-  , irBackend   :: Text                    -- ^ Backend name (e.g., "substrate", "plexus")
-  , irHash      :: Maybe Text              -- ^ Plexus hash for versioning
-  , irMetadata  :: Maybe GenerationMetadata  -- ^ Generation toolchain metadata
-  , irTypes     :: Map Text TypeDef        -- ^ All types, deduplicated by name
-  , irMethods   :: Map Text MethodDef      -- ^ All methods, keyed by full path (e.g., "cone.chat")
-  , irPlugins   :: Map Text [Text]         -- ^ Plugin -> method names mapping
+  { irVersion      :: Text                         -- ^ IR format version
+  , irBackend      :: Text                         -- ^ Backend name (e.g., "substrate", "plexus")
+  , irHash         :: Maybe Text                   -- ^ Plexus hash for versioning
+  , irMetadata     :: Maybe GenerationMetadata     -- ^ Generation toolchain metadata
+  , irTypes        :: Map Text TypeDef             -- ^ All types, deduplicated by name
+  , irMethods      :: Map Text MethodDef           -- ^ All methods, keyed by full path (e.g., "cone.chat")
+  , irPlugins      :: Map Text [Text]              -- ^ Plugin -> method names mapping
+  , irPluginHashes :: Maybe (Map Text PluginHashInfo)  -- ^ V2: Hash information per plugin
   }
   deriving stock (Show, Eq, Generic)
   deriving anyclass (ToJSON)
@@ -120,6 +141,7 @@ emptyIR = IR
   , irTypes = Map.empty
   , irMethods = Map.empty
   , irPlugins = Map.empty
+  , irPluginHashes = Nothing
   }
 
 -- | Merge two IRs (for combining results from tree walk)
@@ -132,6 +154,11 @@ mergeIR a b = IR
   , irTypes = Map.union (irTypes a) (irTypes b)  -- Left-biased, first definition wins
   , irMethods = Map.union (irMethods a) (irMethods b)
   , irPlugins = Map.unionWith (++) (irPlugins a) (irPlugins b)
+  , irPluginHashes = case (irPluginHashes a, irPluginHashes b) of
+      (Just ha, Just hb) -> Just (Map.union ha hb)  -- Merge hash maps
+      (Just ha, Nothing) -> Just ha
+      (Nothing, Just hb) -> Just hb
+      (Nothing, Nothing) -> Nothing
   }
 
 -- ============================================================================

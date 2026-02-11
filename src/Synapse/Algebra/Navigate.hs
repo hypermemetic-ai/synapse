@@ -91,7 +91,7 @@ navigateFrom schema visited = \case
           Just method
             | null rest -> pure $ ViewMethod method (visited ++ [seg])
             | otherwise -> throwNav $ MethodNotTerminal seg visited
-          Nothing -> throwNav $ NotFound seg visited
+          Nothing -> throwNav $ NotFound seg visited (Just schema)
 
 -- | Find a child by namespace
 findChild :: Text -> PluginSchema -> Maybe ChildSummary
