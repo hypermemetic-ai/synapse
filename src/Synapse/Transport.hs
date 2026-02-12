@@ -15,6 +15,10 @@ module Synapse.Transport
 
     -- * Method Invocation (streaming)
   , invokeStreaming
+  , invokeStreamingWithBidir
+
+    -- * Bidirectional Response
+  , sendResponse
   ) where
 
 import Control.Monad.IO.Class (liftIO)
@@ -152,6 +156,69 @@ invokeStreaming namespacePath method params onItem = do
     getPort (PT.ConnectionRefused _ p) _ = p
     getPort (PT.ConnectionTimeout _ p) _ = p
     getPort _ c = substratePort c
+
+-- | Invoke a method with streaming output and bidirectional request handling
+-- When a StreamRequest is received, the bidirectional handler is called and
+-- the response is sent back via {backend}.respond
+invokeStreamingWithBidir
+  :: Path
+  -> Text
+  -> Value
+  -> (HubStreamItem -> IO ())           -- ^ Handler for non-request items
+  -> (Text -> StandardRequest -> IO StandardResponse)  -- ^ Handler for bidirectional requests
+  -> SynapseM ()
+invokeStreamingWithBidir namespacePath method params onItem onBidirRequest = do
+  cfg <- getConfig
+  let wrappedHandler item = case item of
+        PT.StreamRequest _ _ reqId reqData _timeout -> do
+          -- Handle the bidirectional request
+          response <- onBidirRequest reqId reqData
+          -- Send the response back via {backend}.respond
+          _ <- ST.sendBidirectionalResponse cfg reqId response
+          -- Don't forward StreamRequest to the regular handler
+          pure ()
+        _ -> onItem item
+  result <- liftIO $ ST.invokeMethodStreaming cfg namespacePath method params wrappedHandler
+  case result of
+    Left transportErr -> do
+      backend <- asks seBackend
+      let path = namespacePath ++ [method]
+      let ctx = TransportContext
+            { tcMessage  = transportErrorToText transportErr
+            , tcHost     = getHost transportErr cfg
+            , tcPort     = getPort transportErr cfg
+            , tcBackend  = backend
+            , tcPath     = path
+            , tcCategory = transportErrorToCategory transportErr
+            }
+      throwTransportWith ctx
+    Right () -> pure ()
+  where
+    getHost (PT.ConnectionRefused h _) _ = h
+    getHost (PT.ConnectionTimeout h _) _ = h
+    getHost _ c = T.pack $ substrateHost c
+    getPort (PT.ConnectionRefused _ p) _ = p
+    getPort (PT.ConnectionTimeout _ p) _ = p
+    getPort _ c = substratePort c
+
+-- | Send a response for a bidirectional request
+sendResponse :: Text -> StandardResponse -> SynapseM ()
+sendResponse requestId response = do
+  cfg <- getConfig
+  result <- liftIO $ ST.sendBidirectionalResponse cfg requestId response
+  case result of
+    Left transportErr -> do
+      backend <- asks seBackend
+      let ctx = TransportContext
+            { tcMessage  = transportErrorToText transportErr
+            , tcHost     = T.pack $ substrateHost cfg
+            , tcPort     = substratePort cfg
+            , tcBackend  = backend
+            , tcPath     = ["respond"]
+            , tcCategory = transportErrorToCategory transportErr
+            }
+      throwTransportWith ctx
+    Right () -> pure ()
 
 -- | Get SubstrateConfig from environment
 getConfig :: SynapseM SubstrateConfig

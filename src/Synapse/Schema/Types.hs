@@ -33,6 +33,12 @@ module Synapse.Schema.Types
   , pattern HubError
   , pattern HubDone
   , pattern HubGuidance
+  , pattern HubRequest
+
+    -- * Bidirectional Types (re-exported)
+  , StandardRequest(..)
+  , StandardResponse(..)
+  , SelectOption(..)
   ) where
 
 import Data.Aeson (Value)
@@ -58,6 +64,9 @@ import Plexus.Types
   , Provenance
   , GuidanceErrorType
   , GuidanceSuggestion
+  , StandardRequest(..)
+  , StandardResponse(..)
+  , SelectOption(..)
   )
 
 -- | A path through the plugin tree (sequence of namespace segments)
@@ -114,3 +123,7 @@ pattern HubDone hash prov = StreamDone hash prov
 -- | Pattern synonym for guidance events
 pattern HubGuidance :: Text -> Provenance -> GuidanceErrorType -> GuidanceSuggestion -> Maybe [Text] -> Maybe Value -> HubStreamItem
 pattern HubGuidance hash prov errType suggestion methods schema = StreamGuidance hash prov errType suggestion methods schema
+
+-- | Pattern synonym for bidirectional request events
+pattern HubRequest :: Text -> Provenance -> Text -> StandardRequest -> Int -> HubStreamItem
+pattern HubRequest hash prov reqId reqData timeout = StreamRequest hash prov reqId reqData timeout

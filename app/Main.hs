@@ -41,6 +41,7 @@ import Synapse.IR.Types (IR, irMethods, MethodDef)
 import qualified Data.Map.Strict as Map
 import qualified Synapse.CLI.Template as TemplateIR
 import Synapse.Transport
+import Synapse.Bidir (BidirMode(..), parseBidirMode, detectBidirMode, handleBidirRequest)
 import Synapse.CLI.Transform (mkTransformEnv, transformParams, defaultTransformers, injectBooleanDefaults, injectSmartDefaults)
 import Synapse.IR.Builder (buildIR)
 import Synapse.Renderer (RendererConfig, defaultRendererConfig, renderItem, prettyValue, withMethodPath)
@@ -67,6 +68,7 @@ data SynapseOpts = SynapseOpts
   , soParams        :: Maybe Text    -- ^ JSON params via -p
   , soRpc           :: Maybe Text    -- ^ Raw JSON-RPC passthrough
   , soGeneratorInfo :: [Text]        -- ^ Generator tool info (tool:version pairs)
+  , soBidirMode     :: Maybe Text    -- ^ Bidirectional mode override
   }
   deriving Show
 
@@ -327,7 +329,21 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
       let methodName' = last path
       -- Set method path hint for template resolution
       let rendererCfg' = withMethodPath rendererCfg path
-      invokeStreaming namespacePath methodName' params (printResult soJson soRaw rendererCfg')
+      -- Determine bidirectional mode
+      bidirMode <- liftIO $ case soBidirMode of
+        Just modeStr -> case parseBidirMode modeStr of
+          Just mode -> pure mode
+          Nothing -> do
+            TIO.hPutStrLn stderr $ "[synapse] Unknown --bidir-mode: " <> modeStr <> ", using auto-detect"
+            detectBidirMode
+        Nothing -> detectBidirMode
+      -- Use bidirectional streaming handler
+      invokeStreamingWithBidir
+        namespacePath
+        methodName'
+        params
+        (printResult soJson soRaw rendererCfg')
+        (handleBidirRequest bidirMode)
 
     -- Extract default values from JSON Schema properties
     -- Schema format: {"properties": {"key": {"default": value, ...}, ...}, ...}
@@ -748,4 +764,7 @@ optsParser = do
   soGeneratorInfo <- many $ T.pack <$> strOption
     ( long "generator-info" <> metavar "TOOL:VERSION"
    <> help "Generator tool version info (can be specified multiple times)" )
+  soBidirMode <- optional $ T.pack <$> strOption
+    ( long "bidir-mode" <> short 'b' <> metavar "MODE"
+   <> help "Bidirectional mode: interactive (TTY), json (pipe protocol), auto-cancel, defaults" )
   pure SynapseOpts{..}

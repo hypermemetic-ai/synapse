@@ -26,6 +26,7 @@ library
     Synapse.Renderer
     Synapse.IR.Types
     Synapse.IR.Builder
+    Synapse.Bidir
     Synapse.CLI.Help
     Synapse.CLI.Parse
     Synapse.CLI.Support
