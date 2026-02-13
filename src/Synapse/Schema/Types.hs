@@ -125,5 +125,5 @@ pattern HubGuidance :: Text -> Provenance -> GuidanceErrorType -> GuidanceSugges
 pattern HubGuidance hash prov errType suggestion methods schema = StreamGuidance hash prov errType suggestion methods schema
 
 -- | Pattern synonym for bidirectional request events
-pattern HubRequest :: Text -> Provenance -> Text -> StandardRequest -> Int -> HubStreamItem
+pattern HubRequest :: Text -> Provenance -> Text -> StandardRequest -> Maybe Int -> HubStreamItem
 pattern HubRequest hash prov reqId reqData timeout = StreamRequest hash prov reqId reqData timeout

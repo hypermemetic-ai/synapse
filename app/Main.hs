@@ -21,6 +21,7 @@ import Data.Aeson
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as LBS
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -266,63 +267,77 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
 
                         -- Landed on a method: invoke or show help
                         ViewMethod method path -> do
-                          -- Build IR for this method's namespace
-                          ir <- buildIR soGeneratorInfo (init path)
                           let fullPath = T.intercalate "." path
 
-                          -- If --help was explicitly requested, show help and exit
-                          if helpRequested
-                            then do
-                              case Map.lookup fullPath (irMethods ir) of
-                                Just methodDef ->
-                                  liftIO $ TIO.putStr $ renderMethodHelp ir methodDef
-                                Nothing ->
-                                  liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
-                            else do
-                              -- Build params: use IR-driven parsing for inline params
-                              let schemaDefaults = extractSchemaDefaults method
-                              userParams <- case soParams of
-                                -- -p JSON: parse as raw JSON (bypass IR parsing)
-                                Just jsonStr ->
-                                  case eitherDecode (LBS.fromStrict $ TE.encodeUtf8 jsonStr) of
-                                    Left err -> throwParse $ T.pack err
-                                    Right p -> pure p
-                                Nothing
-                                  | not (null inlineParams) ->
-                                      -- Use IR-driven parsing for inline params
-                                      case Map.lookup fullPath (irMethods ir) of
-                                        Just methodDef -> do
-                                          -- Inject boolean defaults for flags without values
-                                          let paramsWithBools = injectBooleanDefaults ir methodDef inlineParams
-                                          -- Inject smart defaults for missing required params (e.g., --path defaults to cwd)
-                                          paramsWithDefaults <- liftIO $ injectSmartDefaults transformEnv ir methodDef paramsWithBools
-                                          case parseParams ir methodDef paramsWithDefaults of
-                                            Right p -> pure p
-                                            Left errs -> do
-                                              liftIO $ mapM_ (hPutStrLn stderr . renderParseError) errs
-                                              throwParse "Parameter parsing failed"
-                                        Nothing ->
-                                          -- Fallback to flat object if method not in IR
-                                          pure $ buildParamsObject inlineParams
-                                  | otherwise -> pure $ object []
-                              -- Merge: user params override schema defaults
-                              let params = mergeParams schemaDefaults userParams
+                          -- Optimization: Skip IR construction for parameter-less methods
+                          -- IR is only needed for:
+                          -- 1. Help rendering (--help flag)
+                          -- 2. Parameter parsing (methods with params)
+                          let needsIR = helpRequested
+                                     || isJust (methodParams method)
+                                     || isJust soParams
+                                     || not (null inlineParams)
 
-                              if soDryRun
+                          -- Fast path: parameter-less method with no help requested
+                          if not needsIR
+                            then invokeMethod path (object [])
+                            else do
+                              -- Build IR for this method's namespace
+                              ir <- buildIR soGeneratorInfo (init path)
+
+                              -- If --help was explicitly requested, show help and exit
+                              if helpRequested
                                 then do
-                                  backend <- asks seBackend
-                                  liftIO $ LBS.putStrLn $ encodeDryRun backend (init path) (last path) params
-                                -- Show help when: method has required params AND user provided no params
-                                else if hasRequiredParams method && userParams == object [] && null inlineParams
-                                  then do
-                                    -- Render help from IR
-                                    case Map.lookup fullPath (irMethods ir) of
-                                      Just methodDef ->
-                                        liftIO $ TIO.putStr $ renderMethodHelp ir methodDef
-                                      Nothing ->
-                                        -- Fallback: method not in IR, use basic info
-                                        liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
-                                  else invokeMethod path params
+                                  case Map.lookup fullPath (irMethods ir) of
+                                    Just methodDef ->
+                                      liftIO $ TIO.putStr $ renderMethodHelp ir methodDef
+                                    Nothing ->
+                                      liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
+                                else do
+                                  -- Build params: use IR-driven parsing for inline params
+                                  let schemaDefaults = extractSchemaDefaults method
+                                  userParams <- case soParams of
+                                    -- -p JSON: parse as raw JSON (bypass IR parsing)
+                                    Just jsonStr ->
+                                      case eitherDecode (LBS.fromStrict $ TE.encodeUtf8 jsonStr) of
+                                        Left err -> throwParse $ T.pack err
+                                        Right p -> pure p
+                                    Nothing
+                                      | not (null inlineParams) ->
+                                          -- Use IR-driven parsing for inline params
+                                          case Map.lookup fullPath (irMethods ir) of
+                                            Just methodDef -> do
+                                              -- Inject boolean defaults for flags without values
+                                              let paramsWithBools = injectBooleanDefaults ir methodDef inlineParams
+                                              -- Inject smart defaults for missing required params (e.g., --path defaults to cwd)
+                                              paramsWithDefaults <- liftIO $ injectSmartDefaults transformEnv ir methodDef paramsWithBools
+                                              case parseParams ir methodDef paramsWithDefaults of
+                                                Right p -> pure p
+                                                Left errs -> do
+                                                  liftIO $ mapM_ (hPutStrLn stderr . renderParseError) errs
+                                                  throwParse "Parameter parsing failed"
+                                            Nothing ->
+                                              -- Fallback to flat object if method not in IR
+                                              pure $ buildParamsObject inlineParams
+                                      | otherwise -> pure $ object []
+                                  -- Merge: user params override schema defaults
+                                  let params = mergeParams schemaDefaults userParams
+
+                                  if soDryRun
+                                    then do
+                                      backend <- asks seBackend
+                                      liftIO $ LBS.putStrLn $ encodeDryRun backend (init path) (last path) params
+                                    -- Show help when: method has required params AND user provided no params
+                                    else if hasRequiredParams method && userParams == object [] && null inlineParams
+                                      then do
+                                        -- Render help from IR
+                                        case Map.lookup fullPath (irMethods ir) of
+                                          Just methodDef ->
+                                            liftIO $ TIO.putStr $ renderMethodHelp ir methodDef
+                                          Nothing ->
+                                            -- Fallback: method not in IR, use basic info
+                                            liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
+                                      else invokeMethod path params
   where
     invokeMethod path params = do
       let namespacePath = init path  -- path without method name
