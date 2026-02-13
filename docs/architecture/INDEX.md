@@ -4,6 +4,15 @@ This directory contains architecture decision records and implementation docs fo
 
 ## Recent Updates (2026)
 
+### Performance Analysis
+- **[IR Construction Performance Analysis](./16675729999709551615_ir-construction-performance-analysis.md)** (2026-02-13)
+  - Root cause analysis: Why `synapse substrate hash` takes 8 seconds
+  - Full IR construction overhead for parameter-less methods
+  - Connection pooling opportunities
+  - Lazy IR construction proposal
+  - Impact on jsexec plexus_env pipeline
+  - Implementation plan with 80x performance improvement potential
+
 ### Backend Discovery
 - **[Multi-Backend Discovery Implementation](./16677357852794265599_multi-backend-discovery-implementation.md)** (2026-01-25)
   - Dynamic backend discovery via `_info` endpoint and registry
