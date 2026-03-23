@@ -6,8 +6,6 @@ license:            MIT
 author:
 maintainer:
 build-type:         Simple
-extra-source-files: README.md
-                    CLAUDE.md
 
 flag build-examples
   description: Build example programs (schema-discovery)
