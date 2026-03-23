@@ -56,10 +56,19 @@ $ echo '{"jsonrpc":"2.0","id":1,"method":"ping_pong","params":{"message":"test"}
 
 ### Comparison: hub_methods vs #[activation]
 
-**hub_methods (old macro)**: Synapse CLI works ✅
-**#[activation] (new macro)**: Synapse CLI fails ❌
+**VERIFIED VIA TESTING**:
 
-Both generate identical JSON-RPC methods and both work via direct WebSocket. The difference is in how synapse's Haskell client handles the schema/subscription protocol.
+**hub_methods (old macro)**:
+- Synapse CLI: ✅ **WORKS**
+- Direct WebSocket: ✅ WORKS
+- Example: `synapse substrate bash execute --command "echo hello"` → Success!
+
+**#[activation] (new macro)**:
+- Synapse CLI: ❌ **FAILS** (-32603 Internal error)
+- Direct WebSocket: ✅ WORKS (websocat, Haskell test)
+- Example: `synapse substrate ping pong --message "test"` → Fails!
+
+Both generate working JSON-RPC methods at the protocol level. The difference is in the **schema metadata** or **method signatures** that synapse's client library depends on to build its IR (intermediate representation).
 
 ### Investigation Findings
 
