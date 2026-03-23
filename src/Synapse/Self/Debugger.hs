@@ -220,14 +220,11 @@ validateProtocol host port backend = do
 --   synapse _self test localhost 5001 substrate echo.echo --message "hello"
 --   synapse _self test --allow-unknown localhost 5001 substrate echo.echo --message "hello" --fake "test"
 --   synapse _self test --raw '{"message":"hello"}' localhost 5001 substrate echo.echo
-testMethod :: String -> Int -> Text -> Text -> [(Text, Text)] -> Bool -> Maybe Text -> IO ()
-testMethod host port backend method cliParams allowUnknown rawJson = do
-  let config = SubstrateConfig
-        { substrateHost = host
-        , substratePort = port
-        , substratePath = "/"
-        , substrateBackend = backend
-        }
+testMethod :: SubstrateConfig -> Text -> [(Text, Text)] -> Bool -> Maybe Text -> IO ()
+testMethod config method cliParams allowUnknown rawJson = do
+  let backend = substrateBackend config
+  let host = substrateHost config
+  let port = substratePort config
 
   -- Mode 3: Raw JSON
   case rawJson of

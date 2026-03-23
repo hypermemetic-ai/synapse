@@ -21,6 +21,7 @@ import Synapse.Monad
 import Synapse.Backend.Discovery (getBackendAt)
 import qualified Synapse.Self.Template as Template
 import qualified Synapse.Self.Debugger as Debugger
+import Plexus.Client (SubstrateConfig(..))
 
 -- | Dispatch to a specific _self subcommand
 dispatch :: Text -> [Text] -> [(Text, Text)] -> SynapseM ()
@@ -46,14 +47,23 @@ dispatch "test" rest params = do
   -- Remove flags from params (keep only method params)
   let methodParams = filter (\(k, _) -> k /= "allow_unknown" && k /= "raw") params
 
+  -- Get connection settings from environment (set by -H/-P flags)
+  host <- asks seHost
+  port <- asks sePort
+  backend <- asks seBackend
+
   case rest of
-    (hostText:portText:backendText:methodParts) -> do
-      let host = T.unpack hostText
-      let port = read (T.unpack portText) :: Int
+    methodParts | not (null methodParts) -> do
       let method = T.intercalate "." methodParts
-      liftIO $ Debugger.testMethod host port backendText method methodParams allowUnknown rawJson
+      let config = SubstrateConfig
+            { substrateHost = T.unpack host
+            , substratePort = port
+            , substratePath = "/"
+            , substrateBackend = backend
+            }
+      liftIO $ Debugger.testMethod config method methodParams allowUnknown rawJson
     _ ->
-      throwParse "Usage: synapse _self test [--allow-unknown] [--raw <json>] <host> <port> <backend> <method> [--param value ...]"
+      throwParse "Usage: synapse [options] _self test [--allow-unknown] [--raw <json>] <method> [--param value ...]\n  Note: Use -H/--host and -P/--port flags to set connection (default: 127.0.0.1:4444)"
 dispatch "--help" _ _ = showHelp
 dispatch "-h" _ _ = showHelp
 dispatch cmd _ _ =
@@ -110,8 +120,9 @@ helpText = T.unlines
   , "      Tests: protocol_test, stream_test, error_test, metadata_test"
   , "      Exits with code 0 on success, 1 on failures"
   , ""
-  , "  synapse _self test [--allow-unknown] [--raw <json>] <host> <port> <backend> <method> [--param value ...]"
+  , "  synapse [-H <host>] [-P <port>] _self test <method> [--param value ...]"
   , "      Test arbitrary method with protocol validation"
+  , "      Connection: Uses -H/--host and -P/--port flags (defaults: 127.0.0.1:4444)"
   , "      Modes:"
   , "        (default)       - Validate params against schema, reject unknown"
   , "        --allow-unknown - Warn about unknown params but pass through"
