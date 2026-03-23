@@ -245,6 +245,21 @@ test-suite path-normalization-test
     OverloadedStrings
   ghc-options:      -threaded
 
+test-suite websocket-raw-test
+  type:             exitcode-stdio-1.0
+  main-is:          WebSocketRaw.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    text >= 2.0 && < 2.2,
+    aeson >= 2.2 && < 2.3,
+    bytestring >= 0.11 && < 0.13,
+    websockets >= 0.13 && < 0.14
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -threaded
+
 test-suite bidir-test
   type:             exitcode-stdio-1.0
   main-is:          BidirSpec.hs
