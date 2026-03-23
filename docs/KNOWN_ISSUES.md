@@ -61,17 +61,39 @@ $ echo '{"jsonrpc":"2.0","id":1,"method":"ping_pong","params":{"message":"test"}
 
 Both generate identical JSON-RPC methods and both work via direct WebSocket. The difference is in how synapse's Haskell client handles the schema/subscription protocol.
 
+### Investigation Findings
+
+**✅ PROVEN**: A minimal Haskell WebSocket test successfully calls plexus-derive methods!
+
+Test: `test/WebSocketRaw.hs` - Does exactly what websocat does
+- Uses same Haskell runtime as synapse
+- Uses same `websockets` library as synapse
+- Sends same JSON-RPC request
+- Receives all three messages correctly (subscription ID, data, done)
+
+**Result: TEST PASSED** ✅
+
+This proves:
+1. The macro-generated methods ARE accessible from Haskell
+2. The JSON-RPC protocol is correct
+3. The WebSocket transport works fine
+4. **The issue is specifically in synapse's Transport/Client modules**
+
 ### Investigation Needed
 
-1. **Schema Discovery**: Synapse calls `_info` successfully but fails on subsequent calls
-2. **Subscription Protocol**: The -32603 error suggests jsonrpsee is rejecting something
-3. **Transport Layer**: Connection refused errors even though WebSocket is listening
+The bug is isolated to synapse's client library code:
 
-Potential issues:
-- Schema format mismatch between plexus-derive and synapse expectations
-- Subscription parameter encoding differences
-- Client-side connection pooling/reuse bug
-- Type signature differences in generated traits
+1. **Schema Fetching**: Synapse's `buildIR` fails when calling plexus-derive methods
+2. **Subscription Setup**: The Transport layer errors before even sending the RPC call
+3. **Client Code Path**: Something in `Synapse.Transport` or `Plexus.Client` breaks
+
+The raw WebSocket test bypasses all of synapse's client abstraction and works perfectly.
+
+Potential issues in synapse client code:
+- Schema format validation rejects plexus-derive schemas
+- Subscription parameter encoding in Transport module
+- Connection pooling/reuse bug in Client module
+- Type expectations mismatch in buildIR
 
 ### Workaround
 
