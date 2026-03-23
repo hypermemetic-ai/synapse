@@ -19,6 +19,7 @@ author:             Plexus Team
 maintainer:         dev@plexus.example
 category:           Network, Protocol
 build-type:         Simple
+extra-doc-files:    README.md
 tested-with:        GHC == 9.6.7
 
 common warnings
