@@ -460,6 +460,63 @@ synapse/
 ../plexus-protocol/        # Shared Plexus types (sibling package)
 ```
 
+## Docker
+
+Synapse can be run in a Docker container for easy deployment and testing.
+
+### Build Docker Image
+
+```bash
+# From the synapse directory
+docker build -t synapse:latest .
+
+# Or use docker-compose
+docker-compose build
+```
+
+### Run with Docker
+
+```bash
+# Show help
+docker run --rm synapse:latest
+
+# Call a method (requires --network host to access local backends)
+docker run --rm --network host synapse:latest substrate echo.echo --message "hello"
+
+# Enable debug logging
+docker run --rm --network host -e LOG_LEVEL=debug synapse:latest substrate hash
+
+# Connect to remote backend
+docker run --rm synapse:latest -H 192.168.1.100 -P 5001 backend method
+
+# Run protocol validation
+docker run --rm --network host synapse:latest _self debug localhost 4444 substrate
+```
+
+### Docker Compose
+
+```bash
+# Show help
+docker-compose run --rm synapse
+
+# Run a method
+docker-compose run --rm synapse synapse substrate echo.echo --message "hello"
+
+# Debug connection
+BACKEND=substrate PLEXUS_PORT=4444 docker-compose --profile debug up
+
+# With environment variables
+LOG_LEVEL=debug docker-compose run --rm synapse synapse substrate hash
+```
+
+### Image Details
+
+- **Base**: debian:bookworm-slim (minimal runtime)
+- **Size**: ~200MB (multi-stage build)
+- **User**: Non-root user (uid 1000)
+- **Default log level**: error (quiet mode)
+- **Network**: Use `--network host` to access localhost backends
+
 ## Development
 
 ```bash

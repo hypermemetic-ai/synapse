@@ -1,0 +1,48 @@
+# Build artifacts
+dist/
+dist-newstyle/
+.stack-work/
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
+*.exe
+
+# Development
+.git/
+.gitignore
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+!README.md
+docs/
+benchmark/
+test/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Patches and diffs
+*.patch
+*.diff
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+.cache/
+.substrate/
+
+# Config
+synapse.config.json
