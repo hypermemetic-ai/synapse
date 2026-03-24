@@ -63,17 +63,17 @@ fetchSchemaAt :: Path -> SynapseM PluginSchema
 fetchSchemaAt path = do
   logger <- getLogger
   cfg <- getConfig
-  Log.logWith logger Log.Debug Log.SubsystemSchema "Fetching schema at path"
-    [("path", T.pack $ show path), ("host", T.pack $ substrateHost cfg), ("port", T.pack $ show $ substratePort cfg)]
+  Log.logDebug logger Log.SubsystemSchema $
+    "Fetching schema at path: " <> T.pack (show path)
   result <- liftIO $ ST.fetchSchemaAt cfg path
   case result of
     Left err -> do
-      Log.logWith logger Log.Info Log.SubsystemSchema "Schema fetch failed"
-        [("path", T.pack $ show path), ("error", transportErrorToText err)]
+      Log.logInfo logger Log.SubsystemSchema $
+        "Schema fetch failed: " <> T.pack (show path) <> " - " <> transportErrorToText err
       throwNav $ FetchError (transportErrorToText err) path
     Right schema -> do
-      Log.logWith logger Log.Debug Log.SubsystemSchema "Schema fetch succeeded"
-        [("path", T.pack $ show path), ("namespace", psNamespace schema)]
+      Log.logDebug logger Log.SubsystemSchema $
+        "Schema fetch succeeded: " <> T.pack (show path) <> " (" <> psNamespace schema <> ")"
       pure schema
 
 -- | Fetch a specific method's schema (more efficient than full plugin schema)
@@ -93,14 +93,10 @@ invoke namespacePath method params = do
   cfg <- getConfig
   backend <- asks seBackend
   let fullPath = namespacePath ++ [method]
-  Log.logWith logger Log.Info Log.SubsystemRPC "Invoking RPC method"
-    [ ("method", T.intercalate "." fullPath)
-    , ("backend", backend)
-    , ("host", T.pack $ substrateHost cfg)
-    , ("port", T.pack $ show $ substratePort cfg)
-    ]
-  Log.logWith logger Log.Trace Log.SubsystemRPC "RPC request params"
-    [("params", T.pack $ show params)]
+  Log.logInfo logger Log.SubsystemRPC $
+    "Invoking RPC method: " <> T.intercalate "." fullPath <> " on " <> backend
+  Log.logDebug logger Log.SubsystemRPC $
+    "RPC request params: " <> T.pack (show params)
   result <- liftIO $ ST.invokeMethod cfg namespacePath method params
   case result of
     Left transportErr -> do
@@ -114,17 +110,12 @@ invoke namespacePath method params = do
             , tcPath     = path
             , tcCategory = transportErrorToCategory transportErr
             }
-      Log.logWith logger Log.Info Log.SubsystemRPC "RPC invocation failed"
-        [ ("method", T.intercalate "." fullPath)
-        , ("error", transportErrorToText transportErr)
-        , ("category", T.pack $ show $ transportErrorToCategory transportErr)
-        ]
+      Log.logInfo logger Log.SubsystemRPC $
+        "RPC invocation failed: " <> T.intercalate "." fullPath <> " - " <> transportErrorToText transportErr
       throwTransportWith ctx
     Right items -> do
-      Log.logWith logger Log.Debug Log.SubsystemRPC "RPC invocation succeeded"
-        [ ("method", T.intercalate "." fullPath)
-        , ("items_count", T.pack $ show $ length items)
-        ]
+      Log.logDebug logger Log.SubsystemRPC $
+        "RPC invocation succeeded: " <> T.intercalate "." fullPath <> " (" <> T.pack (show (length items)) <> " items)"
       pure items
   where
     getHost (PT.ConnectionRefused h _) _ = h

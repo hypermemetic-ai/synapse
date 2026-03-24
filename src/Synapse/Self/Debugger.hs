@@ -40,7 +40,8 @@ import System.Timeout (timeout)
 import Synapse.CLI.Parse (parseParams)
 import Synapse.IR.Builder (buildIR)
 import Synapse.IR.Types (irMethods, MethodDef, mdParams, pdName)
-import Synapse.Log (Logger, nullLogger)
+import Synapse.Log (Logger, makeLogger)
+import qualified Katip
 import Synapse.Monad (SynapseEnv(..), initEnv, runSynapseM)
 import qualified Synapse.Self.Protocol.TestRunner as TestRunner
 
@@ -245,7 +246,7 @@ testMethod config method cliParams allowUnknown rawJson = do
       let namespacePath = if length methodParts > 1 then init methodParts else []
 
       -- Create a SynapseM environment for buildIR
-      logger <- pure nullLogger  -- Use null logger for test command
+      logger <- makeLogger Katip.ErrorS  -- Use error-level logger for test command
       env <- initEnv (T.pack host) port backend logger
 
       -- Run buildIR within SynapseM
