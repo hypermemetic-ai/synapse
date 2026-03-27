@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            3.10.0
+version:            3.10.1
 synopsis:           Schema-driven CLI for Plexus RPC servers
 license:            MIT
 author:

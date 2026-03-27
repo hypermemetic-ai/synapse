@@ -31,7 +31,8 @@ import Options.Applicative
 import Data.Version (showVersion)
 import qualified Paths_plexus_synapse as Meta
 import System.Exit (exitFailure, exitSuccess)
-import System.IO (hPutStrLn, stderr, hFlush, stdout)
+import System.IO (hPutStrLn, stderr, hFlush, stdout, hSetEncoding)
+import GHC.IO.Encoding (utf8, setLocaleEncoding)
 
 
 import Synapse.Schema.Types
@@ -129,6 +130,13 @@ makeLoggerFromOpts opts = do
 
 main :: IO ()
 main = do
+  -- Set UTF-8 encoding for stdout/stderr to handle unicode characters
+  -- This prevents "cannot encode character" errors when outputting
+  -- unicode (e.g., block characters from substrate boot sequence)
+  setLocaleEncoding utf8
+  hSetEncoding stdout utf8
+  hSetEncoding stderr utf8
+
   args <- execParser argsInfo
   let opts = argOpts args
 
