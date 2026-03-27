@@ -40,7 +40,8 @@ import System.Timeout (timeout)
 import Synapse.CLI.Parse (parseParams)
 import Synapse.IR.Builder (buildIR)
 import Synapse.IR.Types (irMethods, MethodDef, mdParams, pdName)
-import Synapse.Log (Logger, nullLogger)
+import Synapse.Log (Logger, makeLogger)
+import qualified Katip
 import Synapse.Monad (SynapseEnv(..), initEnv, runSynapseM)
 import qualified Synapse.Self.Protocol.TestRunner as TestRunner
 
@@ -220,14 +221,11 @@ validateProtocol host port backend = do
 --   synapse _self test localhost 5001 substrate echo.echo --message "hello"
 --   synapse _self test --allow-unknown localhost 5001 substrate echo.echo --message "hello" --fake "test"
 --   synapse _self test --raw '{"message":"hello"}' localhost 5001 substrate echo.echo
-testMethod :: String -> Int -> Text -> Text -> [(Text, Text)] -> Bool -> Maybe Text -> IO ()
-testMethod host port backend method cliParams allowUnknown rawJson = do
-  let config = SubstrateConfig
-        { substrateHost = host
-        , substratePort = port
-        , substratePath = "/"
-        , substrateBackend = backend
-        }
+testMethod :: SubstrateConfig -> Text -> [(Text, Text)] -> Bool -> Maybe Text -> IO ()
+testMethod config method cliParams allowUnknown rawJson = do
+  let backend = substrateBackend config
+  let host = substrateHost config
+  let port = substratePort config
 
   -- Mode 3: Raw JSON
   case rawJson of
@@ -248,7 +246,7 @@ testMethod host port backend method cliParams allowUnknown rawJson = do
       let namespacePath = if length methodParts > 1 then init methodParts else []
 
       -- Create a SynapseM environment for buildIR
-      logger <- pure nullLogger  -- Use null logger for test command
+      logger <- makeLogger Katip.ErrorS  -- Use error-level logger for test command
       env <- initEnv (T.pack host) port backend logger
 
       -- Run buildIR within SynapseM

@@ -1,142 +1,106 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
 
--- | Structured logging for Synapse using fast-logger
+-- | Structured logging for Synapse using katip
 --
--- Provides filterable, subsystem-tagged logging with three levels:
--- - Info: High-level operations (connections, discoveries, invocations)
--- - Debug: Detailed flow (schema fetches, cache hits/misses)
--- - Trace: Very detailed (raw messages, packet-level details)
+-- Provides filterable, subsystem-tagged logging with severity levels:
+-- - ErrorS: Errors that need attention
+-- - WarningS: Warnings about potential issues
+-- - InfoS: High-level operations (connections, discoveries)
+-- - DebugS: Detailed flow (schema fetches, cache hits/misses)
+--
+-- Default log level: ErrorS (only errors shown)
 module Synapse.Log
   ( -- * Types
-    LogLevel(..)
+    Severity(..)
   , Subsystem(..)
-  , Logger(..)
+  , Logger
 
     -- * Logger Creation
   , makeLogger
-  , nullLogger
-  , withLogger
+  , closeLogger
 
     -- * Logging Functions
+  , logError
+  , logWarn
   , logInfo
   , logDebug
-  , logTrace
-  , logWith
   ) where
 
 import qualified Data.Text as T
 import Data.Text (Text)
-import qualified Data.Text.Encoding as TE
-import qualified Data.ByteString.Char8 as BS
-import System.Log.FastLogger
+import Katip
+import Control.Monad (void)
 import Control.Monad.IO.Class (MonadIO, liftIO)
-import Data.Time.Clock (getCurrentTime)
-import Data.Time.Format (formatTime, defaultTimeLocale)
-import Data.List (intercalate)
+import System.IO (stdout)
 
--- | Log levels (ordered from least to most verbose)
-data LogLevel
-  = Info   -- ^ High-level operations
-  | Debug  -- ^ Detailed flow
-  | Trace  -- ^ Very detailed (packet-level)
-  deriving (Show, Eq, Ord)
-
--- | Subsystems for filtering
+-- | Subsystems for filtering (maps to katip namespace)
 data Subsystem
-  = SubsystemDiscovery   -- ^ Backend discovery and health checks
-  | SubsystemTransport   -- ^ Network transport and WebSocket
-  | SubsystemRPC         -- ^ JSON-RPC layer
-  | SubsystemSchema      -- ^ Schema fetching and parsing
-  | SubsystemCache       -- ^ Schema caching
-  | SubsystemNavigation  -- ^ Path navigation and resolution
-  | SubsystemRendering   -- ^ Output rendering
-  | SubsystemCLI         -- ^ CLI parsing and execution
-  | SubsystemBidir       -- ^ Bidirectional communication
+  = SubsystemDiscovery
+  | SubsystemTransport
+  | SubsystemRPC
+  | SubsystemSchema
+  | SubsystemCache
+  | SubsystemNavigation
+  | SubsystemRendering
+  | SubsystemCLI
+  | SubsystemBidir
   deriving (Show, Eq)
 
--- | Logger with filtering
+-- | Logger handle
 data Logger = Logger
-  { logMinLevel     :: !LogLevel
-  , logSubsystems   :: !(Maybe [Subsystem])  -- Nothing = all
-  , logTimedLogger  :: !TimedFastLogger
-  , logCleanup      :: !(IO ())
+  { logEnv :: LogEnv
+  , logContext :: LogContexts
+  , logNamespace :: Namespace
   }
 
--- | Create a logger with filtering
-makeLogger :: LogLevel -> Maybe [Subsystem] -> IO Logger
-makeLogger minLevel mSubsystems = do
-  timeCache <- newTimeCache simpleTimeFormat
-  (logger, cleanup) <- newTimedFastLogger timeCache (LogStderr defaultBufSize)
+-- | Convert subsystem to katip namespace
+subsystemToNamespace :: Subsystem -> Namespace
+subsystemToNamespace SubsystemDiscovery  = "discovery"
+subsystemToNamespace SubsystemTransport  = "transport"
+subsystemToNamespace SubsystemRPC        = "rpc"
+subsystemToNamespace SubsystemSchema     = "schema"
+subsystemToNamespace SubsystemCache      = "cache"
+subsystemToNamespace SubsystemNavigation = "navigation"
+subsystemToNamespace SubsystemRendering  = "rendering"
+subsystemToNamespace SubsystemCLI        = "cli"
+subsystemToNamespace SubsystemBidir      = "bidir"
+
+-- | Create a logger with specified minimum severity
+-- Default: ErrorS (only show errors)
+makeLogger :: Severity -> IO Logger
+makeLogger minSeverity = do
+  handleScribe <- mkHandleScribe ColorIfTerminal stdout (permitItem minSeverity) V2
+  env <- registerScribe "stdout" handleScribe defaultScribeSettings =<< initLogEnv "synapse" "production"
   pure Logger
-    { logMinLevel = minLevel
-    , logSubsystems = mSubsystems
-    , logTimedLogger = logger
-    , logCleanup = cleanup
+    { logEnv = env
+    , logContext = mempty
+    , logNamespace = "synapse"
     }
 
--- | A null logger that discards all messages
-nullLogger :: Logger
-nullLogger = Logger
-  { logMinLevel = Info
-  , logSubsystems = Nothing
-  , logTimedLogger = \_ -> pure ()  -- Discard the (FormattedTime -> LogStr)
-  , logCleanup = pure ()
-  }
+-- | Close logger and flush buffers
+closeLogger :: Logger -> IO ()
+closeLogger logger = void $ closeScribes (logEnv logger)
 
--- | Run an action with a logger, ensuring cleanup
-withLogger :: LogLevel -> Maybe [Subsystem] -> (Logger -> IO a) -> IO a
-withLogger level subs action = do
-  logger <- makeLogger level subs
-  result <- action logger
-  logCleanup logger
-  pure result
+-- | Log an error message
+logError :: MonadIO m => Logger -> Subsystem -> Text -> m ()
+logError logger subsys msg = liftIO $
+  runKatipContextT (logEnv logger) (logContext logger) (logNamespace logger <> subsystemToNamespace subsys) $
+    logFM ErrorS (logStr msg)
 
--- | Log a message with fields
-logWith :: MonadIO m => Logger -> LogLevel -> Subsystem -> Text -> [(Text, Text)] -> m ()
-logWith Logger{..} level subsys msg fields = liftIO $
-  when (shouldLog level subsys) $ do
-    let levelStr = formatLevel level
-    let subsysStr = formatSubsystem subsys
-    let fieldsStr = if null fields then "" else " {" <> T.intercalate ", " (map formatField fields) <> "}"
-    let logLine = toLogStr $
-          "[" <> levelStr <> "] " <>
-          "[" <> subsysStr <> "] " <>
-          msg <> fieldsStr <> "\n"
-    logTimedLogger (\_time -> logLine)
-  where
-    shouldLog lvl sub =
-      lvl >= logMinLevel &&
-      case logSubsystems of
-        Nothing -> True
-        Just subs -> sub `elem` subs
+-- | Log a warning message
+logWarn :: MonadIO m => Logger -> Subsystem -> Text -> m ()
+logWarn logger subsys msg = liftIO $
+  runKatipContextT (logEnv logger) (logContext logger) (logNamespace logger <> subsystemToNamespace subsys) $
+    logFM WarningS (logStr msg)
 
-    formatLevel Info = "INFO "
-    formatLevel Debug = "DEBUG"
-    formatLevel Trace = "TRACE"
-
-    formatSubsystem SubsystemDiscovery  = "discovery "
-    formatSubsystem SubsystemTransport  = "transport "
-    formatSubsystem SubsystemRPC        = "rpc       "
-    formatSubsystem SubsystemSchema     = "schema    "
-    formatSubsystem SubsystemCache      = "cache     "
-    formatSubsystem SubsystemNavigation = "navigation"
-    formatSubsystem SubsystemRendering  = "rendering "
-    formatSubsystem SubsystemCLI        = "cli       "
-    formatSubsystem SubsystemBidir      = "bidir     "
-
-    formatField (k, v) = k <> "=" <> v
-
-    when cond action = if cond then action else pure ()
-
--- | Log an info-level message
+-- | Log an info message
 logInfo :: MonadIO m => Logger -> Subsystem -> Text -> m ()
-logInfo logger subsys msg = logWith logger Info subsys msg []
+logInfo logger subsys msg = liftIO $
+  runKatipContextT (logEnv logger) (logContext logger) (logNamespace logger <> subsystemToNamespace subsys) $
+    logFM InfoS (logStr msg)
 
--- | Log a debug-level message
+-- | Log a debug message
 logDebug :: MonadIO m => Logger -> Subsystem -> Text -> m ()
-logDebug logger subsys msg = logWith logger Debug subsys msg []
-
--- | Log a trace-level message
-logTrace :: MonadIO m => Logger -> Subsystem -> Text -> m ()
-logTrace logger subsys msg = logWith logger Trace subsys msg []
+logDebug logger subsys msg = liftIO $
+  runKatipContextT (logEnv logger) (logContext logger) (logNamespace logger <> subsystemToNamespace subsys) $
+    logFM DebugS (logStr msg)

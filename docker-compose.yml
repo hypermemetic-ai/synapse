@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  synapse:
+    build:
+      context: ..
+      dockerfile: synapse/Dockerfile
+    image: synapse:latest
+    container_name: synapse
+    network_mode: host  # Use host network to access local Plexus servers
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-error}  # Default to error level
+    command: ["synapse", "--help"]
+    user: "1000:1000"
+
+  # Example: Run synapse against a backend
+  synapse-run:
+    image: synapse:latest
+    network_mode: host
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-error}
+    command: ["synapse", "-P", "${PLEXUS_PORT:-4444}", "${BACKEND:-substrate}", "${METHOD:-hash}"]
+    profiles:
+      - run
+
+  # Example: Debug mode
+  synapse-debug:
+    image: synapse:latest
+    network_mode: host
+    environment:
+      - LOG_LEVEL=debug  # Enable debug logging
+    command: ["synapse", "_self", "debug", "localhost", "${PLEXUS_PORT:-4444}", "${BACKEND:-substrate}"]
+    profiles:
+      - debug
+
+# Usage:
+# Build image:
+#   docker-compose build
+#
+# Show help:
+#   docker-compose run --rm synapse
+#
+# Run a method:
+#   docker-compose run --rm synapse synapse substrate echo.echo --message "hello"
+#
+# Use profiles:
+#   BACKEND=substrate METHOD=hash docker-compose --profile run up
+#   BACKEND=substrate PLEXUS_PORT=5001 docker-compose --profile debug up
+#
+# Enable debug logging:
+#   LOG_LEVEL=debug docker-compose run --rm synapse synapse substrate hash

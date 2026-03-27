@@ -223,9 +223,6 @@ getBackendAt = discoverBackendName
 -- | Discover the backend name by calling _info (with 2000ms timeout)
 discoverBackendName :: Text -> Int -> IO (Maybe Text)
 discoverBackendName host port = do
-  IO.hPutStrLn IO.stderr $ "[DEBUG Discovery] Attempting to discover backend at " ++ T.unpack host ++ ":" ++ show port
-  IO.hFlush IO.stderr
-
   let cfg = SubstrateConfig
         { substrateHost = T.unpack host
         , substratePort = port
@@ -234,44 +231,26 @@ discoverBackendName host port = do
         }
       timeout = do
         threadDelay 2000000  -- 2 second timeout
-        IO.hPutStrLn IO.stderr "[DEBUG Discovery] _info call timed out"
-        IO.hFlush IO.stderr
         pure (Left $ ConnectionTimeout host port)
       rpcCall = do
-        IO.hPutStrLn IO.stderr "[DEBUG Discovery] Calling _info..."
-        IO.hFlush IO.stderr
         ST.rpcCallWith cfg "_info" Aeson.Null
-          `catch` \(_e :: SomeException) -> do
-            IO.hPutStrLn IO.stderr $ "[DEBUG Discovery] _info call threw exception: " ++ show _e
-            IO.hFlush IO.stderr
+          `catch` \(_e :: SomeException) ->
             pure (Left $ NetworkError "Connection failed")
 
   -- Race the RPC call against a 2 second timeout
-  IO.hPutStrLn IO.stderr "[DEBUG Discovery] Starting race between timeout and RPC call"
-  IO.hFlush IO.stderr
   raceResult <- race timeout rpcCall
 
   case raceResult of
-    Left _err -> do
-      IO.hPutStrLn IO.stderr "[DEBUG Discovery] Timeout won the race"
-      IO.hFlush IO.stderr
+    Left _err ->
       pure Nothing
-    Right (Left err) -> do
-      IO.hPutStrLn IO.stderr $ "[DEBUG Discovery] RPC call failed: " ++ show err
-      IO.hFlush IO.stderr
+    Right (Left _err) ->
       pure Nothing
     Right (Right items) -> do
-      IO.hPutStrLn IO.stderr $ "[DEBUG Discovery] RPC call succeeded, got " ++ show (length items) ++ " items"
-      IO.hFlush IO.stderr
       -- Extract the backend name from subscription response
       case [Aeson.fromJSON content | StreamData _ _ _ content <- items] of
-        (Aeson.Success (Aeson.Object obj):_) | Just (Aeson.String name) <- KM.lookup "backend" obj -> do
-          IO.hPutStrLn IO.stderr $ "[DEBUG Discovery] Discovered backend: " ++ T.unpack name
-          IO.hFlush IO.stderr
+        (Aeson.Success (Aeson.Object obj):_) | Just (Aeson.String name) <- KM.lookup "backend" obj ->
           pure (Just name)
-        _ -> do
-          IO.hPutStrLn IO.stderr "[DEBUG Discovery] Could not extract backend name from response"
-          IO.hFlush IO.stderr
+        _ ->
           pure Nothing
 
 -- | Query the registry for all backends

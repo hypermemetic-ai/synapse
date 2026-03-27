@@ -37,6 +37,7 @@ import System.IO (hPutStrLn, stderr, hFlush, stdout)
 import Synapse.Schema.Types
 import Synapse.Monad (SynapseM, SynapseEnv(..), SynapseError(..), BackendErrorType(..), TransportContext(..), TransportErrorCategory(..), initEnv, runSynapseM, throwNav, throwTransport, throwParse, throwBackend)
 import qualified Synapse.Log as Log
+import qualified Katip
 import Synapse.Algebra.Navigate
 import Synapse.Algebra.Render (renderSchema)
 import Synapse.CLI.Help (renderMethodHelp)
@@ -106,33 +107,19 @@ defaultPort = 4444
 -- ============================================================================
 
 -- | Create a logger from command-line options
+-- Default: ErrorS (only show errors)
 makeLoggerFromOpts :: SynapseOpts -> IO Log.Logger
-makeLoggerFromOpts opts =
-  case soLogLevel opts of
-    Nothing -> pure Log.nullLogger  -- Logging disabled by default
-    Just levelStr ->
-      let level = parseLogLevel levelStr
-          subsystems = parseSubsystems (soLogSubsystems opts)
-      in Log.makeLogger level subsystems
+makeLoggerFromOpts opts = do
+  let level = case soLogLevel opts of
+        Nothing -> Katip.ErrorS  -- Default: only errors
+        Just levelStr -> parseLogLevel levelStr
+  Log.makeLogger level
   where
-    parseLogLevel "info" = Log.Info
-    parseLogLevel "debug" = Log.Debug
-    parseLogLevel "trace" = Log.Trace
-    parseLogLevel _ = Log.Info  -- Default to info
-
-    parseSubsystems [] = Nothing  -- No filter, log all subsystems
-    parseSubsystems subs = Just (map parseSubsystem subs)
-
-    parseSubsystem "discovery" = Log.SubsystemDiscovery
-    parseSubsystem "transport" = Log.SubsystemTransport
-    parseSubsystem "rpc" = Log.SubsystemRPC
-    parseSubsystem "schema" = Log.SubsystemSchema
-    parseSubsystem "cache" = Log.SubsystemCache
-    parseSubsystem "navigation" = Log.SubsystemNavigation
-    parseSubsystem "rendering" = Log.SubsystemRendering
-    parseSubsystem "cli" = Log.SubsystemCLI
-    parseSubsystem "bidir" = Log.SubsystemBidir
-    parseSubsystem _ = Log.SubsystemCLI  -- Default
+    parseLogLevel "error" = Katip.ErrorS
+    parseLogLevel "warn" = Katip.WarningS
+    parseLogLevel "info" = Katip.InfoS
+    parseLogLevel "debug" = Katip.DebugS
+    parseLogLevel _ = Katip.ErrorS  -- Default to error
 
 -- ============================================================================
 -- Argument Splitting
@@ -144,18 +131,24 @@ main :: IO ()
 main = do
   args <- execParser argsInfo
   let opts = argOpts args
-  hPutStrLn stderr "[DEBUG] synapse starting..."
-  hFlush stderr
+
+  -- Initialize logger (default: ErrorS, only show errors)
+  logger <- makeLoggerFromOpts opts
+
+  Log.logDebug logger Log.SubsystemCLI "synapse starting..."
+
   -- Use specified host/port for registry discovery
   let discovery = registryDiscovery (soHost opts) (soPort opts)
 
   -- Get the backend at the connection point (host:port)
   -- If it has a registry plugin, that's used for discovering other backends
-  hPutStrLn stderr $ "[DEBUG] Checking backend at " <> T.unpack (soHost opts) <> ":" <> show (soPort opts)
-  hFlush stderr
+  Log.logDebug logger Log.SubsystemDiscovery $
+    "Checking backend at " <> soHost opts <> ":" <> T.pack (show (soPort opts))
+
   maybeBackend <- getBackendAt (soHost opts) (soPort opts)
-  hPutStrLn stderr $ "[DEBUG] Backend check complete: " <> show maybeBackend
-  hFlush stderr
+
+  Log.logDebug logger Log.SubsystemDiscovery $
+    "Backend check complete: " <> T.pack (show maybeBackend)
   let hostBackend = maybe "plexus" id maybeBackend
 
   -- Auto-register: if we're connecting to a non-default port, push the

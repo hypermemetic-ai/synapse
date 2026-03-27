@@ -340,6 +340,67 @@ Unknown parameter: --mesage
 Did you mean: --message?
 ```
 
+## Debugging & Testing
+
+Synapse provides built-in tools for debugging connections and validating protocol compliance.
+
+### Connection Debugging
+
+Test the complete connection stack (TCP → HTTP → WebSocket → RPC):
+
+```bash
+synapse _self debug localhost 5001 substrate
+```
+
+This tests each layer sequentially:
+- **TCP**: Can we reach the port?
+- **HTTP**: Does the server respond to HTTP?
+- **WebSocket**: Can we upgrade to WebSocket?
+- **RPC**: Can we call `_info`?
+
+### Protocol Validation
+
+Run the full protocol compliance test suite:
+
+```bash
+synapse _self validate localhost 5001 substrate
+```
+
+This calls the `_debug.*` endpoints (enabled with `PLEXUS_DEBUG=true` on the server) and validates:
+- StreamDone messages are sent
+- Metadata structure is correct
+- Field naming follows conventions
+- Progress percentages are in range
+
+### Test Arbitrary Methods
+
+Test any method with protocol validation:
+
+```bash
+# Use CLI flags for connection settings
+synapse -P 5001 _self test substrate.ping.pong --message "test"
+
+# Test with schema validation
+synapse -P 5001 _self test substrate.echo.echo --message "hello" --count 3
+
+# Allow unknown parameters (warns but passes through)
+synapse -P 5001 _self test --allow-unknown substrate.echo.echo --fake "value"
+
+# Use raw JSON (skips schema validation)
+synapse -P 5001 _self test --raw '{"message":"hello"}' substrate.echo.echo
+```
+
+**Important**: Connection settings come from `-H`/`--host` (default: `127.0.0.1`) and `-P`/`--port` (default: `4444`) flags, not positional arguments. This ensures the test uses the same connection that discovery validated.
+
+### Port Scanning
+
+Discover backends running on common ports:
+
+```bash
+synapse _self scan
+# Scans ports 4440-4459 for Plexus backends
+```
+
 ## Architecture
 
 Synapse treats the plugin hierarchy as a **category** and implements operations as **algebras** over recursion schemes:
@@ -398,6 +459,63 @@ synapse/
 
 ../plexus-protocol/        # Shared Plexus types (sibling package)
 ```
+
+## Docker
+
+Synapse can be run in a Docker container for easy deployment and testing.
+
+### Build Docker Image
+
+```bash
+# From the synapse directory
+docker build -t synapse:latest .
+
+# Or use docker-compose
+docker-compose build
+```
+
+### Run with Docker
+
+```bash
+# Show help
+docker run --rm synapse:latest
+
+# Call a method (requires --network host to access local backends)
+docker run --rm --network host synapse:latest substrate echo.echo --message "hello"
+
+# Enable debug logging
+docker run --rm --network host -e LOG_LEVEL=debug synapse:latest substrate hash
+
+# Connect to remote backend
+docker run --rm synapse:latest -H 192.168.1.100 -P 5001 backend method
+
+# Run protocol validation
+docker run --rm --network host synapse:latest _self debug localhost 4444 substrate
+```
+
+### Docker Compose
+
+```bash
+# Show help
+docker-compose run --rm synapse
+
+# Run a method
+docker-compose run --rm synapse synapse substrate echo.echo --message "hello"
+
+# Debug connection
+BACKEND=substrate PLEXUS_PORT=4444 docker-compose --profile debug up
+
+# With environment variables
+LOG_LEVEL=debug docker-compose run --rm synapse synapse substrate hash
+```
+
+### Image Details
+
+- **Base**: debian:bookworm-slim (minimal runtime)
+- **Size**: ~200MB (multi-stage build)
+- **User**: Non-root user (uid 1000)
+- **Default log level**: error (quiet mode)
+- **Network**: Use `--network host` to access localhost backends
 
 ## Development
 

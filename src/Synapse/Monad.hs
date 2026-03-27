@@ -62,6 +62,7 @@ import qualified Data.Text as T
 import Synapse.Schema.Types
 import Synapse.Backend.Discovery (Backend(..))
 import qualified Synapse.Log as Log
+import qualified Katip
 
 -- | Environment for Synapse operations
 data SynapseEnv = SynapseEnv
@@ -128,10 +129,11 @@ newtype SynapseM a = SynapseM
 runSynapseM :: SynapseEnv -> SynapseM a -> IO (Either SynapseError a)
 runSynapseM env action = runReaderT (runExceptT (unSynapseM action)) env
 
--- | Run a SynapseM action with default host/port and specified backend (with null logger)
+-- | Run a SynapseM action with default host/port and specified backend (with error-level logger)
 runSynapseM' :: Text -> SynapseM a -> IO (Either SynapseError a)
 runSynapseM' backend action = do
-  env <- defaultEnv backend Log.nullLogger
+  logger <- Log.makeLogger Katip.ErrorS
+  env <- defaultEnv backend logger
   runSynapseM env action
 
 -- | Initialize environment with given host/port/backend/logger
