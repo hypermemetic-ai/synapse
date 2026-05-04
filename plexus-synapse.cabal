@@ -45,6 +45,8 @@ library
     Synapse.CLI.Transform
     Synapse.CLI.Similarity
     Synapse.Backend.Discovery
+    Synapse.Output.Renderer
+    Synapse.Output.Filter
     Synapse.Self
     Synapse.Self.Types
     Synapse.Self.Resolve
