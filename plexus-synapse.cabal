@@ -416,6 +416,27 @@ test-suite self-test
     OverloadedStrings
   ghc-options:      -threaded
 
+test-suite output-filter-test
+  type:             exitcode-stdio-1.0
+  main-is:          OutputFilterSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-synapse,
+    text >= 2.0 && < 2.2,
+    bytestring >= 0.11 && < 0.13,
+    aeson >= 2.2 && < 2.3,
+    vector >= 0.12 && < 0.14,
+    temporary >= 1.3 && < 1.4,
+    filepath >= 1.4 && < 1.6,
+    hspec >= 2.10 && < 2.12
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+    PatternSynonyms
+  ghc-options:      -threaded
+
 test-suite ir12-method-role-test
   type:             exitcode-stdio-1.0
   main-is:          IR12MethodRoleSpec.hs
