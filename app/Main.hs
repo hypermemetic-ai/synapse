@@ -22,6 +22,7 @@ import Data.Aeson
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as LBS
+import Data.IORef
 import Data.List (stripPrefix)
 import Data.Maybe (isJust)
 import Data.Text (Text)
@@ -67,6 +68,8 @@ import Plexus.Types (Response(..))
 import Synapse.CLI.Transform (mkTransformEnv, transformParams, defaultTransformers, injectBooleanDefaults, injectSmartDefaults)
 import Synapse.IR.Builder (buildIR)
 import Synapse.Renderer (RendererConfig, defaultRendererConfig, renderItem, prettyValue, withMethodPath)
+import Synapse.Output.Renderer (StreamRenderer(..), feedItem, finalize, passthroughRenderer)
+import qualified Synapse.Output.Filter as Filter
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.FilePath ((</>))
 import qualified Synapse.Self.Commands as Self
@@ -102,6 +105,14 @@ data SynapseOpts = SynapseOpts
   , soCookies       :: [(Text, Text)]  -- ^ SAFE-S04/REQ-5: extra --cookie KEY=VALUE entries
   , soHeaders       :: [(Text, Text)]  -- ^ SAFE-S04/REQ-5: extra --header KEY=VALUE entries
   , soNoDeprecationWarnings :: Bool  -- ^ Suppress invocation-time deprecation warnings (IR-15)
+  -- OUTPUT-2: stream-shaping flags. All five only take effect when --json
+  -- is also set; without --json they are ignored (existing template/raw
+  -- rendering applies).
+  , soSelectFields  :: [Text]        -- ^ Field projection list (--select foo,bar)
+  , soFilterExpr    :: Maybe Text    -- ^ --filter PREDICATE (parsed at CLI boundary)
+  , soHeadN         :: Maybe Int     -- ^ --head N: keep first N data items
+  , soTailN         :: Maybe Int     -- ^ --tail N: keep last  N data items
+  , soCount         :: Bool          -- ^ --count: emit {"count": N} after stream done
   }
   deriving Show
 
@@ -454,17 +465,25 @@ run backend host port args = do
   Log.logInfo logger Log.SubsystemCLI $ "Synapse starting: backend=" <> backend <> ", host=" <> host <> ", port=" <> T.pack (show port)
   env <- buildEnv host port backend logger opts
   rendererCfg <- defaultRendererConfig
+  rendererCfgRef <- newIORef rendererCfg
+  -- OUTPUT-2: build the chosen renderer once for this invocation and
+  -- thread it through 'dispatch'. The renderer's 'rrOnEnd' is invoked
+  -- after dispatch returns successfully so aggregating renderers
+  -- (--count, --tail, future table) get a chance to flush.
+  renderer <- selectRenderer opts rendererCfgRef
   Log.logDebug logger Log.SubsystemCLI "Running dispatch..."
-  result <- runSynapseM env (dispatch args rendererCfg)
+  result <- runSynapseM env (dispatch args rendererCfgRef renderer)
   case result of
     Left err -> do
       hPutStrLn stderr $ renderError err
       exitFailure
-    Right () -> exitSuccess
+    Right () -> do
+      finalize renderer
+      exitSuccess
 
 -- | Dispatch based on navigation result
-dispatch :: Args -> RendererConfig -> SynapseM ()
-dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
+dispatch :: Args -> IORef RendererConfig -> StreamRenderer -> SynapseM ()
+dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfgRef renderer = do
   -- Check for _self commands first (before anything else)
   case argBackend of
     Just "_self" -> do
@@ -488,7 +507,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
             Left err -> throwParse $ T.pack err
             Right rpcReq -> do
               items <- invokeRawRpc rpcReq
-              liftIO $ mapM_ (printResult soJson soRaw rendererCfg) items
+              liftIO $ mapM_ (feedItem renderer) items
           return ()
 
         Nothing -> do
@@ -662,8 +681,10 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
     invokeMethod path params = do
       let namespacePath = init path  -- path without method name
       let methodName' = last path
-      -- Set method path hint for template resolution
-      let rendererCfg' = withMethodPath rendererCfg path
+      -- Set the per-method template path hint on the shared
+      -- 'IORef RendererConfig' so the (already-built) template renderer
+      -- picks it up on the next 'feedItem' call.
+      liftIO $ modifyIORef' rendererCfgRef (\cfg -> withMethodPath cfg path)
       -- Determine bidirectional mode (--bidir-cmd takes precedence)
       bidirMode <- liftIO $ case soBidirCmd of
         Just cmd -> pure $ BidirCmd cmd
@@ -679,7 +700,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
         namespacePath
         methodName'
         params
-        (printResult soJson soRaw rendererCfg')
+        (feedItem renderer)
         (handleBidirRequest bidirMode Nothing)
 
     -- Extract default values from JSON Schema properties
@@ -1008,14 +1029,46 @@ encodeDryRun backend namespacePath method params =
         ]
     ]
 
--- | Print a stream result
--- soJson: output raw JSON stream items
--- soRaw: skip template rendering, just output content JSON
--- otherwise: try template rendering, fall back to content JSON
-printResult :: Bool -> Bool -> RendererConfig -> HubStreamItem -> IO ()
-printResult True _ _ item = LBS.putStrLn $ encode item
-printResult _ True _ item = case item of
-  -- Raw mode: just output the content
+-- ============================================================================
+-- Renderer dispatch (OUTPUT-2)
+-- ============================================================================
+--
+-- 'selectRenderer' chooses a 'StreamRenderer' from the parsed CLI options.
+-- Each branch is a small builder that produces a renderer with the same
+-- per-item / on-end interface. New formats (e.g. OUTPUT-3 table renderer)
+-- plug in here as additional branches without touching any existing
+-- renderer code.
+--
+-- Behavior of every existing branch (json / raw / template) is preserved
+-- byte-for-byte from the previous monolithic 'printResult'.
+
+-- | Choose a renderer from CLI options.
+--
+-- The template renderer reads its 'RendererConfig' from an 'IORef' so
+-- that the per-method path hint set just before invocation
+-- ('withMethodPath') is honored without rebuilding the renderer
+-- mid-stream — important for aggregating renderers like @--count@
+-- and @--tail@ which must keep their state across the whole call.
+selectRenderer :: SynapseOpts -> IORef RendererConfig -> IO StreamRenderer
+selectRenderer opts cfgRef
+  | needsShaping opts = case buildShapeOpts opts of
+      Right sopts -> Filter.shapedJsonRenderer sopts
+      Left  err   -> do
+        hPutStrLn stderr err
+        exitFailure
+  | soJson opts = pure jsonRenderer
+  | soRaw  opts = pure rawRenderer
+  | otherwise   = pure $ templateRenderer cfgRef
+
+-- | Pass-through NDJSON renderer: encode each item as a JSON line.
+jsonRenderer :: StreamRenderer
+jsonRenderer = passthroughRenderer $ \item ->
+  LBS.putStrLn (encode item)
+
+-- | Raw renderer: emit only the content of @HubData@ items, surface
+-- progress and errors in the same way the old 'printResult' did.
+rawRenderer :: StreamRenderer
+rawRenderer = passthroughRenderer $ \item -> case item of
   HubData _ _ _ dat -> do
     LBS.putStrLn $ encode dat
     hFlush stdout
@@ -1026,8 +1079,14 @@ printResult _ True _ item = case item of
   HubError _ _ err _ ->
     hPutStrLn stderr $ "Error: " <> T.unpack err
   _ -> pure ()
-printResult _ _ cfg item = do
-  -- Template mode: try to render with template
+
+-- | Template renderer: try the Mustache template, fall back to pretty
+-- value rendering on misses, route progress / errors as the old
+-- 'printResult' did. The 'RendererConfig' is read from an 'IORef' so
+-- per-method path hints set immediately before invocation are honored.
+templateRenderer :: IORef RendererConfig -> StreamRenderer
+templateRenderer cfgRef = passthroughRenderer $ \item -> do
+  cfg <- readIORef cfgRef
   mRendered <- renderItem cfg item
   case mRendered of
     Just text
@@ -1036,7 +1095,6 @@ printResult _ _ cfg item = do
           TIO.putStr text
           hFlush stdout
     Nothing -> case item of
-      -- Fallback to pretty-printed content
       HubData _ _ _ dat -> do
         TIO.putStrLn $ prettyValue dat
         hFlush stdout
@@ -1047,6 +1105,44 @@ printResult _ _ cfg item = do
       HubError _ _ err _ ->
         hPutStrLn stderr $ "Error: " <> T.unpack err
       _ -> pure ()
+
+-- | Are any of the new shaping flags active?
+needsShaping :: SynapseOpts -> Bool
+needsShaping SynapseOpts{..} =
+     not (null soSelectFields)
+  || isJust soFilterExpr
+  || isJust soHeadN
+  || isJust soTailN
+  || soCount
+
+-- | Validate flag combinations and produce a 'Filter.ShapeOpts'.
+--
+-- The CLI parser rejects @--head@+@--tail@ and @--count@+anything-else
+-- statically, but we double-check here to surface a clear error for
+-- programmatic use too.
+buildShapeOpts :: SynapseOpts -> Either String Filter.ShapeOpts
+buildShapeOpts SynapseOpts{..}
+  | not soJson =
+      Left "synapse: --select / --filter / --head / --tail / --count require --json (existing template/raw rendering ignores them)."
+  | isJust soHeadN && isJust soTailN =
+      Left "synapse: --head and --tail are mutually exclusive."
+  | soCount && (not (null soSelectFields) || isJust soHeadN || isJust soTailN) =
+      Left "synapse: --count is a terminal aggregate; cannot combine with --select / --head / --tail."
+  | otherwise = do
+      let select = [ Filter.FieldName (T.strip f) | f <- soSelectFields, not (T.null (T.strip f)) ]
+      pred' <- case soFilterExpr of
+        Nothing  -> Right Nothing
+        Just src -> case Filter.parseFilter src of
+          Right p -> Right (Just p)
+          Left  e -> Left $ Filter.renderParseFilterError src e
+      Right Filter.ShapeOpts
+        { Filter.soSelect  = select
+        , Filter.soFilter  = pred'
+        , Filter.soHead    = soHeadN
+        , Filter.soTail    = soTailN
+        , Filter.soCount   = soCount
+        , Filter.soTailCap = Filter.defaultTailCap
+        }
 
 -- ============================================================================
 -- Argument Parsing (Synapse Options Only)
@@ -1143,7 +1239,30 @@ optsParser = do
   soNoDeprecationWarnings <- switch
     ( long "no-deprecation-warnings"
    <> help "Suppress invocation-time deprecation warnings on stderr (IR-15)" )
+  -- OUTPUT-2: stream-shaping flags. All five only take effect alongside
+  -- --json; without --json they are ignored. Mutual exclusion is
+  -- enforced in 'buildShapeOpts' so the error surface is one place.
+  soSelectFields <- fmap (concatMap splitCsv) $ many $ T.pack <$> strOption
+    ( long "select" <> metavar "FIELD[,FIELD...]"
+   <> help "Project HubData.content to these top-level fields. Repeatable; values may be comma-separated." )
+  soFilterExpr <- optional $ T.pack <$> strOption
+    ( long "filter" <> metavar "PREDICATE"
+   <> help "Drop HubData items whose content does not satisfy the predicate. Grammar: field == \"value\" | field != value | && || ! ( ). For richer expressions, pipe to jq." )
+  soHeadN <- optional $ option auto
+    ( long "head" <> metavar "N"
+   <> help "Emit only the first N HubData items, then drop the rest. Mutually exclusive with --tail." )
+  soTailN <- optional $ option auto
+    ( long "tail" <> metavar "N"
+   <> help "Emit only the last N HubData items (bounded ring buffer). Mutually exclusive with --head." )
+  soCount <- switch
+    ( long "count"
+   <> help "Drop all HubData items; emit a single {\"count\": N} line at stream end. Mutually exclusive with --select / --head / --tail." )
   pure SynapseOpts{..}
+
+-- | Split a single comma-separated CLI value into individual fields.
+-- Multiple @--select@ flags accumulate; each value can also be CSV.
+splitCsv :: Text -> [Text]
+splitCsv = filter (not . T.null) . map T.strip . T.splitOn ","
 
 -- | Parse a KEY=VALUE pair (used by --cookie/--header). Treats the first '='
 -- as the separator; everything before is the key, everything after is the value.
