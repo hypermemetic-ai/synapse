@@ -397,6 +397,16 @@ extractMethodDef namespace pathPrefix method =
           -- tags. plexus-protocol defaults this to MethodRoleRpc when
           -- the upstream schema omits the field, so pre-IR servers
           -- continue to work with no change in behaviour.
+        , mdCredentials = methodCredentials method
+          -- AUTHZ-CRED-IR-1: lift MethodSchema.credentials onto the IR.
+          -- plexus-protocol's FromJSON defaults this to [] for pre-IR
+          -- servers (no @credentials@ key in the wire JSON), so back-
+          -- compat is preserved without any branching here.
+        , mdRequiresCredential = methodRequiresCredential method
+          -- AUTHZ-CRED-IR-1: lift MethodSchema.requires_credential onto
+          -- the IR. plexus-protocol's FromJSON defaults this to Nothing
+          -- for pre-IR servers (no @requires_credential@ key in the wire
+          -- JSON).
         }
   in (allTypes, mdef)
 

@@ -49,6 +49,8 @@ baseMethodDef = MethodDef
   , mdBidirResponseType   = Nothing
   , mdBidirResponseSchema = Nothing
   , mdRole                = MethodRoleRpc
+  , mdCredentials         = []        -- AUTHZ-CRED-IR-1: default empty for this fixture
+  , mdRequiresCredential  = Nothing   -- AUTHZ-CRED-IR-1: default Nothing for this fixture
   }
 
 -- | Build a JSON @MethodSchema@ with an optional @role@ key. Passing
