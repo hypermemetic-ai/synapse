@@ -49,6 +49,19 @@ module Synapse.IR.Types
   , MethodRole(..)
   , ParamDef(..)
 
+    -- * Credential Metadata (AUTHZ-CRED-IR-1)
+    -- |
+    -- The IR mirrors the credential metadata projected by plexus-core
+    -- onto each 'MethodSchema'. The types are re-exported from
+    -- 'Plexus.Schema.Recursive' so downstream IR consumers (hub-codegen,
+    -- read-only inspection in synapse) have a single source of truth.
+  , CredentialFieldDecl(..)
+  , CredentialMetadata(..)
+  , CredentialKind(..)
+  , AttachmentSite(..)
+  , CredentialIssuer(..)
+  , RequiredCredential(..)
+
     -- * Type References
   , QualifiedName(..)
   , qualifiedNameFull
@@ -69,7 +82,18 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
 
-import Plexus.Schema.Recursive (DeprecationInfo(..), MethodRole(..))
+import Plexus.Schema.Recursive
+  ( DeprecationInfo(..)
+  , MethodRole(..)
+  -- AUTHZ-CRED-IR-1: credential metadata types, re-exported so the IR is the
+  -- single source of truth for hub-codegen and any other downstream consumer.
+  , CredentialFieldDecl(..)
+  , CredentialMetadata(..)
+  , CredentialKind(..)
+  , AttachmentSite(..)
+  , CredentialIssuer(..)
+  , RequiredCredential(..)
+  )
 
 -- ============================================================================
 -- Version Information
@@ -281,6 +305,29 @@ data MethodDef = MethodDef
     --
     -- Consumed by hub-codegen (Rust field @md_role@, JSON key @mdRole@)
     -- to emit typed-handle clients for @DynamicChild@ methods.
+  , mdCredentials :: [CredentialFieldDecl]
+    -- ^ Credential-bearing fields the method's return type embeds
+    --   (AUTHZ-CRED-IR-1). One entry per @#[plexus::credential(...)]@-
+    --   annotated field on the return-type struct/enum, in declaration
+    --   order. Empty when the return type contains no credentials (the
+    --   common case).
+    --
+    --   Populated from 'MethodSchema.methodCredentials'. Pre-CRED-CORE-3
+    --   producers omit the upstream key entirely; the upstream parser
+    --   defaults to @[]@ and this field carries that default verbatim.
+    --
+    --   Consumed by hub-codegen (CRED-CG-1 / CRED-CG-2) to emit client-side
+    --   storage-and-attach logic for named-session credentials.
+  , mdRequiresCredential :: Maybe RequiredCredential
+    -- ^ Implicit-derived required-credential filter (AUTHZ-CRED-IR-1).
+    --   'Nothing' for @public@ methods or methods with no scope-derived
+    --   requirement; 'Just' carries the filter that downstream clients
+    --   use during credential selection.
+    --
+    --   Populated from 'MethodSchema.methodRequiresCredential'.
+    --   Pre-CRED-CORE-3 producers omit the upstream key entirely; the
+    --   upstream parser defaults to 'Nothing' and this field carries
+    --   that default verbatim.
   }
   deriving stock (Show, Eq, Generic)
 
@@ -304,6 +351,12 @@ instance ToJSON MethodDef where
     , "mdBidirResponseType"   .= mdBidirResponseType
     , "mdBidirResponseSchema" .= mdBidirResponseSchema
     , "mdRole"                .= mdRole
+    -- AUTHZ-CRED-IR-1: always emit @mdCredentials@ and
+    -- @mdRequiresCredential@ (even when empty/Nothing) so the IR JSON
+    -- shape is uniform for downstream hub-codegen. Empty/Nothing decodes
+    -- back to the same defaults via the @.:?@ parser below.
+    , "mdCredentials"         .= mdCredentials
+    , "mdRequiresCredential"  .= mdRequiresCredential
     ]
 
 instance FromJSON MethodDef where
@@ -319,6 +372,11 @@ instance FromJSON MethodDef where
     <*> o .:? "mdBidirResponseType"
     <*> o .:? "mdBidirResponseSchema"
     <*> o .:? "mdRole" .!= MethodRoleRpc
+    -- AUTHZ-CRED-IR-1: @.:?@ + @.!= []@ / @.:?@ keep pre-CRED-IR-1
+    -- IR JSON decoding cleanly (no @mdCredentials@ / @mdRequiresCredential@
+    -- keys present). Same back-compat posture as @mdRole@ above.
+    <*> o .:? "mdCredentials"        .!= []
+    <*> o .:? "mdRequiresCredential"
 
 -- | A parameter definition
 data ParamDef = ParamDef
