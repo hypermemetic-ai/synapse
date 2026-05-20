@@ -37,6 +37,7 @@ library
     Synapse.IR.Types
     Synapse.IR.Builder
     Synapse.IR.Cache
+    Synapse.DynamicChildren
     Synapse.Bidir
     Synapse.CLI.Help
     Synapse.CLI.Parse
@@ -428,6 +429,27 @@ test-suite ir12-method-role-test
   default-language: GHC2021
   default-extensions:
     OverloadedStrings
+  ghc-options:      -threaded
+
+test-suite dynamic-children-test
+  -- SYN-2: pure helpers + mock-substrate + renderer integration for
+  -- MethodRole::DynamicChild consumption. No live substrate required.
+  type:             exitcode-stdio-1.0
+  main-is:          DynamicChildrenSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    containers >= 0.6 && < 0.8,
+    hspec >= 2.10 && < 2.12,
+    text >= 2.0 && < 2.2,
+    vector >= 0.12 && < 0.14
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+    RecordWildCards
   ghc-options:      -threaded
 
 test-suite credential-ir-test

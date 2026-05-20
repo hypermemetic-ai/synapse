@@ -30,7 +30,11 @@ import Prettyprinter
 import Prettyprinter.Render.Text (renderStrict)
 
 import Synapse.Schema.Types
-import Plexus.Schema.Recursive (DeprecationInfo(..), ParamSchema(..))
+import Plexus.Schema.Recursive
+  ( DeprecationInfo(..)
+  , ParamSchema(..)
+  , MethodRole(..)
+  )
 
 -- | Rendering style configuration
 data RenderStyle = RenderStyle
@@ -207,16 +211,76 @@ renderSchemaWith _style PluginSchema{..}
     renderChildDoc child = fillBreak 12 (pretty $ csNamespace child)
       <+> align (fillSep $ map pretty $ T.words $ csDescription child)
 
+    -- SYN-2: render a dynamic-child gate as
+    --
+    --   body {name}  Look up a planet by name
+    --                (dynamic child gate; list: list_planets, search: search_planets)
+    --                --name <string>
+    --
+    -- Ordinary (MethodRoleRpc / MethodRoleStaticChild) methods render
+    -- byte-identically to pre-SYN-2 — back-compat is preserved by
+    -- branching on 'methodRole'.
     renderMethodDoc method =
-      let nameText = case methodDeprecation method of
-            Just _  -> deprecationMarker <> " " <> methodName method
-            Nothing -> methodName method
+      let (decoratedName, dynLines) = decorateForRole method
+          nameText = case methodDeprecation method of
+            Just _  -> deprecationMarker <> " " <> decoratedName
+            Nothing -> decoratedName
           nameLine = fillBreak 12 (pretty nameText)
                        <+> align (fillSep $ map pretty $ T.words $ methodDescription method)
           depLines = case methodDeprecation method of
             Just di -> [indent 12 $ pretty (formatDeprecationLine di)]
             Nothing -> []
-      in vsep $ [nameLine] ++ depLines ++ paramsDocs (methodParams method)
+      in vsep $ [nameLine] ++ depLines ++ dynLines ++ paramsDocs (methodParams method)
+
+    -- SYN-2: extract the role-specific decoration. Returns the
+    -- decorated method-name token (e.g. @"body {name}"@) and any
+    -- additional annotation lines to be inserted between the
+    -- deprecation block and the param block.
+    --
+    -- For every role *other than* 'MethodRoleDynamicChild' the result
+    -- is @(methodName, [])@ — the original pre-SYN-2 behavior, so
+    -- existing non-hub and legacy-hub activations (Arbor, Cone,
+    -- ClaudeCode, …) render byte-identically. The decoration is
+    -- additive on top of dynamic gates only.
+    decorateForRole method' =
+      let baseName = methodName method'
+      in case methodRole method' of
+        MethodRoleDynamicChild { } ->
+          let paramTok = "{" <> dynamicGateParamName method' <> "}"
+              decorated = baseName <> " " <> paramTok
+              hint = renderDynamicHint method'
+          in (decorated, [indent 12 $ pretty hint])
+        _ ->
+          (baseName, [])
+
+    -- SYN-2: build the one-line "(dynamic child gate; list: …,
+    -- search: …)" annotation. Both fields are skipped when absent.
+    renderDynamicHint method' =
+      let suffix = case methodRole method' of
+            MethodRoleDynamicChild lm sm ->
+              let parts = case lm of { Just n -> ["list: " <> n]; Nothing -> [] }
+                       <> case sm of { Just n -> ["search: " <> n]; Nothing -> [] }
+              in if null parts
+                   then ""
+                   else "; " <> T.intercalate ", " parts
+            _ -> ""
+      in "(dynamic child gate" <> suffix <> ")"
+
+    -- SYN-2: scan a method's JSON Schema params to pick a sensible
+    -- placeholder name. We mirror the heuristic in
+    -- 'Synapse.DynamicChildren.gateParamName' (single property →
+    -- that property's key; else @"name"@). Inlined here so the
+    -- render module remains a leaf — Render must not depend on the
+    -- consumer module.
+    dynamicGateParamName method' = case methodParams method' of
+      Just (Object o) -> case KM.lookup "properties" o of
+        Just (Object props) -> case KM.keys props of
+          [k] -> K.toText k
+          ks  -> case filter (/= "_self") (map K.toText ks) of
+            [k] -> k
+            _   -> "name"
+        _ -> "name"
+      _ -> "name"
 
     paramsDocs Nothing = []
     paramsDocs (Just (Object o)) = case KM.lookup "properties" o of

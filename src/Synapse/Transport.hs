@@ -19,6 +19,9 @@ module Synapse.Transport
 
     -- * Bidirectional Response
   , sendResponse
+
+    -- * Substrate Config Access (SYN-2)
+  , getConfig
   ) where
 
 import Control.Monad.IO.Class (liftIO)
