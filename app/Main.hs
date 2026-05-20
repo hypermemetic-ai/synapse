@@ -55,6 +55,8 @@ import qualified Katip
 import Synapse.Algebra.Navigate
 import Synapse.Algebra.Render (renderSchema)
 import Synapse.CLI.Help (renderMethodHelp)
+import qualified Synapse.DynamicChildren as DC
+import Synapse.Transport (getConfig)
 import Synapse.CLI.Parse (parseParams)
 import qualified Synapse.CLI.Parse as Parse
 import Synapse.IR.Types (IR, irMethods, MethodDef)
@@ -537,18 +539,23 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                     then do
                       rootSchema <- navigate []
                       case rootSchema of
-                        ViewPlugin schema _ -> liftIO $ do
-                          TIO.putStr cliHeader
-                          TIO.putStr "\n\n"
-                          TIO.putStr $ renderSchema schema
+                        ViewPlugin schema visited -> do
+                          liftIO $ do
+                            TIO.putStr cliHeader
+                            TIO.putStr "\n\n"
+                            TIO.putStr $ renderSchema schema
+                          -- SYN-2: live-enumerate dynamic children for the rendered hub
+                          renderDynamicChildrenBlock visited schema
                         _ -> pure ()
                     else do
                       -- Navigate to target
                       view <- navigate pathSegs
                       case view of
                         -- Landed on a plugin: show help
-                        ViewPlugin schema _ ->
+                        ViewPlugin schema visited -> do
                           liftIO $ TIO.putStr $ renderSchema schema
+                          -- SYN-2: live-enumerate dynamic children for the rendered hub
+                          renderDynamicChildrenBlock visited schema
 
                         -- Landed on a method: invoke or show help
                         ViewMethod method path -> do
@@ -1047,6 +1054,56 @@ printResult _ _ cfg item = do
       HubError _ _ err _ ->
         hPutStrLn stderr $ "Error: " <> T.unpack err
       _ -> pure ()
+
+-- ============================================================================
+-- SYN-2: Live dynamic-children enumeration
+-- ============================================================================
+
+-- | After rendering a hub schema, walk its 'MethodRoleDynamicChild'
+--   gates and call the sibling @list_method@ (when present) to
+--   enumerate currently-available children. Each list call:
+--
+--   * is timed-out at 'DC.defaultInvocationTimeoutMicros' (2s);
+--   * is cached for the rest of the process at
+--     'DC.defaultCacheTtlSeconds' (5s);
+--   * gracefully degrades to "no completions" on any failure (timeout,
+--     transport error, method-not-found, malformed response).
+--
+--   Output is appended directly to stdout under a "Dynamic children:"
+--   header. When the hub has NO dynamic gates, this is a no-op and
+--   prints nothing — preserving byte-identical output for non-hub /
+--   legacy-hub activations.
+--
+--   The 'visited' path is the path used by 'fetchSchemaAt' to reach
+--   this schema — we reuse it as the @<ns>@ for the @<ns>.<fn>@ call.
+renderDynamicChildrenBlock :: [Text] -> PluginSchema -> SynapseM ()
+renderDynamicChildrenBlock visited schema = do
+  let gates = DC.dynamicChildGates schema
+  case gates of
+    [] -> pure ()   -- no dynamic gates — preserve byte-identical output
+    _  -> do
+      cfg   <- getConfig
+      cache <- liftIO DC.newCache
+      let nsPath = if null visited then [psNamespace schema] else visited
+      -- For each gate with a list_method, fetch the children and render.
+      liftIO $ do
+        TIO.putStrLn ""
+        TIO.putStrLn "Dynamic children:"
+        mapM_ (renderOneGate cfg cache nsPath) gates
+  where
+    renderOneGate cfg cache nsPath gate = case DC.gateListMethod gate of
+      Nothing -> do
+        -- Gate exists but no list opt-in. AC #4: render the gate
+        -- header alone, no enumeration, no error.
+        TIO.putStrLn $ "  " <> DC.gateMethodName gate
+          <> " {" <> DC.gateParam gate <> "}  (no list_method advertised)"
+      Just listFn -> do
+        names <- DC.listChildren cfg cache nsPath listFn
+        TIO.putStrLn $ "  " <> DC.gateMethodName gate
+          <> " {" <> DC.gateParam gate <> "}"
+        case names of
+          [] -> TIO.putStrLn "    (no children)"
+          _  -> mapM_ (\n -> TIO.putStrLn ("    - " <> n)) names
 
 -- ============================================================================
 -- Argument Parsing (Synapse Options Only)
