@@ -18,6 +18,8 @@ module Synapse.Self
   , StoredDefaults(..)
   , CredentialRef(..)
   , ScopedDefaults(..)
+  , OidcDefaults(..)
+  , emptyOidcDefaults
   , emptyStoredDefaults
   , currentVersion
   , encodeDefaults

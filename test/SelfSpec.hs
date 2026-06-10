@@ -39,11 +39,13 @@ import Test.Hspec
 import Synapse.Self
 import qualified SelfCommandSpec
 import qualified SelfMigrationSpec
+import qualified SelfOidcSpec
 import qualified SelfSafeWriteSpec
 
 main :: IO ()
 main = hspec $ do
   describe "Synapse.Self.Command (SELF-4)" SelfCommandSpec.spec
+  describe "Synapse.Self.Oidc (UT-3)" SelfOidcSpec.spec
   SelfSafeWriteSpec.spec
   SelfMigrationSpec.spec
 
@@ -103,6 +105,7 @@ main = hspec $ do
               , ("X-Token",    CredentialRef "file:///etc/plexus/token")
               ]
           , sdScopes = Map.empty
+          , sdOidc    = Nothing
           }
 
     it "roundtrips a file with mixed URI schemes" $ do
@@ -372,6 +375,7 @@ main = hspec $ do
                   , ("X-File",    CredentialRef ("file://" <> T.pack path))
                   ]
               , sdScopes  = Map.empty
+              , sdOidc    = Nothing
               }
         -- Resolve every header ref end-to-end via defaultRegistry.
         resolved <- traverse (resolveRef defaultRegistry) (sdHeaders sd)
@@ -397,6 +401,7 @@ main = hspec $ do
             , sdHeaders = Map.fromList
                 [ ("X-Trace-Id", CredentialRef "literal:trace-123") ]
             , sdScopes  = Map.empty
+            , sdOidc    = Nothing
             }
       withBackendDefaults "synapse-self-test-ok" (Just (encodeDefaults sd))
         $ \_ -> do
@@ -448,6 +453,7 @@ main = hspec $ do
             , sdHeaders = Map.fromList
                 [ ("X-Trace", CredentialRef "literal:t-1") ]
             , sdScopes  = Map.empty
+            , sdOidc    = Nothing
             }
       r <- resolveAll defaultRegistry sd testMethod
       case r of
@@ -469,6 +475,7 @@ main = hspec $ do
                 ]
             , sdHeaders = Map.empty
             , sdScopes  = Map.empty
+            , sdOidc    = Nothing
             }
       r <- resolveAll defaultRegistry sd testMethod
       r `shouldBe` Left (ResolveUnknownScheme "vault")
@@ -481,6 +488,7 @@ main = hspec $ do
               , sdCookies = Map.empty
               , sdHeaders = Map.fromList [("X-K", ref)]
               , sdScopes  = Map.empty
+              , sdOidc    = Nothing
               }
         r <- resolveAll defaultRegistry sd testMethod
         case r of
@@ -498,6 +506,7 @@ main = hspec $ do
               , sdHeaders = Map.fromList
                   [ ("H", CredentialRef "literal:header-value") ]
               , sdScopes  = Map.empty
+              , sdOidc    = Nothing
               }
         r <- resolveAll defaultRegistry sd testMethod
         case r of
@@ -511,6 +520,7 @@ main = hspec $ do
             , sdCookies = Map.fromList [("k", CredentialRef "literal:v")]
             , sdHeaders = Map.empty
             , sdScopes  = Map.empty
+            , sdOidc    = Nothing
             }
       r1 <- resolveAll defaultRegistry sd []
       r2 <- resolveAll defaultRegistry sd ["some", "method"]

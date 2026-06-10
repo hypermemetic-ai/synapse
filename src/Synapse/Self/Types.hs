@@ -13,6 +13,8 @@
 -- * 'CredentialRef' — an opaque URI string carried verbatim.
 -- * 'ScopedDefaults' — reserved for per-namespace / per-method overrides;
 --   parsed but unused in v1.
+-- * 'OidcDefaults' — per-backend OIDC login state (issuer, audience,
+--   refresh-token ref) written by @_self \<backend\> login@ (UT-3).
 -- * Pure 'encodeDefaults' / 'decodeDefaults' functions with deterministic
 --   key ordering and two-space indent.
 --
@@ -23,6 +25,8 @@ module Synapse.Self.Types
     StoredDefaults(..)
   , CredentialRef(..)
   , ScopedDefaults(..)
+  , OidcDefaults(..)
+  , emptyOidcDefaults
   , emptyStoredDefaults
   , currentVersion
 
@@ -90,6 +94,54 @@ instance FromJSON ScopedDefaults where
       , sdsHeaders = headers
       }
 
+-- | Per-backend OIDC login state, written by @_self \<backend\> login@
+-- and consumed on subsequent logins / refreshes (UT-3, per the UT-S01
+-- decision doc).
+--
+-- * 'odIssuer' — the issuer URL the last successful login used. Acts
+--   as the persisted fallback when @--issuer@ is not passed.
+--   TODO(UT-S01): once backends advertise @auth_capabilities.oidc@ via
+--   @_info@, that becomes the discovery source of record and this field
+--   drops to a cache\/override.
+-- * 'odAudience' — the audience the last grant requested (Auth0 \"API
+--   identifier\" convention, e.g. @plexus:trak@).
+-- * 'odRefreshToken' — a 'CredentialRef' (normally @literal:\<opaque\>@)
+--   for the refresh token. A ref, not a raw value, so the same resolver
+--   registry and @literal:@-sensitivity chmod logic apply as for cookies.
+data OidcDefaults = OidcDefaults
+  { odIssuer       :: Maybe Text
+  , odAudience     :: Maybe Text
+  , odRefreshToken :: Maybe CredentialRef
+  }
+  deriving stock (Show, Eq)
+
+-- | An 'OidcDefaults' with nothing recorded.
+emptyOidcDefaults :: OidcDefaults
+emptyOidcDefaults = OidcDefaults
+  { odIssuer       = Nothing
+  , odAudience     = Nothing
+  , odRefreshToken = Nothing
+  }
+
+instance ToJSON OidcDefaults where
+  -- Nothing-fields are omitted so files never grow noise keys.
+  toJSON OidcDefaults{..} = object $ concat
+    [ maybe [] (\v -> ["issuer" .= v]) odIssuer
+    , maybe [] (\v -> ["audience" .= v]) odAudience
+    , maybe [] (\v -> ["refresh_token" .= v]) odRefreshToken
+    ]
+
+instance FromJSON OidcDefaults where
+  parseJSON = withObject "OidcDefaults" $ \o -> do
+    issuer  <- o .:? "issuer"
+    aud     <- o .:? "audience"
+    refresh <- o .:? "refresh_token"
+    pure OidcDefaults
+      { odIssuer       = issuer
+      , odAudience     = aud
+      , odRefreshToken = refresh
+      }
+
 -- | The on-disk defaults store for a single backend.
 --
 -- Values in 'sdCookies' / 'sdHeaders' are 'CredentialRef's — URIs like
@@ -100,6 +152,10 @@ data StoredDefaults = StoredDefaults
   , sdCookies :: Map Text CredentialRef
   , sdHeaders :: Map Text CredentialRef
   , sdScopes  :: Map Text ScopedDefaults
+  , sdOidc    :: Maybe OidcDefaults
+    -- ^ OIDC login state (UT-3). 'Nothing' for backends that never ran
+    -- @login@; omitted from the encoded file in that case, so pre-UT-3
+    -- files round-trip byte-identically.
   }
   deriving stock (Show, Eq)
 
@@ -110,10 +166,11 @@ emptyStoredDefaults = StoredDefaults
   , sdCookies = Map.empty
   , sdHeaders = Map.empty
   , sdScopes  = Map.empty
+  , sdOidc    = Nothing
   }
 
 instance ToJSON StoredDefaults where
-  toJSON StoredDefaults{..} = object
+  toJSON StoredDefaults{..} = object $
     [ "version"  .= sdVersion
     , "defaults" .= object
         [ "cookies" .= sdCookies
@@ -121,6 +178,9 @@ instance ToJSON StoredDefaults where
         ]
     , "scopes"   .= sdScopes
     ]
+    -- "oidc" appears only when login state exists (additive, version 1
+    -- stays valid: unknown top-level keys are tolerated by old readers).
+    <> maybe [] (\o -> ["oidc" .= o]) sdOidc
 
 instance FromJSON StoredDefaults where
   parseJSON = withObject "StoredDefaults" $ \o -> do
@@ -131,11 +191,13 @@ instance FromJSON StoredDefaults where
       h <- d .:? "headers" .!= Map.empty
       pure (c, h)
     scopes <- o .:? "scopes" .!= Map.empty
+    oidc <- o .:? "oidc"
     pure StoredDefaults
       { sdVersion = version
       , sdCookies = cookies
       , sdHeaders = headers
       , sdScopes  = scopes
+      , sdOidc    = oidc
       }
 
 -- | Serialize 'StoredDefaults' with deterministic key order and two-space

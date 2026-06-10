@@ -31,6 +31,8 @@
 -- upgrade-to-keychain [cookie|header] [\<name\>]  -- friendly error until SELF-8
 -- clear [--yes]
 -- import-token \<path-or-->  [--to-keychain]    -- --to-keychain requires SELF-8
+-- login [\<username\>] [--issuer URL] [--audience AUD]   -- UT-3
+-- logout                                       -- UT-3
 -- @
 module Synapse.Self.Command
   ( -- * Command ADT
@@ -81,10 +83,11 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Options.Applicative
 import System.Directory (doesFileExist, removeFile)
 import System.Exit (ExitCode(..))
-import System.IO (hFlush, isEOF, stderr, stdout)
+import System.IO (hFlush, hIsTerminalDevice, hSetEcho, isEOF, stderr, stdin, stdout)
 
 import Synapse.Self
   ( CredentialRef(..)
+  , OidcDefaults(..)
   , ParsedUri(..)
   , ParsedUriBody(..)
   , ResolveError(..)
@@ -102,6 +105,7 @@ import Synapse.Self
   , writeDefaults
   )
 import qualified Synapse.Self.IO as SelfIO
+import qualified Synapse.Self.Oidc as Oidc
 
 -- | Keychain service name for items created by @_self@ verbs.
 -- Constant across backends — the per-backend key lives in the account.
@@ -164,6 +168,14 @@ data SelfCommand
   | CmdImportToken  !Text !Text !Bool
     -- ^ @import-token \<path-or-->  [--to-keychain]@. Path @"-"@ = stdin.
     --   @--to-keychain@ requires SELF-8.
+  | CmdLogin        !Text !(Maybe Text) !(Maybe Text) !(Maybe Text)
+    -- ^ @login [\<username\>] [--issuer URL] [--audience AUD]@ (UT-3).
+    --   Backend, username (prompted if absent), issuer override,
+    --   audience override. The password is always prompted (echo off)
+    --   or read from stdin when not a terminal — never an argument.
+  | CmdLogout       !Text
+    -- ^ @logout@ (UT-3). Clears @cookies.access_token@ and
+    --   @oidc.refresh_token@; keeps issuer\/audience and everything else.
   deriving (Show, Eq)
 
 -- ============================================================================
@@ -233,6 +245,8 @@ parseSelfCommand =
      <> command "upgrade-to-keychain" (info upgradeCmd (progDesc "Move literal: refs into the keychain"))
      <> command "clear"         (info clearCmd        (progDesc "Delete this backend's defaults.json"))
      <> command "import-token"  (info importTokenCmd  (progDesc "Import a JWT from file or stdin as access_token"))
+     <> command "login"         (info loginCmd        (progDesc "Log in via OIDC password grant; store tokens in defaults.json"))
+     <> command "logout"        (info logoutCmd       (progDesc "Clear stored access/refresh tokens (keeps other defaults)"))
       )
 
     showCmd = (\j b -> CmdShow b j)
@@ -257,6 +271,16 @@ parseSelfCommand =
     importTokenCmd = (\p kc b -> CmdImportToken b p kc)
       <$> argument (T.pack <$> str) (metavar "PATH-OR--" <> help "Path to a JWT file; \"-\" reads from stdin")
       <*> switch (long "to-keychain" <> help "Push token to keychain and store a keychain:// ref (requires SELF-8)")
+    loginCmd = (\u i a b -> CmdLogin b u i a)
+      <$> optional (argument (T.pack <$> str)
+            (metavar "USERNAME" <> help "Username (prompted if omitted)"))
+      <*> optional (T.pack <$> strOption
+            (long "issuer" <> metavar "URL"
+            <> help "OIDC issuer URL (overrides the issuer persisted by a prior login)"))
+      <*> optional (T.pack <$> strOption
+            (long "audience" <> metavar "AUD"
+            <> help "Token audience (default: stored audience, else plexus:<backend>)"))
+    logoutCmd = pure CmdLogout
 
     kindArg = argument kindReader (metavar "KIND" <> help "cookie | header")
     nameArg = argument (T.pack <$> str) (metavar "NAME" <> help "Cookie or header name")
@@ -289,6 +313,8 @@ runSelfCommand = \case
     | otherwise                 -> keychainUnavailable "upgrade-to-keychain"
   CmdClear b yes                -> runClear b yes
   CmdImportToken b path toKc    -> runImportToken b path toKc
+  CmdLogin b mUser mIss mAud    -> runLogin b mUser mIss mAud
+  CmdLogout b                   -> runLogout b
 
 -- ---------------------------------------------------------------------------
 -- Helpers shared by verbs
@@ -360,7 +386,7 @@ runShow backend jsonMode = do
   entries <- buildShowEntries defaultRegistry sd
   if jsonMode
     then do
-      LBS.putStr (encodePrettyJson (entriesToJson backend entries))
+      LBS.putStr (encodePrettyJson (entriesToJson backend (sdOidc sd) entries))
       BS8.putStrLn ""
       pure ExitSuccess
     else do
@@ -400,16 +426,35 @@ buildShowEntries reg sd = do
             }) allRefs
 
 renderShowText :: Text -> StoredDefaults -> UTCTime -> [ShowEntry] -> IO ()
-renderShowText backend _sd now entries = do
+renderShowText backend sd now entries = do
   let path = defaultsPath backend
   TIO.putStrLn $ "Backend: " <> backend
   TIO.putStrLn $ "Path:    " <> T.pack path
   let (cookies, headers) = partitionKinds entries
   renderSection "Cookies" cookies now
   renderSection "Headers" headers now
-  case (null cookies, null headers) of
-    (True, True) -> TIO.putStrLn "\n(no defaults configured for this backend)"
-    _            -> pure ()
+  renderOidcText (sdOidc sd)
+  case (null cookies, null headers, sdOidc sd) of
+    (True, True, Nothing) -> TIO.putStrLn "\n(no defaults configured for this backend)"
+    _                     -> pure ()
+
+-- | Render the OIDC login-state section of @show@ (UT-3). Never prints
+-- the refresh token's value — only its presence (as the stored ref's
+-- scheme would reveal nothing anyway, the line says @(stored)@).
+renderOidcText :: Maybe OidcDefaults -> IO ()
+renderOidcText Nothing = pure ()
+renderOidcText (Just OidcDefaults{..}) = do
+  TIO.putStrLn ""
+  TIO.putStrLn "OIDC:"
+  case odIssuer of
+    Just iss -> TIO.putStrLn $ "  issuer    " <> iss
+    Nothing  -> pure ()
+  case odAudience of
+    Just aud -> TIO.putStrLn $ "  audience  " <> aud
+    Nothing  -> pure ()
+  TIO.putStrLn $ "  refresh_token  " <> case odRefreshToken of
+    Just _  -> "(stored)"
+    Nothing -> "(none)"
 
 partitionKinds :: [ShowEntry] -> ([ShowEntry], [ShowEntry])
 partitionKinds = foldr step ([], [])
@@ -439,15 +484,25 @@ renderShowEntry now ShowEntry{..} = do
         Just summary -> mapM_ (TIO.putStrLn . ("      " <>)) (renderJwtSummary now summary)
 
 -- | Machine-readable JSON form of the full show output.
-entriesToJson :: Text -> [ShowEntry] -> Value
-entriesToJson backend entries =
+entriesToJson :: Text -> Maybe OidcDefaults -> [ShowEntry] -> Value
+entriesToJson backend mOidc entries =
   let (cookies, headers) = partitionKinds entries
-  in object
+  in object $
     [ "backend" .= backend
     , "path"    .= defaultsPath backend
     , "cookies" .= fmap entryToJson cookies
     , "headers" .= fmap entryToJson headers
     ]
+    <> maybe [] (\o -> ["oidc" .= oidcToJson o]) mOidc
+
+-- | JSON form of the OIDC section (UT-3). The refresh token value never
+-- appears — only a boolean presence flag.
+oidcToJson :: OidcDefaults -> Value
+oidcToJson OidcDefaults{..} = object $ catMaybes
+  [ fmap ("issuer" .=) odIssuer
+  , fmap ("audience" .=) odAudience
+  , Just ("refresh_token_stored" .= (odRefreshToken /= Nothing))
+  ]
 
 entryToJson :: ShowEntry -> Value
 entryToJson ShowEntry{..} =
@@ -707,6 +762,116 @@ runImportToken backend path toKeychain
               <> "Consider `_self " <> backend
               <> " upgrade-to-keychain` for a more secure posture."
             pure ExitSuccess
+
+-- ---------------------------------------------------------------------------
+-- login / logout (UT-3)
+-- ---------------------------------------------------------------------------
+
+-- | Implement @login@: OIDC resource-owner password grant against the
+-- resolved issuer (see 'Oidc.resolveIssuer' for the precedence chain),
+-- per the UT-S01 decision doc.
+--
+-- The username comes from the positional argument or an interactive
+-- prompt; the password is always prompted with terminal echo disabled
+-- (or read from stdin when stdin is not a terminal — scripting path).
+-- Neither ever appears in argv.
+--
+-- On success the store gains @cookies.access_token@ (so the existing
+-- WS-upgrade Cookie attach authenticates every later
+-- @synapse \<backend\> ...@ call with no @-t@), plus @oidc.issuer@ \/
+-- @oidc.audience@ \/ @oidc.refresh_token@ — see 'Oidc.applyLogin'.
+runLogin :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO ExitCode
+runLogin backend mUser mIssuer mAudience = do
+  sd <- loadOrExit backend
+  case Oidc.resolveIssuer backend mIssuer sd of
+    Left err -> do
+      TIO.hPutStrLn stderr ("Error: " <> err)
+      pure (ExitFailure 1)
+    Right issuer -> do
+      let audience = case (mAudience, sdOidc sd >>= odAudience) of
+            (Just a, _)        -> a
+            (Nothing, Just a)  -> a
+            (Nothing, Nothing) -> Oidc.defaultAudience backend
+      username <- maybe (promptLine "Username: ") pure mUser
+      if T.null (T.strip username)
+        then do
+          TIO.hPutStrLn stderr "Error: empty username."
+          pure (ExitFailure 1)
+        else do
+          password <- promptPassword "Password: "
+          eEndpoint <- Oidc.fetchTokenEndpoint issuer
+          case eEndpoint of
+            Left err -> do
+              TIO.hPutStrLn stderr ("Error: " <> err)
+              pure (ExitFailure 1)
+            Right tokenEndpoint -> do
+              eTok <- Oidc.requestPasswordGrant tokenEndpoint username password audience
+              case eTok of
+                Left err -> do
+                  TIO.hPutStrLn stderr ("Error: login failed: " <> err)
+                  pure (ExitFailure 1)
+                Right tr -> do
+                  writeDefaults backend (Oidc.applyLogin issuer audience tr sd)
+                  now <- getCurrentTime
+                  let expiry = case decodeJwt (Oidc.trAccessToken tr) >>= jsExp of
+                        Just e  -> " (" <> renderRelativeExpiry now e <> ")"
+                        Nothing -> ""
+                      refreshNote = case Oidc.trRefreshToken tr of
+                        Just _  -> " Refresh token stored."
+                        Nothing -> ""
+                  TIO.putStrLn $ "Logged in to `" <> backend <> "` as `" <> username
+                    <> "` via " <> issuer <> "; access_token stored" <> expiry <> "."
+                    <> refreshNote
+                  pure ExitSuccess
+
+-- | Implement @logout@: 'Oidc.clearLogin' over the store. Keeps
+-- @oidc.issuer@ \/ @oidc.audience@ so a later @login@ needs no flags.
+runLogout :: Text -> IO ExitCode
+runLogout backend = do
+  sd <- loadOrExit backend
+  let hadAccess  = Map.member "access_token" (sdCookies sd)
+      hadRefresh = maybe False ((/= Nothing) . odRefreshToken) (sdOidc sd)
+  if not hadAccess && not hadRefresh
+    then do
+      TIO.putStrLn $ "No stored tokens for backend `" <> backend <> "`; nothing to do."
+      pure ExitSuccess
+    else do
+      writeDefaults backend (Oidc.clearLogin sd)
+      let dropped = T.intercalate " and " $
+               [ "access_token" | hadAccess ]
+            <> [ "refresh_token" | hadRefresh ]
+      TIO.putStrLn $ "Logged out of `" <> backend <> "` (cleared " <> dropped <> ")."
+      pure ExitSuccess
+
+-- | Prompt for a line of input (echoed). EOF yields an empty string,
+-- which callers reject with their own message.
+promptLine :: Text -> IO Text
+promptLine prompt = do
+  TIO.putStr prompt
+  hFlush stdout
+  done <- isEOF
+  if done then pure "" else TIO.getLine
+
+-- | Prompt for a secret. When stdin is a terminal, echo is disabled for
+-- the read and restored afterwards (exception-safe), with a newline
+-- printed to land the cursor where the suppressed Enter would have.
+-- When stdin is a pipe (scripts, tests), the line is read as-is and no
+-- prompt artifacts corrupt the value.
+promptPassword :: Text -> IO Text
+promptPassword prompt = do
+  isTty <- hIsTerminalDevice stdin
+  if isTty
+    then do
+      TIO.putStr prompt
+      hFlush stdout
+      pw <- E.bracket_ (hSetEcho stdin False)
+                       (hSetEcho stdin True)
+                       TIO.getLine
+      TIO.putStrLn ""
+      pure pw
+    else do
+      done <- isEOF
+      if done then pure "" else TIO.getLine
 
 -- ---------------------------------------------------------------------------
 -- set-secret
