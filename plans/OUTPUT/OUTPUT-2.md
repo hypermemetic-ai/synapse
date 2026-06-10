@@ -1,7 +1,7 @@
 ---
 id: OUTPUT-2
 title: "synapse adds stream-shaping flags: --select, --filter, --head, --tail, --count"
-status: Pending
+status: Ready
 type: implementation
 blocked_by: []
 unlocks: [OUTPUT-3]

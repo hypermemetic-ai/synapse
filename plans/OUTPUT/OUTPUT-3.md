@@ -1,7 +1,7 @@
 ---
 id: OUTPUT-3
 title: "synapse table renderer: --table, --columns, --max-width"
-status: Pending
+status: Ready
 type: implementation
 blocked_by: [OUTPUT-2]
 unlocks: []

@@ -232,7 +232,7 @@ Since `jupiter.SolarEvent` and `io.SolarEvent` have different qualified names, t
 2. **Add new RPC method**:
    ```rust
    // {backend}.full_schema_deduplicated or enhance existing plexus.schema
-   #[hub_method]
+   #[plexus_macros::method]
    async fn full_schema(&self) -> PlexusFullSchema {
        let deduped = self.collect_deduplicated_schemas();
        PlexusFullSchema {

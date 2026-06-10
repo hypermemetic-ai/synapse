@@ -44,22 +44,19 @@ pub enum EchoEvent {
 // The activation
 pub struct Echo;
 
-#[plexus_macros::hub_methods(
+#[plexus_macros::activation(
     namespace = "echo",
     version = "1.0.0",
     description = "Echo messages back"
 )]
 impl Echo {
-    #[plexus_macros::hub_method(
-        description = "Echo a message back the specified number of times",
-        params(
-            message = "The message to echo",
-            count = "Number of times to repeat (default: 1)"
-        )
-    )]
+    /// Echo a message back the specified number of times.
+    #[plexus_macros::method]
     async fn echo(
         &self,
+        /// The message to echo
         message: String,
+        /// Number of times to repeat (default: 1)
         count: u32,
     ) -> impl Stream<Item = EchoEvent> + Send + 'static {
         stream! {
@@ -72,12 +69,11 @@ impl Echo {
         }
     }
 
-    #[plexus_macros::hub_method(
-        description = "Echo a message once",
-        params(message = "The message to echo")
-    )]
+    /// Echo a message once.
+    #[plexus_macros::method]
     async fn once(
         &self,
+        /// The message to echo
         message: String,
     ) -> impl Stream<Item = EchoEvent> + Send + 'static {
         stream! {
@@ -87,7 +83,7 @@ impl Echo {
 }
 ```
 
-The macro generates the JSON-RPC server, `Activation` trait impl, method enum, and JSON Schemas — all from the function signatures and `JsonSchema` derives. Register it with the hub:
+The macro reads `///` doc comments on both the function and each parameter; they feed the JSON Schema descriptions. (Explicit `description = "..."` and `params(name = "...")` attribute syntax still works and wins when set; see [Macro Reference](#macro-reference) for precedence.) The macro generates the JSON-RPC server, `Activation` trait impl, method enum, and JSON Schemas — all from the function signatures and `JsonSchema` derives. Register it with the hub:
 
 ```rust
 let hub = DynamicHub::new("substrate")
@@ -422,6 +418,134 @@ for await (const event of client.echo.echo({ message: "hello", count: 3 })) {
 ```
 
 Three-way merge preserves user edits across regeneration. See the [synapse-cc architecture doc](docs/architecture/16673264336036332543_synapse-cc-pipeline.md) for the full pipeline, config format, and caching strategy.
+
+## Credentials end-to-end
+
+Plexus has a first-class **credential primitive** — `Credential<T>` is a sealed type that activation code can return as part of any response. The framework intercepts it at serialization time, replaces the value with a sentinel, routes the real value through a sidecar, and (for HTTP transport with cookie-attach metadata) projects it to a `Set-Cookie` header. Generated TypeScript clients auto-extract the credential on receipt, auto-store it on the active session, and auto-attach it on subsequent calls that require it.
+
+### Backend: return a credential
+
+```rust
+use plexus_auth_core::{Credential, CredentialMinter, CredentialMetadata, CredentialKind, AttachmentSite};
+
+#[derive(Debug, Clone, Serialize, JsonSchema, plexus_macros::Credentials)]
+pub struct LoginResponse {
+    user_id: String,
+    #[credential(
+        kind = "bearer",
+        attach_as(header = "authorization"),
+        scheme = "Bearer ",
+    )]
+    token: Credential<String>,
+}
+
+#[plexus_macros::activation(namespace = "auth", version = "1.0.0")]
+impl Auth {
+    /// Log in with a username/password.
+    #[plexus_macros::method]
+    async fn login(
+        &self,
+        minter: &CredentialMinter,
+        /// Username
+        username: String,
+        /// Password
+        password: String,
+    ) -> impl Stream<Item = AuthEvent> + Send + 'static {
+        stream! {
+            // ... validate credentials ...
+            let token = minter.mint("eyJ...".to_string(), bearer_metadata());
+            yield AuthEvent::LoggedIn(LoginResponse { user_id: "u-1".into(), token });
+        }
+    }
+}
+```
+
+### Wire envelope (transparent to your code)
+
+```json
+{
+  "type": "data",
+  "content": {
+    "user_id": "u-1",
+    "token": {"$credential": "cred_0"}
+  },
+  "_credentials": {
+    "cred_0": {
+      "value": "eyJ...",
+      "metadata": {"kind": {"kind": "bearer"}, "attach_as": {"site": "header", "name": "authorization"}, "scheme": "Bearer "}
+    }
+  }
+}
+```
+
+Over HTTP with `kind = "cookie"` and `attach_as(cookie = "session")`, the framework strips the value from the JSON and emits `Set-Cookie: session=…` on the response. Over stdio (no header surface) the value remains in the sidecar.
+
+### Generated TypeScript client
+
+```typescript
+import { createAuthClient } from './client/auth';
+import { InMemorySessionRegistry } from './client/plexus_auth';
+
+const session = new InMemorySessionRegistry();
+const auth = createAuthClient(rpc, { session });
+
+// First call: credential auto-stored on the session
+await auth.login('alice', 'hunter2');
+// → session.store('default', [<bearer token>])
+
+// Subsequent call that declares requires_credential: { kind: "bearer", scopes: [...] }:
+//   the matching credential is selected and attached automatically.
+const room = await chat.send({ message: 'hello' });
+//   → Authorization: Bearer eyJ... was sent on the WS upgrade or RPC param
+```
+
+### Generated Rust client
+
+```rust
+use my_backend_client::{AuthClient, ChatClient};
+use my_backend_client::plexus_auth::{InMemorySessionRegistry, Session};
+use std::sync::Arc;
+
+let session = Arc::new(InMemorySessionRegistry::new());
+let auth = AuthClient::new(rpc.clone(), session.clone());
+let chat = ChatClient::new(rpc.clone(), session.clone());
+
+// First call: credential auto-stored on the active session
+auth.login("alice", "hunter2").send().await?;
+
+// Subsequent call: the matching credential is selected and attached automatically.
+// Builder methods scope per call:
+chat.send("hello").with_session("default").send().await?;
+chat.send("hello").no_session().send().await?;  // explicit opt-out
+```
+
+### What's wired today vs. what's still v1-stub
+
+| Capability | Today |
+|---|---|
+| Backend returns `Credential<T>` from any method | ✅ |
+| Dispatch builds wire envelope with sentinels + `_credentials` sidecar | ✅ |
+| Cookie-attach projects to `Set-Cookie` on HTTP, kept inline on stdio | ✅ |
+| IR carries `mdCredentials` + `mdRequiresCredential` (synapse decodes them) | ✅ |
+| TypeScript clients auto-store credentials on a `SessionRegistry` | ✅ (CG-1) |
+| TypeScript clients auto-attach on `requires_credential` methods | ✅ (`in_rpc_param` site fully threaded; `header`/`cookie`/`first_frame` are stubbed for v1.1) |
+| Rust clients auto-store + auto-attach via `.with_session(name)` / `.no_session()` builder | ✅ (CG-2) |
+| Bare `cargo publish` to crates.io | pending end-of-wave |
+
+### Macro Reference
+
+| Macro | Purpose |
+|---|---|
+| `#[plexus_macros::activation(...)]` | Decorates an `impl` block. Carries `namespace`, `version`, `description`, `auth_posture` (`"required"` \| `"mixed"` \| `"anonymous"`). |
+| `#[plexus_macros::method]` | Decorates an `async fn`. Reads `///` doc comments on the function and on each parameter. Explicit `description = "..."` and `params(name = "...")` still work and win when set. |
+| `#[plexus_macros::child(...)]` | Declares a child router accessor; generates the `ChildRouter` glue. |
+| `#[derive(plexus_macros::Credentials)]` | Marks a return-type struct/enum whose fields include `Credential<T>`. Pairs with `#[credential(kind = ..., attach_as(...), ...)]` per field. |
+| `#[plexus_macros::from_auth(...)]` | Pulls a parameter from `AuthContext` at dispatch time (auth resolver). |
+
+Doc-comment fallback precedence (function + params):
+1. Explicit attribute argument wins (`description = "..."`, `params(name = "...")`).
+2. `///` doc comment on the item (function or parameter).
+3. Empty / `None` if neither.
 
 ## Error Messages
 

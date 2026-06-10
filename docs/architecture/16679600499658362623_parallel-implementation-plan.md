@@ -312,7 +312,7 @@ pub enum TreeGetResult {
 
 Update activation to use new types:
 ```rust
-#[hub_method]
+#[plexus_macros::method]
 async fn tree_create(&self, ...) -> impl Stream<Item = TreeCreateResult> {
     stream! {
         yield TreeCreateResult::TreeCreated { tree_id, root_node_id };
