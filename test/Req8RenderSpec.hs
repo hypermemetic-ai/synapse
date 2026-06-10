@@ -49,6 +49,10 @@ fixture = PluginSchema
       , methodDeprecation   = Nothing
       , methodParamSchemas  = Nothing
       , methodRole          = defaultRole
+      , methodCredentials   = []           -- AUTHZ-CRED-IR-1 default
+      , methodRequiresCredential = Nothing -- AUTHZ-CRED-IR-1 default
+      , methodAuthPosture   = Nothing      -- R-3 default
+      , methodPublic        = False        -- R-3 default
       }
 
 -- | Stub role — renderSchema doesn't branch on role for this test.

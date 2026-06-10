@@ -475,6 +475,29 @@ test-suite credential-ir-test
     QuasiQuotes
   ghc-options:      -threaded
 
+test-suite r3-credential-posture-test
+  -- R-3 (ROLES+AP merged wave): decode + render tests for the R-2
+  -- credential/posture wire metadata (auth_posture, public,
+  -- requires_credential) against literal Rust-derived fixtures.
+  type:             exitcode-stdio-1.0
+  main-is:          R3CredentialPostureSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    aeson-qq >= 0.8 && < 0.9,
+    bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
+    hspec >= 2.10 && < 2.12,
+    text >= 2.0 && < 2.2
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+    QuasiQuotes
+  ghc-options:      -threaded
+
 test-suite keychain-test
   -- SELF-8 keychain tests. Opt-in via `-f build-keychain-tests` because
   -- they shell out to macOS `security` and touch the real keychain.

@@ -67,6 +67,10 @@ baseMethod = MethodSchema
   , methodDeprecation    = Nothing
   , methodParamSchemas   = Nothing
   , methodRole           = MethodRoleRpc
+  , methodCredentials    = []           -- AUTHZ-CRED-IR-1 default
+  , methodRequiresCredential = Nothing  -- AUTHZ-CRED-IR-1 default
+  , methodAuthPosture    = Nothing      -- R-3 default
+  , methodPublic         = False        -- R-3 default
   }
 
 deprecatedMethod :: MethodSchema
@@ -91,6 +95,7 @@ basePlugin = PluginSchema
   , psMethods         = [deprecatedMethod, plainMethod]
   , psChildren        = Nothing
   , psDeprecation     = Nothing
+  , psRequest         = Nothing         -- REQ-S10 default
   }
 
 deprecatedPlugin :: PluginSchema

@@ -51,6 +51,8 @@ baseMethodDef = MethodDef
   , mdRole                = MethodRoleRpc
   , mdCredentials         = []        -- AUTHZ-CRED-IR-1: default empty for this fixture
   , mdRequiresCredential  = Nothing   -- AUTHZ-CRED-IR-1: default Nothing for this fixture
+  , mdAuthPosture         = Nothing   -- R-3: default Nothing for this fixture
+  , mdPublic              = False     -- R-3: default False for this fixture
   }
 
 -- | Build a JSON @MethodSchema@ with an optional @role@ key. Passing

@@ -81,6 +81,8 @@ baseMethod = MethodSchema
   , methodRole            = MethodRoleRpc
   , methodCredentials     = []
   , methodRequiresCredential = Nothing
+  , methodAuthPosture     = Nothing  -- R-3 default
+  , methodPublic          = False    -- R-3 default
   }
 
 dynamicGateMethod :: MethodSchema

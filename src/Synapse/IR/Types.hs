@@ -62,6 +62,9 @@ module Synapse.IR.Types
   , CredentialIssuer(..)
   , RequiredCredential(..)
 
+    -- * Auth Posture (R-3, ROLES+AP merged wave)
+  , AuthPosture(..)
+
     -- * Type References
   , QualifiedName(..)
   , qualifiedNameFull
@@ -78,6 +81,7 @@ import Data.Aeson
 import qualified Data.Aeson as Aeson
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
@@ -93,6 +97,9 @@ import Plexus.Schema.Recursive
   , AttachmentSite(..)
   , CredentialIssuer(..)
   , RequiredCredential(..)
+  -- R-3 (ROLES+AP merged wave): activation auth posture, re-exported for
+  -- the same single-source-of-truth reason.
+  , AuthPosture(..)
   )
 
 -- ============================================================================
@@ -328,6 +335,28 @@ data MethodDef = MethodDef
     --   Pre-CRED-CORE-3 producers omit the upstream key entirely; the
     --   upstream parser defaults to 'Nothing' and this field carries
     --   that default verbatim.
+  , mdAuthPosture :: Maybe AuthPosture
+    -- ^ Declared auth posture of the activation this method belongs to
+    --   (R-3; wire field added in R-2, joint AP-1). 'Nothing' when the
+    --   activation never declared a posture.
+    --
+    --   Populated from 'MethodSchema.methodAuthPosture'. Pre-R-2
+    --   producers omit the upstream @auth_posture@ key entirely; the
+    --   upstream parser defaults to 'Nothing' and this field carries
+    --   that default verbatim. Rendered into the IR JSON under the wire
+    --   name @auth_posture@ (omitted when 'Nothing') for hub-codegen
+    --   (R-4).
+  , mdPublic :: Bool
+    -- ^ Whether this method is explicitly public — exempt from the
+    --   default-deny gate (R-3; wire field added in R-2,
+    --   @#[plexus::method(public)]@). Mutually exclusive with a
+    --   populated 'mdRequiresCredential' by construction on the
+    --   producer side.
+    --
+    --   Populated from 'MethodSchema.methodPublic'. Pre-R-2 producers
+    --   omit the upstream @public@ key; defaults to 'False'. Rendered
+    --   into the IR JSON under the wire name @public@ (omitted when
+    --   'False') for hub-codegen (R-4).
   }
   deriving stock (Show, Eq, Generic)
 
@@ -339,7 +368,7 @@ data MethodDef = MethodDef
 --   names used verbatim as JSON keys; @Maybe@ fields omitted when
 --   @Nothing@ to match aeson's legacy behaviour).
 instance ToJSON MethodDef where
-  toJSON MethodDef{..} = object
+  toJSON MethodDef{..} = object $
     [ "mdName"                .= mdName
     , "mdFullPath"            .= mdFullPath
     , "mdNamespace"           .= mdNamespace
@@ -357,6 +386,20 @@ instance ToJSON MethodDef where
     -- back to the same defaults via the @.:?@ parser below.
     , "mdCredentials"         .= mdCredentials
     , "mdRequiresCredential"  .= mdRequiresCredential
+    ]
+    -- R-3 (ROLES+AP merged wave): pass the backend-wire credential/posture
+    -- metadata through to the IR JSON under the EXACT wire names pinned by
+    -- plexus-core R-2 (feature/R-2-credential-wire, 80eaba7) — hub-codegen
+    -- (R-4) decodes these same names. Omitted when absent to match the
+    -- Rust serde @skip_serializing_if@ behaviour (no nulls for None, no
+    -- "public": false). @requires_credential@ deliberately doubles the
+    -- legacy @mdRequiresCredential@ key above: the old key keeps the
+    -- AUTHZ-CRED-IR-1 IR shape intact (additive change), the wire-named
+    -- key is the R-3 contract.
+    ++ catMaybes
+    [ ("requires_credential" .=) <$> mdRequiresCredential
+    , ("auth_posture"        .=) <$> mdAuthPosture
+    , if mdPublic then Just ("public" .= True) else Nothing
     ]
 
 instance FromJSON MethodDef where
@@ -376,7 +419,14 @@ instance FromJSON MethodDef where
     -- IR JSON decoding cleanly (no @mdCredentials@ / @mdRequiresCredential@
     -- keys present). Same back-compat posture as @mdRole@ above.
     <*> o .:? "mdCredentials"        .!= []
-    <*> o .:? "mdRequiresCredential"
+    -- R-3: prefer the wire-named key (the R-3 contract with hub-codegen),
+    -- fall back to the legacy AUTHZ-CRED-IR-1 key so pre-R-3 IR JSON
+    -- (cache files) still decodes.
+    <*> ((<|>) <$> o .:? "requires_credential"
+               <*> o .:? "mdRequiresCredential")
+    -- R-3: absent => Nothing/False; decode never fails on pre-R-2 IR JSON.
+    <*> o .:? "auth_posture"
+    <*> o .:? "public"               .!= False
 
 -- | A parameter definition
 data ParamDef = ParamDef

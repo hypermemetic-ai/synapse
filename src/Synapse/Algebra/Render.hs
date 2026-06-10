@@ -16,6 +16,9 @@ module Synapse.Algebra.Render
     -- * Deprecation Rendering (IR-6)
   , deprecationMarker
   , formatDeprecationLine
+
+    -- * Auth Annotation Rendering (R-3, ROLES+AP merged wave)
+  , formatAuthLine
   ) where
 
 import Data.Text (Text)
@@ -26,14 +29,19 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Vector as V
 import Data.List (intersperse, sortOn)
+import Data.Maybe (catMaybes)
 import Prettyprinter
 import Prettyprinter.Render.Text (renderStrict)
 
 import Synapse.Schema.Types
 import Plexus.Schema.Recursive
-  ( DeprecationInfo(..)
+  ( AttachmentSite(..)
+  , AuthPosture(..)
+  , CredentialKind(..)
+  , DeprecationInfo(..)
   , ParamSchema(..)
   , MethodRole(..)
+  , RequiredCredential(..)
   )
 
 -- | Rendering style configuration
@@ -230,7 +238,16 @@ renderSchemaWith _style PluginSchema{..}
           depLines = case methodDeprecation method of
             Just di -> [indent 12 $ pretty (formatDeprecationLine di)]
             Nothing -> []
-      in vsep $ [nameLine] ++ depLines ++ dynLines ++ paramsDocs (methodParams method)
+          -- R-3 (ROLES+AP merged wave): credential/posture annotation.
+          -- Absent on every pre-R-2 method (no public flag, no
+          -- requires_credential, no auth_posture) — those render
+          -- byte-identically to before.
+          authLines = case formatAuthLine (methodPublic method)
+                                          (methodRequiresCredential method)
+                                          (methodAuthPosture method) of
+            Just line -> [indent 12 $ pretty line]
+            Nothing   -> []
+      in vsep $ [nameLine] ++ depLines ++ dynLines ++ authLines ++ paramsDocs (methodParams method)
 
     -- SYN-2: extract the role-specific decoration. Returns the
     -- decorated method-name token (e.g. @"body {name}"@) and any
@@ -472,4 +489,73 @@ formatDeprecationLine di =
   "DEPRECATED since " <> depSince di
     <> ", removed in " <> depRemovedIn di
     <> " \x2014 " <> depMessage di   -- em-dash
+
+-- ============================================================================
+-- Auth Annotation Rendering (R-3, ROLES+AP merged wave)
+-- ============================================================================
+
+-- | Format the one-line credential/posture annotation for a method, from
+--   the three R-2 wire fields (@public@, @requires_credential@,
+--   @auth_posture@). Returns 'Nothing' when none of the fields carry
+--   information — pre-R-2 methods produce no annotation, so existing
+--   output is byte-identical.
+--
+--   Examples:
+--
+--   @
+--   (auth: public; posture: mixed)
+--   (auth: requires credential kind=oauth_access scopes=cone.send_message,cone.admin site=header:authorization; posture: required)
+--   @
+formatAuthLine :: Bool -> Maybe RequiredCredential -> Maybe AuthPosture -> Maybe Text
+formatAuthLine isPublic mReq mPosture =
+  let parts = catMaybes
+        [ if isPublic then Just "public" else Nothing
+        , formatRequiredCredential <$> mReq
+        , (\p -> "posture: " <> authPostureName p) <$> mPosture
+        ]
+  in if null parts
+       then Nothing
+       else Just $ "(auth: " <> T.intercalate "; " parts <> ")"
+
+-- | Wire-faithful posture names (the snake_case strings from the R-2
+--   serde enum).
+authPostureName :: AuthPosture -> Text
+authPostureName = \case
+  AuthPostureRequired -> "required"
+  AuthPostureOptional -> "optional"
+  AuthPostureMixed    -> "mixed"
+  AuthPostureNone     -> "none"
+
+-- | Compact one-phrase rendering of a 'RequiredCredential'. Sub-fields
+--   are skipped when absent, mirroring the compact wire shape.
+formatRequiredCredential :: RequiredCredential -> Text
+formatRequiredCredential rc =
+  let details = catMaybes
+        [ (\k -> "kind=" <> credentialKindName k) <$> rcKind rc
+        , if null (rcScopes rc)
+            then Nothing
+            else Just ("scopes=" <> T.intercalate "," (rcScopes rc))
+        , (\s -> "site=" <> attachmentSiteName s) <$> rcSiteHint rc
+        ]
+  in T.intercalate " " ("requires credential" : details)
+
+-- | Wire-faithful credential kind names (snake_case discriminators).
+credentialKindName :: CredentialKind -> Text
+credentialKindName = \case
+  CredKindBearer       -> "bearer"
+  CredKindCookie       -> "cookie"
+  CredKindOauthAccess  -> "oauth_access"
+  CredKindOauthRefresh -> "oauth_refresh"
+  CredKindOidcId       -> "oidc_id"
+  CredKindAwsSts       -> "aws_sts"
+  CredKindMacaroon     -> "macaroon"
+  CredKindOther n      -> "other:" <> n
+
+-- | Compact attachment-site rendering, e.g. @header:authorization@.
+attachmentSiteName :: AttachmentSite -> Text
+attachmentSiteName = \case
+  AttachHeader n        -> "header:" <> n
+  AttachCookie n        -> "cookie:" <> n
+  AttachFirstFrame sm p -> "first_frame:" <> sm <> "#" <> p
+  AttachInRpcParam p    -> "param:" <> p
 

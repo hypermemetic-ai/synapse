@@ -407,6 +407,15 @@ extractMethodDef namespace pathPrefix method =
           -- the IR. plexus-protocol's FromJSON defaults this to Nothing
           -- for pre-IR servers (no @requires_credential@ key in the wire
           -- JSON).
+        , mdAuthPosture = methodAuthPosture method
+          -- R-3 (ROLES+AP merged wave): lift MethodSchema.auth_posture
+          -- onto the IR. plexus-protocol's FromJSON defaults this to
+          -- Nothing for pre-R-2 servers (no @auth_posture@ key in the
+          -- wire JSON).
+        , mdPublic = methodPublic method
+          -- R-3: lift MethodSchema.public onto the IR. plexus-protocol's
+          -- FromJSON defaults this to False for pre-R-2 servers (no
+          -- @public@ key in the wire JSON).
         }
   in (allTypes, mdef)
 

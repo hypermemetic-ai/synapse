@@ -64,7 +64,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 
 import Synapse.IR.Types
-import Synapse.Algebra.Render (deprecationMarker, formatDeprecationLine)
+import Synapse.Algebra.Render (deprecationMarker, formatDeprecationLine, formatAuthLine)
 
 -- ============================================================================
 -- Configuration
@@ -101,7 +101,7 @@ renderMethodHelpWith :: HelpStyle -> IR -> MethodDef -> Text
 renderMethodHelpWith style ir method = T.unlines $
   [ header
   , ""
-  ] ++ descSection ++ paramSection
+  ] ++ descSection ++ authSection ++ paramSection
   where
     header = mdFullPath method <> streamingIndicator
 
@@ -112,6 +112,16 @@ renderMethodHelpWith style ir method = T.unlines $
     descSection = case mdDescription method of
       Just desc -> [desc, ""]
       Nothing -> []
+
+    -- R-3 (ROLES+AP merged wave): credential/posture annotation between
+    -- the description and the parameter block. Absent for every pre-R-2
+    -- method (no public flag, no requires_credential, no auth_posture),
+    -- so existing help output is byte-identical.
+    authSection = case formatAuthLine (mdPublic method)
+                                      (mdRequiresCredential method)
+                                      (mdAuthPosture method) of
+      Just line -> [line, ""]
+      Nothing   -> []
 
     paramSection
       | null (mdParams method) = ["(no parameters)"]
