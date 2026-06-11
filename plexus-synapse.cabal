@@ -47,6 +47,7 @@ library
     Synapse.CLI.Similarity
     Synapse.Backend.Discovery
     Synapse.Self
+    Synapse.Self.Jwt
     Synapse.Self.Types
     Synapse.Self.Resolve
     Synapse.Self.IO
@@ -57,6 +58,7 @@ library
     Synapse.Self.Resolve.Default
     Synapse.Self.Command
     Synapse.Self.Commands
+    Synapse.Self.Oidc
     Synapse.Self.Template
     Synapse.Self.Pattern
     Synapse.Self.Examples
@@ -394,6 +396,7 @@ test-suite self-test
   other-modules:
     SelfCommandSpec
     SelfMigrationSpec
+    SelfOidcSpec
     SelfSafeWriteSpec
   build-depends:
     base >= 4.17 && < 5,

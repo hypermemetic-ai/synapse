@@ -42,9 +42,11 @@ import Synapse.Schema.Types
 import Synapse.Monad (SynapseM, SynapseEnv(..), SynapseError(..), BackendErrorType(..), TransportContext(..), TransportErrorCategory(..), initEnv, runSynapseM, throwNav, throwTransport, throwParse, throwBackend, withRequestContext)
 import qualified Synapse.Self as Self
   ( CredentialRef(..)
+  , RefreshOutcome(..)
   , ResolveError(..)
   , ResolvedDefaults(..)
   , defaultRegistry
+  , ensureFreshLogin
   , loadDefaults
   , merge
   , resolveAll
@@ -247,9 +249,38 @@ buildEnv host port backend logger opts = do
   (cliCookieList, cliHeaderList) <- collectRequestContext opts
 
   -- SELF-2: load + resolve + merge.
-  stored <- E.catch (Self.loadDefaults backend) $ \e -> do
+  stored0 <- E.catch (Self.loadDefaults backend) $ \e -> do
     hPutStrLn stderr $ "Error: " <> show (e :: E.IOException)
     exitFailure
+
+  -- UT-3 transparent refresh: when no invocation-scoped token override
+  -- exists, an expired/missing stored access token with a stored refresh
+  -- path is renewed in place before this call dispatches. CLI-provided
+  -- tokens (--token / --token-file / --cookie access_token=...) skip
+  -- this entirely — explicit material is never second-guessed.
+  let cliProvidesToken =
+        mToken /= Nothing || any ((== "access_token") . fst) cliCookieList
+  stored <-
+    if cliProvidesToken
+      then pure stored0
+      else do
+        (stored', outcome) <- Self.ensureFreshLogin backend stored0
+        case outcome of
+          Self.Refreshed ->
+            Log.logInfo logger Log.SubsystemCLI $
+              "access token for `" <> backend
+              <> "` was expired; refreshed via stored refresh token"
+          Self.RefreshFailed err ->
+            -- Loud but non-fatal: the call proceeds with the stale token
+            -- and the backend's auth error names the real failure; this
+            -- warning explains *why* it is about to happen.
+            hPutStrLn stderr $ "Warning: stored access token for '"
+              <> T.unpack backend <> "' is expired and auto-refresh failed: "
+              <> T.unpack err
+              <> "\n  Run: synapse _self " <> T.unpack backend <> " login"
+          _ -> pure ()
+        pure stored'
+
   resolved <- Self.resolveAll Self.defaultRegistry stored []
   resolvedDefaults <- case resolved of
     Left err -> do
