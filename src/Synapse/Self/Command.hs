@@ -62,24 +62,17 @@ module Synapse.Self.Command
 
 import Control.Exception (IOException)
 import qualified Control.Exception as E
-import Data.Aeson (Value(..), (.=), object, eitherDecodeStrict')
+import Data.Aeson (Value(..), (.=), object)
 import Data.Aeson.Encode.Pretty (Config(..), Indent(..), NumberFormat(..), encodePretty')
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KM
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Base64.URL as B64U
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ByteString.Lazy as LBS
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, listToMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
-import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Data.Time.Format (defaultTimeLocale, formatTime)
+import Data.Time.Clock (UTCTime, getCurrentTime)
 import Options.Applicative
 import System.Directory (doesFileExist, removeFile)
 import System.Exit (ExitCode(..))
@@ -105,6 +98,15 @@ import Synapse.Self
   , writeDefaults
   )
 import qualified Synapse.Self.IO as SelfIO
+import Synapse.Self.Jwt
+  ( JwtClaim(..)
+  , JwtSummary(..)
+  , decodeJwt
+  , formatISO8601
+  , jwtToJson
+  , renderJwtSummary
+  , renderRelativeExpiry
+  )
 import qualified Synapse.Self.Oidc as Oidc
 
 -- | Keychain service name for items created by @_self@ verbs.
@@ -176,6 +178,15 @@ data SelfCommand
   | CmdLogout       !Text
     -- ^ @logout@ (UT-3). Clears @cookies.access_token@ and
     --   @oidc.refresh_token@; keeps issuer\/audience and everything else.
+  | CmdTenant       !Text !(Maybe Text) !Bool
+    -- ^ @tenant [ORG] [--clear]@ (UT-3). With no argument: print the
+    --   active tenant (the access token's @org_id@) and any stored
+    --   selection. With @ORG@: persist the selection (applied on the
+    --   next @login@). @--clear@ drops the selection.
+  | CmdRefresh      !Text
+    -- ^ @refresh@ (UT-3). Force a refresh-grant attempt now — the
+    --   explicit form of the transparent refresh that dispatch performs
+    --   on expired tokens.
   deriving (Show, Eq)
 
 -- ============================================================================
@@ -247,6 +258,8 @@ parseSelfCommand =
      <> command "import-token"  (info importTokenCmd  (progDesc "Import a JWT from file or stdin as access_token"))
      <> command "login"         (info loginCmd        (progDesc "Log in via OIDC password grant; store tokens in defaults.json"))
      <> command "logout"        (info logoutCmd       (progDesc "Clear stored access/refresh tokens (keeps other defaults)"))
+     <> command "tenant"        (info tenantCmd       (progDesc "Show or select the tenant/organization for this backend"))
+     <> command "refresh"       (info refreshCmd      (progDesc "Refresh the access token now via the stored refresh token"))
       )
 
     showCmd = (\j b -> CmdShow b j)
@@ -281,6 +294,11 @@ parseSelfCommand =
             (long "audience" <> metavar "AUD"
             <> help "Token audience (default: stored audience, else plexus:<backend>)"))
     logoutCmd = pure CmdLogout
+    tenantCmd = (\o c b -> CmdTenant b o c)
+      <$> optional (argument (T.pack <$> str)
+            (metavar "ORG" <> help "Tenant/organization to select (omit to show)"))
+      <*> switch (long "clear" <> help "Clear the stored tenant selection")
+    refreshCmd = pure CmdRefresh
 
     kindArg = argument kindReader (metavar "KIND" <> help "cookie | header")
     nameArg = argument (T.pack <$> str) (metavar "NAME" <> help "Cookie or header name")
@@ -315,6 +333,8 @@ runSelfCommand = \case
   CmdImportToken b path toKc    -> runImportToken b path toKc
   CmdLogin b mUser mIss mAud    -> runLogin b mUser mIss mAud
   CmdLogout b                   -> runLogout b
+  CmdTenant b mOrg clear        -> runTenant b mOrg clear
+  CmdRefresh b                  -> runRefresh b
 
 -- ---------------------------------------------------------------------------
 -- Helpers shared by verbs
@@ -386,7 +406,7 @@ runShow backend jsonMode = do
   entries <- buildShowEntries defaultRegistry sd
   if jsonMode
     then do
-      LBS.putStr (encodePrettyJson (entriesToJson backend (sdOidc sd) entries))
+      LBS.putStr (encodePrettyJson (entriesToJson backend now (sdOidc sd) entries))
       BS8.putStrLn ""
       pure ExitSuccess
     else do
@@ -433,19 +453,44 @@ renderShowText backend sd now entries = do
   let (cookies, headers) = partitionKinds entries
   renderSection "Cookies" cookies now
   renderSection "Headers" headers now
-  renderOidcText (sdOidc sd)
+  renderOidcText now (accessJwtOf entries) (sdOidc sd)
   case (null cookies, null headers, sdOidc sd) of
     (True, True, Nothing) -> TIO.putStrLn "\n(no defaults configured for this backend)"
     _                     -> pure ()
 
+-- | The decoded JWT of the @access_token@ cookie, when it resolved and
+-- decoded. Feeds the OIDC section's login-state and active-tenant lines.
+accessJwtOf :: [ShowEntry] -> Maybe JwtSummary
+accessJwtOf entries = listToMaybe
+  [ summary
+  | e <- entries
+  , seKind e == Cookie
+  , seName e == "access_token"
+  , Right val <- [seResult e]
+  , Just summary <- [decodeJwt val]
+  ]
+
 -- | Render the OIDC login-state section of @show@ (UT-3). Never prints
 -- the refresh token's value — only its presence (as the stored ref's
 -- scheme would reveal nothing anyway, the line says @(stored)@).
-renderOidcText :: Maybe OidcDefaults -> IO ()
-renderOidcText Nothing = pure ()
-renderOidcText (Just OidcDefaults{..}) = do
+--
+-- AC4 lines: login status (with expiry), active tenant (the access
+-- token's @org_id@), the stored selection when it diverges.
+renderOidcText :: UTCTime -> Maybe JwtSummary -> Maybe OidcDefaults -> IO ()
+renderOidcText _ _ Nothing = pure ()
+renderOidcText now mJwt (Just OidcDefaults{..}) = do
   TIO.putStrLn ""
   TIO.putStrLn "OIDC:"
+  TIO.putStrLn $ "  status    " <> loginStatusLine now mJwt
+  let mActive = mJwt >>= jsOrgId
+  case (mActive, odTenant) of
+    (Nothing, Nothing) -> pure ()
+    _ -> TIO.putStrLn $ "  tenant    "
+           <> maybe "(unknown)" id mActive
+           <> case odTenant of
+                Just sel | Just sel /= mActive ->
+                  "  (selected: " <> sel <> " — re-login to apply)"
+                _ -> ""
   case odIssuer of
     Just iss -> TIO.putStrLn $ "  issuer    " <> iss
     Nothing  -> pure ()
@@ -455,6 +500,16 @@ renderOidcText (Just OidcDefaults{..}) = do
   TIO.putStrLn $ "  refresh_token  " <> case odRefreshToken of
     Just _  -> "(stored)"
     Nothing -> "(none)"
+
+-- | One-line login state: logged in/out, and how long the token lasts.
+loginStatusLine :: UTCTime -> Maybe JwtSummary -> Text
+loginStatusLine now mJwt = case mJwt of
+  Nothing -> "not logged in (no access token)"
+  Just summary -> case jsExp summary of
+    Nothing -> "logged in (token has no expiry)"
+    Just e
+      | e <= now  -> "logged in, token expired (" <> renderRelativeExpiry now e <> ")"
+      | otherwise -> "logged in (" <> renderRelativeExpiry now e <> ")"
 
 partitionKinds :: [ShowEntry] -> ([ShowEntry], [ShowEntry])
 partitionKinds = foldr step ([], [])
@@ -484,8 +539,8 @@ renderShowEntry now ShowEntry{..} = do
         Just summary -> mapM_ (TIO.putStrLn . ("      " <>)) (renderJwtSummary now summary)
 
 -- | Machine-readable JSON form of the full show output.
-entriesToJson :: Text -> Maybe OidcDefaults -> [ShowEntry] -> Value
-entriesToJson backend mOidc entries =
+entriesToJson :: Text -> UTCTime -> Maybe OidcDefaults -> [ShowEntry] -> Value
+entriesToJson backend now mOidc entries =
   let (cookies, headers) = partitionKinds entries
   in object $
     [ "backend" .= backend
@@ -493,16 +548,26 @@ entriesToJson backend mOidc entries =
     , "cookies" .= fmap entryToJson cookies
     , "headers" .= fmap entryToJson headers
     ]
-    <> maybe [] (\o -> ["oidc" .= oidcToJson o]) mOidc
+    <> maybe [] (\o -> ["oidc" .= oidcToJson now (accessJwtOf entries) o]) mOidc
 
 -- | JSON form of the OIDC section (UT-3). The refresh token value never
 -- appears — only a boolean presence flag.
-oidcToJson :: OidcDefaults -> Value
-oidcToJson OidcDefaults{..} = object $ catMaybes
+oidcToJson :: UTCTime -> Maybe JwtSummary -> OidcDefaults -> Value
+oidcToJson now mJwt OidcDefaults{..} = object $ catMaybes
   [ fmap ("issuer" .=) odIssuer
   , fmap ("audience" .=) odAudience
   , Just ("refresh_token_stored" .= (odRefreshToken /= Nothing))
+  , Just ("logged_in" .= loggedIn)
+  , fmap (\e -> "expires_at" .= formatISO8601 e) (mJwt >>= jsExp)
+  , Just ("expired" .= expired)
+  , fmap ("tenant" .=) (mJwt >>= jsOrgId)
+  , fmap ("tenant_selected" .=) odTenant
   ]
+  where
+    loggedIn = mJwt /= Nothing
+    expired = case mJwt >>= jsExp of
+      Just e  -> e <= now
+      Nothing -> False
 
 entryToJson :: ShowEntry -> Value
 entryToJson ShowEntry{..} =
@@ -805,7 +870,9 @@ runLogin backend mUser mIssuer mAudience = do
               TIO.hPutStrLn stderr ("Error: " <> err)
               pure (ExitFailure 1)
             Right tokenEndpoint -> do
-              eTok <- Oidc.requestPasswordGrant tokenEndpoint username password audience
+              let mSelectedTenant = sdOidc sd >>= odTenant
+              eTok <- Oidc.requestPasswordGrant tokenEndpoint username password
+                        audience mSelectedTenant
               case eTok of
                 Left err -> do
                   TIO.hPutStrLn stderr ("Error: login failed: " <> err)
@@ -819,9 +886,24 @@ runLogin backend mUser mIssuer mAudience = do
                       refreshNote = case Oidc.trRefreshToken tr of
                         Just _  -> " Refresh token stored."
                         Nothing -> ""
+                      mActiveTenant = Oidc.tokenTenant (Oidc.trAccessToken tr)
+                      tenantNote = case mActiveTenant of
+                        Just t  -> " Tenant: " <> t <> "."
+                        Nothing -> ""
                   TIO.putStrLn $ "Logged in to `" <> backend <> "` as `" <> username
                     <> "` via " <> issuer <> "; access_token stored" <> expiry <> "."
-                    <> refreshNote
+                    <> refreshNote <> tenantNote
+                  -- Tenant divergence: the selection is a request; the
+                  -- IdP decides. Be loud when they disagree.
+                  case (mSelectedTenant, mActiveTenant) of
+                    (Just want, got) | got /= Just want ->
+                      TIO.hPutStrLn stderr $
+                        "Warning: selected tenant `" <> want
+                        <> "` but the issued token carries org_id="
+                        <> maybe "(none)" id got
+                        <> ". The IdP keys tenancy off the user record; ask an"
+                        <> " admin to grant access to `" <> want <> "`."
+                    _ -> pure ()
                   pure ExitSuccess
 
 -- | Implement @logout@: 'Oidc.clearLogin' over the store. Keeps
@@ -842,6 +924,78 @@ runLogout backend = do
             <> [ "refresh_token" | hadRefresh ]
       TIO.putStrLn $ "Logged out of `" <> backend <> "` (cleared " <> dropped <> ")."
       pure ExitSuccess
+
+-- | Implement @tenant@ (UT-3 AC2). Three modes:
+--
+-- * @tenant@           — report the active tenant (the access token's
+--   @org_id@ claim) and any stored selection.
+-- * @tenant ORG@       — persist the selection; warn if the current
+--   token carries a different @org_id@ (a re-login is what actually
+--   switches, because the tenant travels inside the signed token).
+-- * @tenant --clear@   — drop the selection.
+runTenant :: Text -> Maybe Text -> Bool -> IO ExitCode
+runTenant backend mOrg clear = do
+  sd <- loadOrExit backend
+  mActive <- activeTenantOf sd
+  case (clear, mOrg) of
+    (True, _) -> do
+      writeDefaults backend (Oidc.selectTenant Nothing sd)
+      TIO.putStrLn $ "Cleared tenant selection for backend `" <> backend <> "`."
+      pure ExitSuccess
+    (False, Nothing) -> do
+      TIO.putStrLn $ "Active tenant:   " <> maybe "(none — not logged in or token has no org_id)" id mActive
+      TIO.putStrLn $ "Selected tenant: " <> maybe "(none)" id (sdOidc sd >>= odTenant)
+      pure ExitSuccess
+    (False, Just org) -> do
+      writeDefaults backend (Oidc.selectTenant (Just org) sd)
+      TIO.putStrLn $ "Selected tenant `" <> org <> "` for backend `" <> backend <> "`."
+      case mActive of
+        Just active | active /= org ->
+          TIO.putStrLn $ "Note: the current access token carries org_id=" <> active
+            <> "; run `_self " <> backend <> " login` to obtain a token for `"
+            <> org <> "`."
+        Nothing ->
+          TIO.putStrLn $ "Note: no usable access token; the selection applies on the next login."
+        _ -> pure ()
+      pure ExitSuccess
+
+-- | The tenant the *current* stored access token carries (its @org_id@
+-- claim), if the token resolves and decodes. 'Nothing' is "unknown",
+-- not an error.
+activeTenantOf :: StoredDefaults -> IO (Maybe Text)
+activeTenantOf sd = case Map.lookup "access_token" (sdCookies sd) of
+  Nothing  -> pure Nothing
+  Just ref -> do
+    r <- resolveRef defaultRegistry ref
+    pure $ case r of
+      Right tok -> Oidc.tokenTenant tok
+      Left _    -> Nothing
+
+-- | Implement @refresh@: the explicit form of the transparent refresh.
+-- Runs the same decision dispatch uses ('Oidc.ensureFreshLogin') and
+-- reports the outcome, so the exit code answers "is my login healthy".
+-- A still-fresh token is success, not a forced rotation.
+runRefresh :: Text -> IO ExitCode
+runRefresh backend = do
+  sd <- loadOrExit backend
+  (_, outcome) <- Oidc.ensureFreshLogin backend sd
+  case outcome of
+    Oidc.RefreshNotNeeded -> do
+      TIO.putStrLn "Access token is still fresh; nothing to do."
+      pure ExitSuccess
+    Oidc.Refreshed -> do
+      TIO.putStrLn $ "Refreshed access token for backend `" <> backend
+        <> "` (rotated refresh token stored)."
+      pure ExitSuccess
+    Oidc.RefreshUnavailable -> do
+      TIO.hPutStrLn stderr $
+        "Error: access token is missing or expired and no refresh path is"
+        <> " stored. Run `_self " <> backend <> " login`."
+      pure (ExitFailure 1)
+    Oidc.RefreshFailed err -> do
+      TIO.hPutStrLn stderr $ "Error: refresh failed: " <> err
+        <> "\nRun `_self " <> backend <> " login` to re-authenticate."
+      pure (ExitFailure 1)
 
 -- | Prompt for a line of input (echoed). EOF yields an empty string,
 -- which callers reject with their own message.
@@ -992,194 +1146,3 @@ foldlIOM acc (x:xs) f  = do
 readTokenSource :: Text -> IO Text
 readTokenSource "-" = T.pack <$> getContents
 readTokenSource p   = TIO.readFile (T.unpack p)
-
--- ============================================================================
--- JWT inspection
--- ============================================================================
-
--- | Structured summary of a JWT. We only record fields the CLI prints.
--- Signatures are never stored.
-data JwtSummary = JwtSummary
-  { jsAlg      :: !(Maybe Text)
-  , jsKid      :: !(Maybe Text)
-  , jsIss      :: !(Maybe Text)
-  , jsAud      :: !(Maybe Text)  -- ^ Rendered: first aud entry if array.
-  , jsSub      :: !(Maybe Text)
-  , jsExp      :: !(Maybe UTCTime)
-  , jsIat      :: !(Maybe UTCTime)
-  , jsUsername :: !(Maybe Text)  -- ^ @preferred_username@
-  , jsEmail    :: !(Maybe Text)
-  , jsExtraClaims :: ![JwtClaim]  -- ^ Retained for future; unused in v1.
-  }
-  deriving (Show, Eq)
-
--- | A single JWT claim, name + rendered value. Reserved for future
--- extension (e.g. scope, roles). Currently unused — the named fields
--- on 'JwtSummary' cover everything we print.
-data JwtClaim = JwtClaim
-  { jcName :: !Text
-  , jcValue :: !Text
-  }
-  deriving (Show, Eq)
-
--- | Attempt to decode a string as a JWT. Returns 'Nothing' on anything
--- that isn't JWT-shaped. A "JWT-shaped" value has exactly two dots,
--- each of the three segments base64-decodes cleanly (URL-safe, with or
--- without padding), and the header JSON has an @alg@ field.
---
--- Decoding never fails loudly: a value that looks JWT-shaped but has
--- a non-JSON payload yields 'Nothing'.
-decodeJwt :: Text -> Maybe JwtSummary
-decodeJwt t = case T.splitOn "." t of
-  [h, p, _sig]
-    | not (T.null h), not (T.null p) -> do
-        headerJson <- decodeSegment h
-        payloadJson <- decodeSegment p
-        -- Header must have an `alg` field to count as a JWT.
-        case headerJson of
-          Object o | KM.member "alg" o -> Just (buildSummary headerJson payloadJson)
-          _                            -> Nothing
-  _ -> Nothing
-
-decodeSegment :: Text -> Maybe Value
-decodeSegment seg =
-  let bs = TE.encodeUtf8 seg
-      -- JWT uses URL-safe base64 with padding stripped.
-      padded = padBase64 bs
-  in case B64U.decode padded of
-       Left _    -> Nothing
-       Right raw -> case eitherDecodeStrict' raw :: Either String Value of
-         Left _  -> Nothing
-         Right v -> Just v
-
--- | Re-pad a URL-safe base64 string to a multiple of 4. @base64-bytestring@
--- requires padding for decoding; JWTs strip it.
-padBase64 :: BS.ByteString -> BS.ByteString
-padBase64 bs =
-  let n = BS.length bs
-      r = n `mod` 4
-      pad = case r of
-        0 -> 0
-        2 -> 2
-        3 -> 1
-        _ -> 0  -- 1 is invalid; let decode fail on it
-  in bs <> BS8.replicate pad '='
-
-buildSummary :: Value -> Value -> JwtSummary
-buildSummary header payload = JwtSummary
-  { jsAlg      = stringClaim header "alg"
-  , jsKid      = stringClaim header "kid"
-  , jsIss      = stringClaim payload "iss"
-  , jsAud      = audClaim payload
-  , jsSub      = stringClaim payload "sub"
-  , jsExp      = timeClaim payload "exp"
-  , jsIat      = timeClaim payload "iat"
-  , jsUsername = stringClaim payload "preferred_username"
-  , jsEmail    = stringClaim payload "email"
-  , jsExtraClaims = []
-  }
-
--- | Pull a string claim out of a JSON object. Returns 'Nothing' for
--- non-object values, missing fields, or fields that aren't strings.
-stringClaim :: Value -> Text -> Maybe Text
-stringClaim (Object o) k = case KM.lookup (Key.fromText k) o of
-  Just (String s) -> Just s
-  _               -> Nothing
-stringClaim _ _ = Nothing
-
--- | @aud@ can be either a string or an array of strings. We render the
--- first element in either case.
-audClaim :: Value -> Maybe Text
-audClaim (Object o) = case KM.lookup "aud" o of
-  Just (String s)   -> Just s
-  Just (Array arr)  -> case foldMap stringOf arr of
-    []    -> Nothing
-    (x:_) -> Just x
-  _ -> Nothing
-  where
-    stringOf (String s) = [s]
-    stringOf _          = []
-audClaim _ = Nothing
-
--- | Integer seconds-since-epoch as a 'UTCTime'.
-timeClaim :: Value -> Text -> Maybe UTCTime
-timeClaim (Object o) k = case KM.lookup (Key.fromText k) o of
-  Just (Number n) -> Just (posixSecondsToUTCTime (realToFrac n))
-  _               -> Nothing
-timeClaim _ _ = Nothing
-
--- | Render a JWT summary as a list of aligned label/value lines.
--- Never emits the signature; never emits raw claim bodies.
-renderJwtSummary :: UTCTime -> JwtSummary -> [Text]
-renderJwtSummary now JwtSummary{..} = catMaybes
-  [ fmap (labelled "alg") jsAlg
-  , fmap (labelled "kid" . truncateKid) jsKid
-  , fmap (labelled "iss") jsIss
-  , fmap (labelled "aud") jsAud
-  , fmap (labelled "sub") jsSub
-  , fmap (\t ->
-      labelled "exp"
-        (T.pack (formatISO8601 t) <> "  (" <> renderRelativeExpiry now t <> ")"))
-      jsExp
-  , fmap (\t -> labelled "iat" (T.pack (formatISO8601 t))) jsIat
-  , case (jsUsername, jsEmail) of
-      (Just u, Just e) -> Just $ labelled "user" (u <> " (" <> e <> ")")
-      (Just u, Nothing) -> Just $ labelled "user" u
-      (Nothing, Just e) -> Just $ labelled "user" e
-      (Nothing, Nothing) -> Nothing
-  ]
-  where
-    labelled label val = label <> padTo 5 label <> val
-    padTo n lab = T.replicate (max 1 (n - T.length lab)) " "
-
--- | Long `kid` values are typically random key-IDs that add visual
--- noise without aiding identification. Keep the first 6 chars and
--- elide the tail.
-truncateKid :: Text -> Text
-truncateKid t
-  | T.length t > 16 = T.take 6 t <> "..." <> T.takeEnd 4 t
-  | otherwise       = t
-
-formatISO8601 :: UTCTime -> String
-formatISO8601 = formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ"
-
--- | Render @exp - now@ as a human-readable relative duration:
--- "expired 16d 4h ago" for past, "valid for 4m 32s" for future.
---
--- Uses the two largest non-zero units (d/h, h/m, m/s, or just s for
--- sub-minute), which matches the operator-facing prose the ticket asks
--- for: glance-readable, enough precision to act on.
-renderRelativeExpiry :: UTCTime -> UTCTime -> Text
-renderRelativeExpiry now exp_ =
-  let delta = diffUTCTime exp_ now
-      secs :: Integer
-      secs = floor (realToFrac delta :: Double)
-      absSecs = abs secs
-      (d, r1) = absSecs `divMod` 86400
-      (h, r2) = r1     `divMod` 3600
-      (m, s)  = r2     `divMod` 60
-      unitPair = case (d, h, m, s) of
-        _ | d > 0 && h > 0 -> T.pack (show d) <> "d " <> T.pack (show h) <> "h"
-        _ | d > 0          -> T.pack (show d) <> "d"
-        _ | h > 0 && m > 0 -> T.pack (show h) <> "h " <> T.pack (show m) <> "m"
-        _ | h > 0          -> T.pack (show h) <> "h"
-        _ | m > 0 && s > 0 -> T.pack (show m) <> "m " <> T.pack (show s) <> "s"
-        _ | m > 0          -> T.pack (show m) <> "m"
-        _                  -> T.pack (show s) <> "s"
-  in if secs < 0
-       then "expired " <> unitPair <> " ago"
-       else "valid for " <> unitPair
-
--- | Minimal JSON render of a 'JwtSummary' for the @--json@ output path.
-jwtToJson :: JwtSummary -> Value
-jwtToJson JwtSummary{..} = object $ catMaybes
-  [ fmap ("alg" .=) jsAlg
-  , fmap ("kid" .=) jsKid
-  , fmap ("iss" .=) jsIss
-  , fmap ("aud" .=) jsAud
-  , fmap ("sub" .=) jsSub
-  , fmap (\t -> "exp" .= formatISO8601 t) jsExp
-  , fmap (\t -> "iat" .= formatISO8601 t) jsIat
-  , fmap ("preferred_username" .=) jsUsername
-  , fmap ("email" .=) jsEmail
-  ]

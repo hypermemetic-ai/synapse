@@ -47,6 +47,7 @@ library
     Synapse.CLI.Similarity
     Synapse.Backend.Discovery
     Synapse.Self
+    Synapse.Self.Jwt
     Synapse.Self.Types
     Synapse.Self.Resolve
     Synapse.Self.IO

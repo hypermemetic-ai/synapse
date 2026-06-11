@@ -9,10 +9,14 @@
 -- plexus-idp outside the unit suite.
 module SelfOidcSpec (spec) where
 
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Base64.URL as B64U
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Data.Time.Clock (UTCTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Test.Hspec
 
 import Synapse.Self
@@ -48,9 +52,14 @@ spec = do
 
   describe "passwordGrantForm" $ do
     it "carries grant_type, username, password, audience" $
-      urlEncodeForm (passwordGrantForm "alice" "s3cret&" "plexus:idptest")
+      urlEncodeForm (passwordGrantForm "alice" "s3cret&" "plexus:idptest" Nothing)
         `shouldBe`
         "grant_type=password&username=alice&password=s3cret%26&audience=plexus%3Aidptest"
+
+    it "appends organization only when a tenant is selected" $
+      urlEncodeForm (passwordGrantForm "alice" "pw" "aud" (Just "acme"))
+        `shouldBe`
+        "grant_type=password&username=alice&password=pw&audience=aud&organization=acme"
 
   describe "refreshGrantForm" $ do
     it "carries grant_type and refresh_token" $
@@ -130,6 +139,7 @@ spec = do
         { odIssuer       = Just "http://i:4461"
         , odAudience     = Just "plexus:b"
         , odRefreshToken = Just (CredentialRef "literal:the-refresh")
+        , odTenant       = Nothing
         }
 
     it "omits the refresh ref when the grant returned none" $ do
@@ -176,6 +186,91 @@ spec = do
       let tr = TokenResponse "jwt" Nothing Nothing (Just "r")
           sd = applyLogin "http://i" "aud" tr emptyStoredDefaults
       TE.decodeUtf8 (encodeDefaults sd) `shouldSatisfy` ("literal:r" `isInfixOfT`)
+
+  describe "applyLogin preserves the tenant selection" $ do
+    let tr = TokenResponse "jwt2" Nothing Nothing (Just "r2")
+        base = selectTenant (Just "acme") emptyStoredDefaults
+        sd'  = applyLogin "http://i" "aud" tr base
+
+    it "keeps oidc.tenant across a login/refresh store fold" $
+      (sdOidc sd' >>= odTenant) `shouldBe` Just "acme"
+
+    it "still rotates the refresh token" $
+      (sdOidc sd' >>= odRefreshToken)
+        `shouldBe` Just (CredentialRef "literal:r2")
+
+  describe "selectTenant" $ do
+    it "creates the oidc section when none exists" $
+      (sdOidc (selectTenant (Just "t1") emptyStoredDefaults) >>= odTenant)
+        `shouldBe` Just "t1"
+
+    it "clears the selection without touching other oidc fields" $ do
+      let tr = TokenResponse "jwt" Nothing Nothing (Just "r")
+          sd = selectTenant Nothing
+                 (selectTenant (Just "t1")
+                   (applyLogin "http://i" "aud" tr emptyStoredDefaults))
+      (sdOidc sd >>= odTenant)   `shouldBe` Nothing
+      (sdOidc sd >>= odIssuer)   `shouldBe` Just "http://i"
+      (sdOidc sd >>= odAudience) `shouldBe` Just "aud"
+
+    it "is a no-op clear on an empty store (oidc stays absent)" $
+      sdOidc (selectTenant Nothing emptyStoredDefaults) `shouldBe` Nothing
+
+  describe "tokenTenant" $ do
+    it "reads the org_id claim" $
+      tokenTenant (mkJwt "{\"org_id\":\"hypermemetic\",\"exp\":1}")
+        `shouldBe` Just "hypermemetic"
+
+    it "is Nothing for tokens without org_id, and for non-JWTs" $ do
+      tokenTenant (mkJwt "{\"sub\":\"x\"}") `shouldBe` Nothing
+      tokenTenant "opaque-api-key" `shouldBe` Nothing
+
+  describe "shouldRefresh (UT-3 freshness decision)" $ do
+    let now = epoch 1000000
+
+    it "refreshes when the access token is missing or empty" $ do
+      shouldRefresh now Nothing `shouldBe` True
+      shouldRefresh now (Just "") `shouldBe` True
+      shouldRefresh now (Just "  ") `shouldBe` True
+
+    it "refreshes an expired JWT" $
+      shouldRefresh now (Just (expJwt 999000)) `shouldBe` True
+
+    it "refreshes a JWT expiring within the leeway window" $
+      shouldRefresh now (Just (expJwt 1000020)) `shouldBe` True
+
+    it "does not refresh a fresh JWT" $
+      shouldRefresh now (Just (expJwt 1003600)) `shouldBe` False
+
+    it "never touches non-JWT (opaque) tokens" $
+      shouldRefresh now (Just "sk-some-api-key") `shouldBe` False
+
+    it "never touches JWTs without an exp claim" $
+      shouldRefresh now (Just (mkJwt "{\"sub\":\"x\"}")) `shouldBe` False
+
+  describe "defaults.json round-trip with tenant" $
+    it "encode/decode round-trips a tenant selection" $ do
+      let tr = TokenResponse "jwt" Nothing Nothing (Just "r")
+          sd = selectTenant (Just "acme")
+                 (applyLogin "http://i:4461" "plexus:b" tr emptyStoredDefaults)
+      decodeDefaults (encodeDefaults sd) `shouldBe` Right sd
+
+-- | A minimal JWT-shaped value (alg header + given payload JSON).
+mkJwt :: BS.ByteString -> Text
+mkJwt payload =
+  encodeSeg "{\"alg\":\"RS256\"}" <> "." <> encodeSeg payload <> ".sig"
+
+-- | A JWT whose only payload claim is @exp@ (seconds since epoch).
+expJwt :: Int -> Text
+expJwt e = mkJwt ("{\"exp\":" <> TE.encodeUtf8 (T.pack (show e)) <> "}")
+
+epoch :: Int -> UTCTime
+epoch = posixSecondsToUTCTime . fromIntegral
+
+-- | Encode a JSON string as URL-safe base64 without padding (JWT style).
+encodeSeg :: BS.ByteString -> Text
+encodeSeg bs =
+  T.dropWhileEnd (== '=') (TE.decodeUtf8 (B64U.encode bs))
 
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True

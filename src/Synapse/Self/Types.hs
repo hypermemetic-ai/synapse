@@ -108,10 +108,15 @@ instance FromJSON ScopedDefaults where
 -- * 'odRefreshToken' — a 'CredentialRef' (normally @literal:\<opaque\>@)
 --   for the refresh token. A ref, not a raw value, so the same resolver
 --   registry and @literal:@-sensitivity chmod logic apply as for cookies.
+-- * 'odTenant' — the tenant\/organization the user *selected* via
+--   @_self \<backend\> tenant \<org\>@. The tenant a call actually
+--   carries is the access token's @org_id@ claim; this field records
+--   intent so @login@ can request it and @show@ can flag divergence.
 data OidcDefaults = OidcDefaults
   { odIssuer       :: Maybe Text
   , odAudience     :: Maybe Text
   , odRefreshToken :: Maybe CredentialRef
+  , odTenant       :: Maybe Text
   }
   deriving stock (Show, Eq)
 
@@ -121,6 +126,7 @@ emptyOidcDefaults = OidcDefaults
   { odIssuer       = Nothing
   , odAudience     = Nothing
   , odRefreshToken = Nothing
+  , odTenant       = Nothing
   }
 
 instance ToJSON OidcDefaults where
@@ -129,6 +135,7 @@ instance ToJSON OidcDefaults where
     [ maybe [] (\v -> ["issuer" .= v]) odIssuer
     , maybe [] (\v -> ["audience" .= v]) odAudience
     , maybe [] (\v -> ["refresh_token" .= v]) odRefreshToken
+    , maybe [] (\v -> ["tenant" .= v]) odTenant
     ]
 
 instance FromJSON OidcDefaults where
@@ -136,10 +143,12 @@ instance FromJSON OidcDefaults where
     issuer  <- o .:? "issuer"
     aud     <- o .:? "audience"
     refresh <- o .:? "refresh_token"
+    tenant  <- o .:? "tenant"
     pure OidcDefaults
       { odIssuer       = issuer
       , odAudience     = aud
       , odRefreshToken = refresh
+      , odTenant       = tenant
       }
 
 -- | The on-disk defaults store for a single backend.
