@@ -44,6 +44,13 @@ module Synapse.Backend.Discovery
     -- * Implementations
   , stubDiscovery
   , registryDiscovery
+  , directDiscovery
+
+    -- * Registry Endpoint (Z2H-6)
+  , registryEndpointFromEnv
+  , defaultRegistryHost
+  , defaultRegistryPort
+  , registryUrlEnvVar
 
     -- * Backend Discovery
   , getBackendAt
@@ -52,8 +59,8 @@ module Synapse.Backend.Discovery
   , pingBackend
   , pingBackends
 
-    -- * Registry Registration
-  , registerWithRegistry
+    -- * Stop-Invalidation (Z2H-6 lazy eviction)
+  , deactivateBackend
   ) where
 
 import Data.Aeson (ToJSON, FromJSON, (.:), (.:?), withObject)
@@ -61,18 +68,16 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.KeyMap as KM
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Read as TR
 import GHC.Generics (Generic)
 import Control.Exception (catch, SomeException)
 import Data.Either (isRight)
-import Control.Concurrent.Async (mapConcurrently, race, async, wait)
+import Control.Concurrent.Async (mapConcurrently, race)
 import Control.Concurrent (threadDelay)
-import Data.IORef (newIORef, writeIORef, readIORef)
-import Control.Monad (void)
 import Plexus.Client (SubstrateConfig(..))
 import qualified Plexus.Transport as ST
 import Plexus.Types (PlexusStreamItem(..), TransportError(..))
-import qualified Synapse.Log as Log
-import qualified System.IO as IO
+import System.Environment (lookupEnv)
 
 -- ============================================================================
 -- Backend Type
@@ -326,7 +331,9 @@ queryBackendImpl host port backendName name = do
       -- Extract content from stream items
       let contents = [c | StreamData _ _ _ c <- items]
       let events = [e | Aeson.Success e <- map Aeson.fromJSON contents]
-      case [b | BackendEvent (Just b) <- events] of
+      -- Z2H-6: deactivated entries (is_active = 0 — deregistered on stop
+      -- or lazily evicted) resolve as not-registered.
+      case [b | BackendEvent (Just b) <- events, rbiIsActive b] of
         (info:_) -> pure $ Just (convertBackend info)
         []       -> pure Nothing
 
@@ -371,37 +378,115 @@ pingBackends :: [Backend] -> IO [Backend]
 pingBackends backends = mapConcurrently pingBackend backends
 
 -- ============================================================================
--- Registry Registration
+-- Registry Endpoint (Z2H-6)
 -- ============================================================================
 
--- | Register a backend with the registry, if the registry is reachable.
---
--- Called when synapse connects to a backend at a non-default location.
--- Silently does nothing if the registry is unreachable or the call fails.
-registerWithRegistry
+-- | Environment variable naming the registry endpoint, shared with
+-- plexus-transport's boot-time self-registration.
+registryUrlEnvVar :: String
+registryUrlEnvVar = "PLEXUS_REGISTRY_URL"
+
+-- | The registry owns :4444 (ZERO-TO-100 epic decision, 2026-06-10) —
+-- synapse's default connect target and the registry endpoint coincide
+-- out of the box.
+defaultRegistryHost :: Text
+defaultRegistryHost = "127.0.0.1"
+
+defaultRegistryPort :: Int
+defaultRegistryPort = 4444
+
+-- | Resolve the registry endpoint from @PLEXUS_REGISTRY_URL@
+-- (e.g. @ws:\/\/127.0.0.1:4444@ or @host:port@), falling back to
+-- @127.0.0.1:4444@. Malformed values fall back to the default rather
+-- than failing the invocation.
+registryEndpointFromEnv :: IO (Text, Int)
+registryEndpointFromEnv = do
+  mUrl <- lookupEnv registryUrlEnvVar
+  pure $ case mUrl of
+    Nothing -> (defaultRegistryHost, defaultRegistryPort)
+    Just raw -> parseRegistryUrl (T.strip (T.pack raw))
+
+-- | Parse @[ws://]host[:port]@. Exposed indirectly via
+-- 'registryEndpointFromEnv'.
+parseRegistryUrl :: Text -> (Text, Int)
+parseRegistryUrl raw
+  | T.null raw = (defaultRegistryHost, defaultRegistryPort)
+  | otherwise =
+      let noScheme = case T.breakOn "://" raw of
+            (_, rest) | not (T.null rest) -> T.drop 3 rest
+            _                             -> raw
+          noPath = T.takeWhile (/= '/') noScheme
+          (host, portTxt) = case T.breakOnEnd ":" noPath of
+            (h, p) | not (T.null h) -> (T.dropEnd 1 h, p)
+            _                       -> (noPath, "")
+      in case TR.decimal portTxt of
+           Right (p, "") | not (T.null host) -> (host, p)
+           _ | T.null noPath -> (defaultRegistryHost, defaultRegistryPort)
+             | otherwise     -> (noPath, defaultRegistryPort)
+
+-- ============================================================================
+-- Direct (explicit -H/-P) Discovery
+-- ============================================================================
+
+-- | Discovery for an explicit @-H@/@-P@ connect target: the minute-one,
+-- no-registry path (Z2H-S3 §3). Only the @_info@ probe at the target is
+-- consulted; no registry process is required or contacted.
+directDiscovery :: Text -> Int -> BackendDiscovery
+directDiscovery host port = BackendDiscovery
+  { discoverBackends = do
+      mName <- discoverBackendName host port
+      pure $ case mName of
+        Nothing   -> []
+        Just name ->
+          [ Backend
+              { backendName        = name
+              , backendDescription = "Backend at explicit -H/-P target"
+              , backendHost        = host
+              , backendPort        = port
+              , backendVersion     = Nothing
+              , backendReachable   = Nothing
+              }
+          ]
+  , getBackendInfo = \name -> do
+      mName <- discoverBackendName host port
+      pure $ case mName of
+        Just discovered | discovered == name -> Just Backend
+          { backendName        = discovered
+          , backendDescription = "Backend at explicit -H/-P target"
+          , backendHost        = host
+          , backendPort        = port
+          , backendVersion     = Nothing
+          , backendReachable   = Nothing
+          }
+        _ -> Nothing
+  }
+
+-- ============================================================================
+-- Stop-Invalidation (Z2H-6 lazy eviction)
+-- ============================================================================
+
+-- | Deactivate a backend's registry entry (@registry.deregister@):
+-- called when a registry-resolved endpoint fails @_info@ verification —
+-- the SIGKILL/crash half of Z2H-6 stop-invalidation. Best-effort:
+-- returns 'False' when the registry is unreachable or the call fails.
+deactivateBackend
   :: Text   -- ^ Registry host
   -> Int    -- ^ Registry port
-  -> Text   -- ^ Registry backend name (discovered via _info at registry port)
-  -> Text   -- ^ Backend name to register
-  -> Text   -- ^ Backend host
-  -> Int    -- ^ Backend port
-  -> IO ()
-registerWithRegistry registryHost registryPort registryBackend name host port = do
-  let cfg = SubstrateConfig
-        { substrateHost    = T.unpack registryHost
-        , substratePort    = registryPort
-        , substratePath    = "/"
-        , substrateBackend = registryBackend
-        , substrateHeaders = []
-        }
-      params = Aeson.object
-        [ "name"     Aeson..= name
-        , "host"     Aeson..= host
-        , "port"     Aeson..= port
-        , "protocol" Aeson..= ("ws" :: Text)
-        ]
-  -- Fire and forget — don't block the CLI on registry registration
-  void $ async $ do
-    _ <- ST.invokeMethod cfg ["registry"] "register" params
-      `catch` \(_e :: SomeException) -> pure (Left $ NetworkError "Registry unavailable")
-    pure ()
+  -> Text   -- ^ Backend name to deactivate
+  -> IO Bool
+deactivateBackend registryHost registryPort name = do
+  mRegistryNs <- discoverBackendName registryHost registryPort
+  case mRegistryNs of
+    Nothing -> pure False
+    Just registryNs -> do
+      let cfg = SubstrateConfig
+            { substrateHost    = T.unpack registryHost
+            , substratePort    = registryPort
+            , substratePath    = "/"
+            , substrateBackend = registryNs
+            , substrateHeaders = []
+            }
+          params = Aeson.object ["name" Aeson..= name]
+      result <- ST.invokeMethod cfg ["registry"] "deregister" params
+        `catch` \(_e :: SomeException) -> pure (Left $ NetworkError "Registry unavailable")
+      pure (isRight result)

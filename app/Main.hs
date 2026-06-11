@@ -73,7 +73,17 @@ import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.FilePath ((</>))
 import qualified Synapse.Self.Commands as Self
 import qualified Synapse.Self.Command as SelfCmd
-import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscovery, pingBackends, getBackendAt, registerWithRegistry)
+import Synapse.Backend.Discovery
+  ( Backend(..)
+  , BackendDiscovery(..)
+  , registryDiscovery
+  , directDiscovery
+  , registryEndpointFromEnv
+  , registryUrlEnvVar
+  , deactivateBackend
+  , pingBackends
+  , getBackendAt
+  )
 import System.Exit (ExitCode(..), exitWith)
 
 -- ============================================================================
@@ -83,8 +93,9 @@ import System.Exit (ExitCode(..), exitWith)
 -- | Synapse-level options (must appear before backend)
 -- Controls connection settings and output format
 data SynapseOpts = SynapseOpts
-  { soHost          :: Text          -- ^ Registry host for discovery
-  , soPort          :: Int           -- ^ Registry port for discovery
+  { soHost          :: Text          -- ^ Connect-target host (-H)
+  , soPort          :: Int           -- ^ Connect-target port (-P)
+  , soExplicitConn  :: Bool          -- ^ Z2H-6: -H/-P given explicitly → direct connect, registry bypassed
   , soJson          :: Bool          -- ^ Output raw JSON stream items
   , soRaw           :: Bool          -- ^ Output raw content (no templates)
   , soDryRun        :: Bool          -- ^ Show request without sending
@@ -282,41 +293,43 @@ main = do
 
   Log.logDebug logger Log.SubsystemCLI "synapse starting..."
 
-  -- Use specified host/port for registry discovery
-  let discovery = registryDiscovery (soHost opts) (soPort opts)
+  -- Z2H-6 resolution split (Z2H-S3 §3):
+  --   explicit -H/-P  → direct connect target, registry bypassed entirely
+  --   bare name       → resolve through the registry endpoint
+  --                     (PLEXUS_REGISTRY_URL, default ws://127.0.0.1:4444)
+  (regHost, regPort) <- registryEndpointFromEnv
+  let explicit = soExplicitConn opts
+      (probeHost, probePort) =
+        if explicit then (soHost opts, soPort opts) else (regHost, regPort)
+      discovery =
+        if explicit
+          then directDiscovery probeHost probePort
+          else registryDiscovery regHost regPort
 
-  -- Get the backend at the connection point (host:port)
-  -- If it has a registry plugin, that's used for discovering other backends
+  -- Identify whatever backend answers at the probe point (the explicit
+  -- target, or the registry endpoint). Used as the fallback backend for
+  -- backend-less invocations and for the _self legacy path.
   Log.logDebug logger Log.SubsystemDiscovery $
-    "Checking backend at " <> soHost opts <> ":" <> T.pack (show (soPort opts))
+    "Checking backend at " <> probeHost <> ":" <> T.pack (show probePort)
 
-  maybeBackend <- getBackendAt (soHost opts) (soPort opts)
+  maybeBackend <- getBackendAt probeHost probePort
 
   Log.logDebug logger Log.SubsystemDiscovery $
     "Backend check complete: " <> T.pack (show maybeBackend)
   let hostBackend = maybe "plexus" id maybeBackend
 
-  -- Auto-register: if we're connecting to a non-default port, push the
-  -- discovered backend to the registry at the default port (if reachable)
-  let targetPort = soPort opts
-      targetHost = soHost opts
-  when (targetPort /= defaultPort) $ do
-    case maybeBackend of
-      Just name -> do
-        -- Check if the registry is at the default port
-        maybeRegistry <- getBackendAt targetHost defaultPort
-        case maybeRegistry of
-          Just registryName ->
-            registerWithRegistry targetHost defaultPort registryName
-              name targetHost targetPort
-          Nothing -> pure ()
-      Nothing -> pure ()
+  -- NOTE: the pre-Z2H-6 fire-and-forget client-side auto-registration
+  -- that lived here is gone. Backends now register THEMSELVES at boot
+  -- (plexus-transport, Z2H-S3 protocol A); the CLI only reads.
+
+  let mRegistry = if explicit then Nothing else Just (regHost, regPort)
+      runDisc   = runWithDiscovery mRegistry (probeHost, probePort) discovery
 
   case argBackend args of
     Nothing
       -- Suppress banner for data output modes
       | soEmitIR opts || soSchema opts || soJson opts || soRaw opts ->
-          runWithDiscovery discovery hostBackend args
+          runDisc hostBackend args
       | otherwise -> do
           -- No backend specified, show available backends
           TIO.putStr cliHeader
@@ -337,8 +350,8 @@ main = do
           -- the original path through runWithDiscovery.
           if isSelfV4Invocation (argPath args)
             then runSelfV4 (argPath args)
-            else runWithDiscovery discovery hostBackend args
-      | otherwise -> runWithDiscovery discovery backend args
+            else runDisc hostBackend args
+      | otherwise -> runDisc backend args
 
 -- | Legacy @_self@ subcommands that predate SELF-4. These keep their
 -- original dispatch path through 'Synapse.Self.Commands.dispatch'.
@@ -387,9 +400,14 @@ printBackend b = do
              else " - " <> backendDescription b
   TIO.putStrLn $ "  " <> nameField <> hostPort <> status <> desc
 
--- | Run a Hub command with backend discovery
-runWithDiscovery :: BackendDiscovery -> Text -> Args -> IO ()
-runWithDiscovery discovery backendName args = do
+-- | Run a Hub command with backend discovery.
+--
+-- @mRegistry@ is @Just (regHost, regPort)@ when resolving through the
+-- registry (bare-name invocation) and @Nothing@ on the explicit @-H/-P@
+-- direct path. @(probeHost, probePort)@ is the point we probed: the
+-- explicit target, or the registry endpoint.
+runWithDiscovery :: Maybe (Text, Int) -> (Text, Int) -> BackendDiscovery -> Text -> Args -> IO ()
+runWithDiscovery mRegistry (probeHost, probePort) discovery backendName args = do
   let opts = argOpts args
   -- Try to discover backend info
   maybeBackend <- getBackendInfo discovery backendName
@@ -402,40 +420,64 @@ runWithDiscovery discovery backendName args = do
       actualName <- getBackendAt (backendHost backend) (backendPort backend)
       case actualName of
         Just name | name /= backendName -> do
+          -- Z2H-6 lazy eviction: a registry entry that resolves to an
+          -- endpoint now serving a DIFFERENT backend is stale — flip it
+          -- inactive so the next resolve fails fast.
+          evictionNote <- evictStaleEntry
           hPutStrLn stderr $ "Backend mismatch: requested '" <> T.unpack backendName
             <> "' but " <> T.unpack (backendHost backend) <> ":" <> show (backendPort backend)
             <> " identifies as '" <> T.unpack name <> "'"
+            <> evictionNote
           exitFailure
-        Nothing -> do
-          -- Protocol handshake failed when verifying backend
-          logger <- makeLoggerFromOpts opts
-          env <- buildEnv (soHost opts) (soPort opts) backendName logger opts
-          result <- runSynapseM env (throwBackend (ProtocolHandshakeFailed (backendHost backend) (backendPort backend)) [])
-          case result of
-            Left err -> do
-              hPutStrLn stderr $ renderError err
-              exitFailure
-            Right () -> exitSuccess
+        Nothing -> case mRegistry of
+          Just _ -> do
+            -- Z2H-6 lazy eviction (the SIGKILL/crash half of
+            -- stop-invalidation): the registry resolved a backend whose
+            -- endpoint no longer answers _info. Deactivate the entry and
+            -- error actionably.
+            evictionNote <- evictStaleEntry
+            hPutStrLn stderr $ "Backend '" <> T.unpack backendName
+              <> "' is registered at " <> T.unpack (backendHost backend) <> ":"
+              <> show (backendPort backend) <> " but unreachable (did it crash?)."
+              <> evictionNote
+              <> "\n\nTo fix: start the backend — it re-registers itself at startup."
+            exitFailure
+          Nothing -> do
+            -- Direct path: protocol handshake failed when verifying backend
+            logger <- makeLoggerFromOpts opts
+            env <- buildEnv probeHost probePort backendName logger opts
+            result <- runSynapseM env (throwBackend (ProtocolHandshakeFailed (backendHost backend) (backendPort backend)) [])
+            case result of
+              Left err -> do
+                hPutStrLn stderr $ renderError err
+                exitFailure
+              Right () -> exitSuccess
         Just _ ->
           -- Match confirmed
           run backendName (backendHost backend) (backendPort backend) args
     Nothing -> do
-      -- Backend not found in registry - check if this was a direct connection attempt
-      -- where the protocol handshake failed
-      maybeDirectBackend <- getBackendAt (soHost opts) (soPort opts)
+      -- Backend not resolved (not at the probe point; in registry mode,
+      -- also not registered). Distinguish handshake failure from a true
+      -- not-registered miss.
+      maybeDirectBackend <- getBackendAt probeHost probePort
       logger <- makeLoggerFromOpts opts
-      env <- buildEnv (soHost opts) (soPort opts) backendName logger opts
+      env <- buildEnv probeHost probePort backendName logger opts
       case maybeDirectBackend of
-        Nothing -> do
-          -- Protocol handshake failed at the specified host:port
-          result <- runSynapseM env (throwBackend (ProtocolHandshakeFailed (soHost opts) (soPort opts)) [])
+        Nothing | mRegistry == Nothing -> do
+          -- Protocol handshake failed at the explicit host:port
+          result <- runSynapseM env (throwBackend (ProtocolHandshakeFailed probeHost probePort) [])
           case result of
             Left err -> do
               hPutStrLn stderr $ renderError err
               exitFailure
             Right () -> exitSuccess
-        Just discoveredName | discoveredName /= backendName -> do
-          -- Backend exists but has a different name
+        Just discoveredName | discoveredName == backendName ->
+          -- Backend discovered successfully - should not reach here, but proceed
+          run backendName probeHost probePort args
+        _ -> do
+          -- Z2H-6: not registered (or, in registry mode, registry down) —
+          -- actionable error naming the registration step (rendered by
+          -- the BackendNotFound case of renderError).
           backends <- discoverBackends discovery
           backendsWithStatus <- pingBackends backends
           result <- runSynapseM env (throwBackend (BackendNotFound backendName) backendsWithStatus)
@@ -444,9 +486,18 @@ runWithDiscovery discovery backendName args = do
               hPutStrLn stderr $ renderError err
               exitFailure
             Right () -> exitSuccess
-        Just _ -> do
-          -- Backend discovered successfully - should not reach here, but proceed
-          run backendName (soHost opts) (soPort opts) args
+  where
+    -- Deactivate the requested name's registry entry (registry mode only).
+    -- Returns a note for the error message; never fails the invocation.
+    evictStaleEntry :: IO String
+    evictStaleEntry = case mRegistry of
+      Nothing -> pure ""
+      Just (regHost, regPort) -> do
+        evicted <- deactivateBackend regHost regPort backendName
+        pure $ if evicted
+          then "\nThe stale registry entry for '" <> T.unpack backendName
+            <> "' has been deactivated."
+          else ""
 
 -- | Run a Hub command with specified backend and connection details
 run :: Text -> Text -> Int -> Args -> IO ()
@@ -865,7 +916,14 @@ renderError = \case
   BackendError errorType backends ->
     case errorType of
       BackendNotFound name ->
-        "Backend not found: '" <> T.unpack name <> "'"
+        "Backend not found: '" <> T.unpack name <> "' is not registered.\n\n"
+        <> "Backends self-register with the registry when they start (Z2H-6).\n"
+        <> "To fix:\n"
+        <> "  - start the backend: it registers itself at startup\n"
+        <> "    (registry endpoint: $" <> registryUrlEnvVar
+        <> ", default ws://127.0.0.1:4444)\n"
+        <> "  - or connect directly, bypassing the registry:\n"
+        <> "    synapse -H <host> -P <port> " <> T.unpack name <> " ..."
         <> renderBackendList backends
       BackendUnreachable name ->
         "Backend unreachable: '" <> T.unpack name <> "'"
@@ -1135,14 +1193,16 @@ argsParser = Args <$> optsParser <*> backendParser <*> restParser
 
 optsParser :: Parser SynapseOpts
 optsParser = do
-  soHost <- T.pack <$> strOption
+  -- Z2H-6: -H/-P are the DIRECT connect target. When either is given,
+  -- the registry is bypassed entirely (the minute-one, no-registry
+  -- path). When neither is given, backend names resolve through the
+  -- registry endpoint (PLEXUS_REGISTRY_URL, default ws://127.0.0.1:4444).
+  mHost <- optional $ T.pack <$> strOption
     ( long "host" <> short 'H' <> metavar "HOST"
-   <> value (T.unpack defaultHost)
-   <> help "Registry/discovery host (default: 127.0.0.1)" )
-  soPort <- option auto
+   <> help "Connect directly to HOST, bypassing the registry (default: resolve via registry)" )
+  mPort <- optional $ option auto
     ( long "port" <> short 'P' <> metavar "PORT"
-   <> value defaultPort
-   <> help "Registry/discovery port (default: 4444)" )
+   <> help "Connect directly to PORT, bypassing the registry (default: resolve via registry)" )
   soJson <- switch
     ( long "json" <> short 'j'
    <> help "Output raw JSON stream items" )
@@ -1200,7 +1260,10 @@ optsParser = do
   soNoDeprecationWarnings <- switch
     ( long "no-deprecation-warnings"
    <> help "Suppress invocation-time deprecation warnings on stderr (IR-15)" )
-  pure SynapseOpts{..}
+  pure (let soHost         = maybe defaultHost id mHost
+            soPort         = maybe defaultPort id mPort
+            soExplicitConn = isJust mHost || isJust mPort
+        in SynapseOpts{..})
 
 -- | Parse a KEY=VALUE pair (used by --cookie/--header). Treats the first '='
 -- as the separator; everything before is the key, everything after is the value.
