@@ -44,22 +44,19 @@ pub enum EchoEvent {
 // The activation
 pub struct Echo;
 
-#[plexus_macros::hub_methods(
+#[plexus_macros::activation(
     namespace = "echo",
     version = "1.0.0",
     description = "Echo messages back"
 )]
 impl Echo {
-    #[plexus_macros::hub_method(
-        description = "Echo a message back the specified number of times",
-        params(
-            message = "The message to echo",
-            count = "Number of times to repeat (default: 1)"
-        )
-    )]
+    /// Echo a message back the specified number of times.
+    #[plexus_macros::method]
     async fn echo(
         &self,
+        /// The message to echo
         message: String,
+        /// Number of times to repeat
         count: u32,
     ) -> impl Stream<Item = EchoEvent> + Send + 'static {
         stream! {
@@ -72,12 +69,11 @@ impl Echo {
         }
     }
 
-    #[plexus_macros::hub_method(
-        description = "Echo a message once",
-        params(message = "The message to echo")
-    )]
+    /// Echo a message once.
+    #[plexus_macros::method]
     async fn once(
         &self,
+        /// The message to echo
         message: String,
     ) -> impl Stream<Item = EchoEvent> + Send + 'static {
         stream! {
@@ -87,16 +83,21 @@ impl Echo {
 }
 ```
 
+(`#[activation]` / `#[method]` are the current macro names — older docs say
+`hub_methods` / `hub_method`; see `docs/MACRO_NAMING.md` for the mapping.
+Doc comments on the method and each parameter become the schema
+descriptions.)
+
 The macro generates the JSON-RPC server, `Activation` trait impl, method enum, and JSON Schemas — all from the function signatures and `JsonSchema` derives. Register it with the hub:
 
 ```rust
-let hub = DynamicHub::new("substrate")
-    .register(Echo::new())
-    .register(Health::new())
-    .register(Cone::new());
+// The hub root name ("echo_hub") is the backend identifier you type first
+// at the CLI. It must differ from every registered activation's namespace —
+// registration panics on a collision (Z2H-8).
+let hub = Arc::new(DynamicHub::new("echo_hub").register(Echo));
 ```
 
-That's the entire backend. No route tables, no handler boilerplate, no schema files.
+That's the entire backend. No route tables, no handler boilerplate, no schema files. (This exact backend ships as `examples/echo.rs` in [plexus-rpc](../plexus-rpc/) — `cargo run --example echo`.)
 
 ### 2. Call it from Synapse
 
@@ -105,105 +106,122 @@ That's the entire backend. No route tables, no handler boilerplate, no schema fi
 cd synapse && cabal install
 
 # Synapse discovers the echo activation and its methods automatically
-$ synapse substrate echo once --message "hello"
-message: hello
+$ synapse echo_hub echo once --message "hi"
 count: 1
+event: echo
+message: hi
 
-$ synapse substrate echo echo --message "hello" --count 3
-message: hello
+$ synapse echo_hub echo echo --message "hello" --count 3
 count: 1
-
+event: echo
 message: hello
 count: 2
-
+event: echo
 message: hello
 count: 3
+event: echo
+message: hello
 ```
 
-Every method you add to the Rust backend is immediately available as a CLI command. The parameter names, types, descriptions, and validation all come from the schema.
+Every method you add to the Rust backend is immediately available as a CLI command. The parameter names, types, descriptions, and validation all come from the schema. (Path shape: `echo_hub` is the backend — the hub root — then activation `echo`, then the method.)
 
 ### 3. See what's on the wire
 
+Options go **before** the backend/path:
+
 ```bash
 # Dry-run: show the JSON-RPC request without sending
-$ synapse --dry-run substrate echo echo --message "hello" --count 3
-{"method":"echo.echo","params":{"message":"hello","count":3}}
+$ synapse --dry-run echo_hub echo echo --message "hello" --count 3
+{"id":1,"jsonrpc":"2.0","method":"echo_hub.call","params":{"method":"echo.echo","params":{"count":3,"message":"hello"}}}
 
 # JSON mode: see the raw stream items
-$ synapse --json substrate echo echo --message "hello" --count 3
-{"type":"data","content":{"event":"echo","message":"hello","count":1}}
-{"type":"data","content":{"event":"echo","message":"hello","count":2}}
-{"type":"data","content":{"event":"echo","message":"hello","count":3}}
-{"type":"complete"}
+$ synapse --json echo_hub echo echo --message "hello" --count 2
+{"content":{"count":1,"event":"echo","message":"hello"},"content_type":"echo.echo","metadata":{...},"type":"data"}
+{"content":{"count":2,"event":"echo","message":"hello"},"content_type":"echo.echo","metadata":{...},"type":"data"}
+{"metadata":{...},"type":"done"}
 
 # Fetch the JSON Schema for the activation
-$ synapse --schema substrate echo
-{"namespace":"echo","methods":[...]}
+$ synapse --schema echo_hub echo
+{"namespace":"echo","version":"1.0.0","description":"Echo messages back","methods":[...]}
 ```
 
 ## The Registry
 
-Plexus backends register themselves with a **registry** — a central service that tracks what's running and where. Synapse talks to the registry by default (at `localhost:4444`), so you never need to know host:port pairs for individual backends. You just use the backend by name:
+Plexus backends register themselves with a **registry** — a central service that tracks what's running and where. Since Z2H-6, registration is **server-side**: a backend built on current `plexus-transport` registers itself (name/host/port) at boot with the registry named by `PLEXUS_REGISTRY_URL` (default `ws://127.0.0.1:4444`), deregisters on SIGTERM, and entries that stop answering are lazily evicted when synapse fails to verify them. Opt a service out with `PLEXUS_NO_REGISTRY=1` or `.without_registry()`.
+
+Synapse resolves bare backend names through the same endpoint, so you never need host:port pairs for registered backends:
 
 ```bash
-# This just works — the registry resolves "substrate" to its host:port
-synapse substrate echo once --message "hello"
+# This just works — the registry resolves "zechodev" to its host:port
+synapse zechodev greeter greet --name World
 ```
 
-When you run `synapse` with no arguments, it queries the registry and lists everything available:
+Two escape hatches:
+
+- **Explicit target**: `synapse -H <host> -P <port> <backend> …` connects directly; no registry is consulted or required.
+- **No registry at all**: if the backend itself sits on the registry endpoint's port (the out-of-the-box `:4444` case), synapse probes its `_info` and matches the name — bare invocation works with zero registry processes.
+
+When a name doesn't resolve, synapse lists what the registry knows:
 
 ```bash
-$ synapse
+$ synapse nosuch greeter greet
+Backend not found: 'nosuch' is not registered.
+
+Backends self-register with the registry when they start (Z2H-6).
+...
 Available backends:
-  substrate      127.0.0.1:4444 [OK]
-  lforge         127.0.0.1:4447 [OK]
-  secrets        127.0.0.1:4446 [OK]
+  zechodev       127.0.0.1:4454 [OK]
+  ...
 ```
 
-If your backend isn't showing up, it needs to register with the registry. Synapse also auto-registers backends it connects to directly — so if you point at a non-default port once, it becomes available by name for future calls:
+(`synapse` with no arguments prints the usage banner, not this list — the backend listing appears on resolution failure, or scan for live ports with `synapse _self scan`.)
 
-```bash
-# Direct connection (also registers with the registry at :4444)
-synapse -P 4447 lforge hyperforge repos_list --org juggernaut
+Synapse does **not** auto-register backends it connects to with `-P` — client-side auto-registration was removed in Z2H-6. Registration belongs to the service's own boot path.
 
-# Now this works without -P
-synapse lforge hyperforge repos_list --org juggernaut
-```
-
-The key mental model: **don't think in terms of hosts and ports.** Register your backends, then use them by name. The registry is the source of truth.
+The key mental model: **don't think in terms of hosts and ports.** Backends register themselves; use them by name. The registry is the source of truth.
 
 ## Progressive Discovery
 
-Once you're connected, just start typing. Synapse navigates the backend like a filesystem — each level shows what's available, so you never need external docs:
+Once you're connected, just start typing. Each level of the path shows what's available, so you never need external docs:
 
 ```bash
-# What can substrate do?
-$ synapse substrate
-  arbor               Tree-structured conversation storage
-  bash                Execute bash commands
-  cone                Conversational AI sessions
-  echo                Echo messages back
-  health              Health check endpoint
+# What methods does the echo activation have?
+$ synapse echo_hub echo
+echo v1.0.0
 
-# What methods does echo have?
-$ synapse substrate echo
-  echo                Echo a message back the specified number of times
-  once                Echo a message once
+  Echo messages back
 
-# What does cone chat need? (auto-help when required params are missing)
-$ synapse substrate cone chat
-chat - Conversational interaction with a cone
+methods
 
-  --identifier.type <string> (required)
-      Discriminator for cone lookup (by_id, by_name)
+  echo         Echo a message back the specified number of times.
+              --count <integer>    Number of times to repeat
+              --message <string>   The message to echo
 
-  --identifier.name <string> (required if type=by_name)
-  --prompt <string> (required)
-      User message to send
+  once         Echo a message once.
+              --message <string>   The message to echo
+
+# What does echo.echo need? (auto-help when required params are missing)
+$ synapse echo_hub echo echo
+echo.echo
+
+Echo a message back the specified number of times.
+
+Parameters:
+
+  --count <uint32>  (required)
+    Number of times to repeat
+
+  --message <string>  (required)
+    The message to echo
 
 # Inspect the raw JSON Schema for an activation
-$ synapse --schema substrate cone
+$ synapse --schema echo_hub echo
 ```
+
+Note: `synapse <backend>` with *no* path currently prints the global usage
+banner rather than listing the backend's activations. To see the top level,
+use `synapse --schema <backend>`, or give any path — an unknown one lists the
+available methods and child plugins (see Error Messages).
 
 ## Parameters
 
@@ -287,7 +305,8 @@ This is the standard tradeoff for "shell out to `security`" tools (cargo, gcloud
 ### Managing defaults: the `_self` subcommand
 
 ```bash
-# Inspect current state — decodes JWTs, flags expired tokens
+# Inspect current state — decodes JWTs, flags expired tokens,
+# shows OIDC login status / tenant / refresh-token presence
 synapse _self <backend> show
 
 # Set a value (auto-wrapped as literal: unless you provide a scheme)
@@ -308,7 +327,29 @@ synapse _self <backend> unset cookie access_token
 synapse _self <backend> clear --yes
 ```
 
-`show` decodes JWT-shaped values and prints `alg`, `kid`, `iss`, `aud`, `sub`, `exp` (with human-relative rendering like `"expired 15d 23h ago"` or `"valid for 4m 32s"`), `iat`, `preferred_username`, `email`. Signatures are never printed.
+`show` decodes JWT-shaped values and prints `alg`, `kid`, `iss`, `aud`, `sub`, `exp` (with human-relative rendering like `"expired 15d 23h ago"` or `"valid for 4m 32s"`), `iat`, `preferred_username`, `email`. Signatures are never printed. Note that `show` and `resolve` print resolved `literal:` values in full — treat their output as sensitive.
+
+Keychain **write** verbs (`set-secret`, `upgrade-to-keychain`, `import-token --to-keychain`) parse but return a friendly "requires SELF-8" error until the keychain write path ships; `keychain://` **reads** resolve today on macOS via the `security` CLI.
+
+### Login lifecycle (OIDC)
+
+The `_self` tree also owns the OIDC login lifecycle (UT-3) — no more JWT plumbing through `-t`:
+
+```bash
+# Password grant against the backend's IdP; stores access + refresh tokens
+synapse _self <backend> login
+
+# Refresh the access token now via the stored refresh token
+synapse _self <backend> refresh
+
+# Show or select the tenant/organization for this backend
+synapse _self <backend> tenant
+
+# Clear stored access/refresh tokens (keeps other defaults)
+synapse _self <backend> logout
+```
+
+After `login`, ordinary invocations are hands-off: when the stored access token is expired, synapse **transparently refreshes** it via the stored refresh token before the call (an INFO log notes the refresh). If auto-refresh fails, the call proceeds with the stale token and a warning names the failure and suggests `synapse _self <backend> login`.
 
 ### Per-invocation overrides
 
@@ -353,7 +394,18 @@ synapse --json substrate health check
 {"type":"data","content":{"status":"healthy","uptime":12345}}
 ```
 
-Templates are resolved in order: `.substrate/templates/{namespace}/{method}.mustache` (project-local) → `~/.config/synapse/templates/` (user) → YAML-like fallback.
+Templates are resolved in order: `.substrate/templates/{namespace}/{method}.mustache` (project-local) → `~/.config/synapse/templates/{namespace}/{method}.mustache` (user) → YAML-like fallback.
+
+> **Hazard — stale user templates silently swallow output.** A user template
+> wins over the schema-aware fallback by *namespace/method name alone*, even
+> if it was generated against an old version of the backend — or a different
+> backend whose activation happens to share the namespace (`echo` is the
+> classic). A stale template whose section names no longer match the event
+> shape renders **empty output**: the call succeeds, `--json` shows the
+> events, human mode prints nothing. If a command streams data under
+> `--json` but prints nothing without it, look in
+> `~/.config/synapse/templates/<namespace>/` and delete or regenerate the
+> stale templates. See [Troubleshooting](#troubleshooting).
 
 Generate templates from the schema:
 
@@ -366,34 +418,35 @@ synapse --generate-templates substrate
 Synapse emits a structured Intermediate Representation for building typed clients:
 
 ```bash
-$ synapse --emit-ir substrate > substrate.ir.json
+$ synapse --emit-ir echo_hub > echo_hub.ir.json
 ```
+
+Top-level keys: `irBackend`, `irHash`, `irVersion`, `irMetadata` (generator
+tool/version, timestamp), `irPlugins` / `irPluginHashes` / `irPluginRequests`,
+`irTypes`, `irMethods`. Trimmed excerpt:
 
 ```json
 {
+  "irBackend": "echo_hub",
   "irVersion": "2.0",
   "irTypes": {
     "echo.EchoEvent": {
-      "tdKind": {
-        "tag": "KindEnum",
-        "keDiscriminator": "event",
-        "keVariants": [
-          {"vdName": "echo", "vdFields": [
-            {"fdName": "message", "fdType": {"tag": "RefPrimitive", "contents": ["string", null]}},
-            {"fdName": "count", "fdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}}
-          ]}
-        ]
-      }
+      "tdName": "EchoEvent",
+      "tdNamespace": "echo",
+      "tdKind": {"tag": "KindEnum", "keDiscriminator": "type", "keVariants": ["..."]}
     }
   },
   "irMethods": {
     "echo.echo": {
-      "mdStreaming": true,
+      "mdName": "echo",
+      "mdNamespace": "echo",
+      "mdFullPath": "echo.echo",
+      "mdDescription": "Echo a message back the specified number of times.",
       "mdParams": [
-        {"pdName": "message", "pdType": {"tag": "RefPrimitive", "contents": ["string", null]}, "pdRequired": true},
-        {"pdName": "count", "pdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}, "pdRequired": true}
+        {"pdName": "count", "pdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}, "pdRequired": true, "pdDescription": "Number of times to repeat"},
+        {"pdName": "message", "pdType": {"tag": "RefPrimitive", "contents": ["string", null]}, "pdRequired": true, "pdDescription": "The message to echo"}
       ],
-      "mdReturns": {"tag": "RefNamed", "contents": ["echo", "EchoEvent"]}
+      "mdReturns": {"tag": "RefNamed", "contents": {"qnNamespace": "echo", "qnLocalName": "EchoEvent"}}
     }
   }
 }
@@ -406,7 +459,9 @@ Types are deduplicated by content hash across namespaces. Streaming is inferred 
 [**synapse-cc**](../synapse-cc/) (Synapse Compiler Collection) is a separate project that consumes Synapse's IR to produce typed client libraries. It imports plexus-synapse as a library, generates IR from a live backend, pipes it through [hub-codegen](../hub-codegen/) (a stateless Rust code generator), then handles merging, dependencies, building, and testing.
 
 ```bash
-synapse-cc init                    # scaffold synapse.config.json
+synapse-cc init [backend]          # scaffold synapse.config.json (backend
+                                   #   inferred from a co-located service
+                                   #   crate or the registry when omitted)
 synapse-cc build                   # generate typed client from config
 synapse-cc watch substrate         # rebuild on schema changes
 ```
@@ -426,20 +481,21 @@ Three-way merge preserves user edits across regeneration. See the [synapse-cc ar
 ## Error Messages
 
 ```bash
-$ synapse substrate invalid-plugin
-Command not found: 'invalid-plugin' at substrate
+$ synapse echo_hub invalid-plugin
+Command not found: 'invalid-plugin' at root
 
-Available at substrate:
+Available commands:
+
   Methods:
-    schema              - Get schema information
-    health              - Health check endpoint
+    call                Route a call to a registered activation
+    hash                Get plexus configuration hash (from the recursive schema)
+    hashes              Get plugin hashes for cache validation
+    schema              Get plugin or method schema. Pass {"method": "name"} for a specific method.
 
   Child plugins:
-    arbor               - Tree-structured conversation storage
-    bash                - Execute bash commands
-    cone                - Conversational AI sessions
+    echo                Echo messages back
 
-$ synapse substrate cone chat --mesage "hello"
+$ synapse echo_hub echo echo --mesage "hello" --count 1
 Unknown parameter: --mesage
 
 Did you mean: --message?
@@ -447,64 +503,61 @@ Did you mean: --message?
 
 ## Debugging & Testing
 
-Synapse provides built-in tools for debugging connections and validating protocol compliance.
-
-### Connection Debugging
-
-Test the complete connection stack (TCP → HTTP → WebSocket → RPC):
-
-```bash
-synapse _self debug localhost 5001 substrate
-```
-
-This tests each layer sequentially:
-- **TCP**: Can we reach the port?
-- **HTTP**: Does the server respond to HTTP?
-- **WebSocket**: Can we upgrade to WebSocket?
-- **RPC**: Can we call `_info`?
-
-### Protocol Validation
-
-Run the full protocol compliance test suite:
-
-```bash
-synapse _self validate localhost 5001 substrate
-```
-
-This calls the `_debug.*` endpoints (enabled with `PLEXUS_DEBUG=true` on the server) and validates:
-- StreamDone messages are sent
-- Metadata structure is correct
-- Field naming follows conventions
-- Progress percentages are in range
-
-### Test Arbitrary Methods
-
-Test any method with protocol validation:
-
-```bash
-# Use CLI flags for connection settings
-synapse -P 5001 _self test substrate.ping.pong --message "test"
-
-# Test with schema validation
-synapse -P 5001 _self test substrate.echo.echo --message "hello" --count 3
-
-# Allow unknown parameters (warns but passes through)
-synapse -P 5001 _self test --allow-unknown substrate.echo.echo --fake "value"
-
-# Use raw JSON (skips schema validation)
-synapse -P 5001 _self test --raw '{"message":"hello"}' substrate.echo.echo
-```
-
-**Important**: Connection settings come from `-H`/`--host` (default: `127.0.0.1`) and `-P`/`--port` (default: `4444`) flags, not positional arguments. This ensures the test uses the same connection that discovery validated.
-
 ### Port Scanning
 
-Discover backends running on common ports:
+Discover backends running on the conventional port range:
 
 ```bash
-synapse _self scan
-# Scans ports 4440-4459 for Plexus backends
+$ synapse _self scan
+Scanning 127.0.0.1 ports 4440-4459 for backends...
+
+Found 4 backend(s):
+
+  4452  zecho
+  4453  registry-hub
+  4454  zechodev
+  4455  echo_hub
 ```
+
+### Legacy debug verbs
+
+`synapse _self debug|validate|test …` (layer-by-layer connection debugging
+and protocol compliance checks) still parse, but are currently unreliable:
+`debug` mis-parses IPv4 literals (`127.0.0.1` is read as host `127`, port
+`0`) and `localhost` resolves to `::1` on dual-stack machines while most
+backends bind only `127.0.0.1`. Until that's fixed, prefer:
+
+```bash
+# Is the method reachable and answering? (raw stream items)
+synapse --json -P <port> <backend> <activation> <method> --param value
+
+# What would be sent? (no connection needed)
+synapse --dry-run -P <port> <backend> <activation> <method> --param value
+```
+
+## Troubleshooting
+
+### A call "succeeds" but prints nothing
+
+If `synapse --json …` streams data items but the same invocation without
+`--json` prints nothing, a **stale user template** is swallowing the output.
+Templates in `~/.config/synapse/templates/<namespace>/<method>.mustache` win
+over the schema-aware fallback by name alone — including templates generated
+long ago against a different backend that happens to use the same activation
+namespace (`echo` is the classic collision). A template whose section names
+no longer match the event shape renders empty output, silently.
+
+Fix: inspect `~/.config/synapse/templates/<namespace>/`, delete the stale
+files (the YAML-like fallback returns immediately), or regenerate with
+`synapse --generate-templates <backend>`.
+
+### Bare backend name doesn't resolve
+
+`Backend not found: '<name>' is not registered` — the backend either isn't
+running, didn't self-register (older `plexus-transport`, or
+`PLEXUS_NO_REGISTRY=1`), or registered with a different registry than the one
+synapse is querying (`PLEXUS_REGISTRY_URL`, default `ws://127.0.0.1:4444`).
+Connect directly with `-H <host> -P <port>` to bypass the registry entirely.
 
 ## Architecture
 
