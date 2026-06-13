@@ -378,10 +378,17 @@ main = do
           -- SELF-4 verbs (synapse _self <backend> <verb>) dispatch through
           -- a dedicated parser on the raw argPath. Legacy _self
           -- subcommands (template / scan / debug / validate / test) keep
-          -- the original path through runWithDiscovery.
+          -- the original path through runWithDiscovery — EXCEPT the
+          -- purely-local ones (template / scan / help), which are
+          -- short-circuited straight to the local dispatcher BEFORE any
+          -- backend discovery (defect C2). Resolving a "plexus" backend
+          -- over the network for a local-only command was both wrong and
+          -- a needless failure point.
           if isSelfV4Invocation (argPath args)
             then runSelfV4 (argPath args)
-            else runDisc hostBackend args
+            else if isLocalOnlySelfCommand (argPath args)
+              then runSelfLegacyLocal probeHost probePort hostBackend opts args
+              else runDisc hostBackend args
       | otherwise -> runDisc backend args
 
 -- | Legacy @_self@ subcommands that predate SELF-4. These keep their
@@ -403,6 +410,38 @@ legacySelfSubcommands =
 isSelfV4Invocation :: [Text] -> Bool
 isSelfV4Invocation []          = False  -- No args at all: legacy help.
 isSelfV4Invocation (first : _) = first `notElem` legacySelfSubcommands
+
+-- | Legacy @_self@ subcommands that are purely local — they never touch
+-- a backend (defect C2). @template@ is CRUD over local files; @scan@
+-- probes ports the user names; help just prints text. These must NOT go
+-- through 'runWithDiscovery' (which would resolve a "plexus" backend
+-- over the network first). @debug@ / @validate@ / @test@ are NOT here:
+-- they intentionally contact a host/port.
+localOnlySelfSubcommands :: [Text]
+localOnlySelfSubcommands = ["template", "scan", "--help", "-h"]
+
+-- | True when the legacy @_self@ invocation is a purely-local command
+-- (see 'localOnlySelfSubcommands'). An empty arg list is the legacy help
+-- path, which is also local.
+isLocalOnlySelfCommand :: [Text] -> Bool
+isLocalOnlySelfCommand []          = True  -- bare `_self`: local help
+isLocalOnlySelfCommand (first : _) = first `elem` localOnlySelfSubcommands
+
+-- | Run a purely-local legacy @_self@ command without contacting any
+-- backend (defect C2). Builds an env pointed at the probe endpoint (so
+-- @scan@'s @asks seHost@ still works) and dispatches directly, skipping
+-- 'runWithDiscovery' entirely.
+runSelfLegacyLocal :: Text -> Int -> Text -> SynapseOpts -> Args -> IO ()
+runSelfLegacyLocal host port backend opts args = do
+  logger <- makeLoggerFromOpts opts
+  env <- buildEnv host port backend logger opts
+  rendererCfg <- defaultRendererConfig
+  result <- runSynapseM env (dispatch args rendererCfg)
+  case result of
+    Left err -> do
+      hPutStrLn stderr $ renderError err
+      exitFailure
+    Right () -> exitSuccess
 
 -- | Re-parse the post-@_self@ token stream through the SELF-4
 -- optparse-applicative parser, then run the resulting command.
@@ -552,8 +591,11 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
   -- Check for _self commands first (before anything else)
   case argBackend of
     Just "_self" -> do
-      -- _self meta-command: parse subcommand and rest from argPath
-      let (pathSegs, rawParams, _) = parsePathAndParams argPath
+      -- _self meta-command: parse subcommand and rest from argPath.
+      -- NOTE: legacy _self positionals are NOT dot-split/dash-replaced
+      -- (defect C1). `_self debug 127.0.0.1 4444 foo` must keep the host
+      -- as a single token "127.0.0.1" rather than ["127","0","0","1"].
+      let (pathSegs, rawParams, _) = parseRawPathAndParams argPath
       case pathSegs of
         (subcommand : rest) -> do
           Self.dispatch subcommand rest rawParams
@@ -622,10 +664,11 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                       rootSchema <- navigate []
                       case rootSchema of
                         ViewPlugin schema visited -> do
-                          liftIO $ do
-                            TIO.putStr cliHeader
-                            TIO.putStr "\n\n"
-                            TIO.putStr $ renderSchema schema
+                          -- GAP c8b4555d: `synapse <backend>` (no path) lists the
+                          -- backend's activations — the natural discovery gesture —
+                          -- rather than dumping the global usage banner. Mirrors the
+                          -- non-empty-path ViewPlugin branch below.
+                          liftIO $ TIO.putStr $ renderSchema schema
                           -- SYN-2: live-enumerate dynamic children for the rendered hub
                           renderDynamicChildrenBlock visited schema
                         _ -> pure ()
@@ -855,6 +898,33 @@ parsePathAndParams = go [] [] False
       | otherwise =
           let segments = map (T.replace "-" "_") $ filter (not . T.null) $ T.splitOn "." x
           in go (reverse segments ++ path) params helpReq xs
+
+-- | Like 'parsePathAndParams' but treats every positional as a single
+-- raw token: no dot-splitting and no kebab→snake dash-replacement on
+-- path segments. Used only by the legacy @_self@ path (defect C1) where
+-- positionals are literal values (e.g. an IPv4 host @127.0.0.1@, a port,
+-- a backend name) rather than Plexus RPC path syntax. Flag parsing is
+-- unchanged: @--key value@ / boolean flags / @--help@ behave identically.
+parseRawPathAndParams :: [Text] -> ([Text], [(Text, Text)], Bool)
+parseRawPathAndParams = go [] [] False
+  where
+    go path params helpReq [] = (reverse path, reverse params, helpReq)
+    go path params helpReq (x:xs)
+      | x == "--help" || x == "-h" =
+          go path params True xs
+      | Just key <- T.stripPrefix "--" x
+      , not (T.null key)
+      , (val:rest) <- xs
+      , not (T.isPrefixOf "--" val) =
+          let normalizedKey = T.replace "-" "_" key
+          in go path ((normalizedKey, val) : params) helpReq rest
+      | Just key <- T.stripPrefix "--" x
+      , not (T.null key) =
+          let normalizedKey = T.replace "-" "_" key
+          in go path ((normalizedKey, "") : params) helpReq xs
+      -- Raw positional: keep the whole token (no dot-split, no dash-replace).
+      | otherwise =
+          go (x : path) params helpReq xs
 
 -- | Build JSON object from key-value pairs
 buildParamsObject :: [(Text, Text)] -> Value

@@ -34,6 +34,30 @@ parsePathAndParams = go [] [] False
           let segments = map (T.replace "-" "_") $ filter (not . T.null) $ T.splitOn "." x
           in go (reverse segments ++ path) params helpReq xs
 
+-- Copy of parseRawPathAndParams (the legacy _self variant) for testing.
+-- Identical flag handling, but positionals are kept as whole raw tokens:
+-- no dot-split and no dash-replace (defect C1). Keep in sync with
+-- app/Main.hs.
+parseRawPathAndParams :: [Text] -> ([Text], [(Text, Text)], Bool)
+parseRawPathAndParams = go [] [] False
+  where
+    go path params helpReq [] = (reverse path, reverse params, helpReq)
+    go path params helpReq (x:xs)
+      | x == "--help" || x == "-h" =
+          go path params True xs
+      | Just key <- T.stripPrefix "--" x
+      , not (T.null key)
+      , (val:rest) <- xs
+      , not (T.isPrefixOf "--" val) =
+          let normalizedKey = T.replace "-" "_" key
+          in go path ((normalizedKey, val) : params) helpReq rest
+      | Just key <- T.stripPrefix "--" x
+      , not (T.null key) =
+          let normalizedKey = T.replace "-" "_" key
+          in go path ((normalizedKey, "") : params) helpReq xs
+      | otherwise =
+          go (x : path) params helpReq xs
+
 main :: IO ()
 main = hspec $ do
   describe "parsePathAndParams - hyphen normalization" $ do
@@ -126,3 +150,30 @@ main = hspec $ do
       path `shouldBe` ["test"]
       params `shouldBe` [("verbose", ""), ("dry_run", ""), ("force", "")]
       helpReq `shouldBe` False
+
+  describe "parseRawPathAndParams - legacy _self (defect C1: no dot-split)" $ do
+
+    it "keeps an IPv4 host as a single token (the debug-mangling bug)" $ do
+      -- The plain parser would split 127.0.0.1 into ["127","0","0","1"].
+      let input = ["debug", "127.0.0.1", "4444", "foo"]
+      let (path, params, helpReq) = parseRawPathAndParams input
+      path `shouldBe` ["debug", "127.0.0.1", "4444", "foo"]
+      params `shouldBe` []
+      helpReq `shouldBe` False
+
+    it "does NOT dash-replace positional tokens" $ do
+      let input = ["debug", "my-host.local", "4444", "my-backend"]
+      let (path, _, _) = parseRawPathAndParams input
+      path `shouldBe` ["debug", "my-host.local", "4444", "my-backend"]
+
+    it "still parses --key value flags normally" $ do
+      let input = ["template", "show", "--name", "cone-thing"]
+      let (path, params, helpReq) = parseRawPathAndParams input
+      path `shouldBe` ["template", "show"]
+      params `shouldBe` [("name", "cone-thing")]
+      helpReq `shouldBe` False
+
+    it "contrast: the dot-splitting parser mangles the same IPv4" $ do
+      -- Documents WHY parseRawPathAndParams exists.
+      let (path, _, _) = parsePathAndParams ["debug", "127.0.0.1", "4444", "foo"]
+      path `shouldBe` ["debug", "127", "0", "0", "1", "4444", "foo"]

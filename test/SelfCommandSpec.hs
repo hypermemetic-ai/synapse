@@ -74,6 +74,23 @@ spec = do
       wrapAsLiteralIfNeeded "xyz env://FOO"
         `shouldBe` "literal:xyz env://FOO"
 
+  describe "redactRef (defect B — never print literal: secrets)" $ do
+    it "masks a long literal: body to <first6>...<last4>" $
+      redactRef "literal:supersecretvalue1234567890"
+        `shouldBe` "literal:supers...7890"
+
+    it "fully masks a short literal: body (<= 16 chars)" $
+      redactRef "literal:shortsecret" `shouldBe` "literal:***"
+
+    it "leaves env:// refs untouched (pointer, not a secret)" $
+      redactRef "env://MY_API_KEY" `shouldBe` "env://MY_API_KEY"
+
+    it "leaves file:// refs untouched" $
+      redactRef "file:///etc/token" `shouldBe` "file:///etc/token"
+
+    it "leaves keychain:// refs untouched" $
+      redactRef "keychain://svc/acct" `shouldBe` "keychain://svc/acct"
+
   describe "decodeJwt" $ do
     it "returns Nothing for a non-JWT bare string" $
       decodeJwt "hello-world" `shouldBe` Nothing
@@ -195,7 +212,7 @@ spec = do
               `shouldBe` Just (CredentialRef "env://NONEXISTENT_ENV_SELF4")
 
         -- 2. resolve access_token prints the value.
-        code <- runSelfCommand (CmdResolve backend Cookie "access_token")
+        code <- runSelfCommand (CmdResolve backend Cookie "access_token" False)
         code `shouldBe` ExitSuccess
 
         -- 3. unset removes it.
@@ -233,7 +250,7 @@ spec = do
 
     it "resolve on a missing entry exits non-zero" $
       withTmpHome $ \_tmp -> do
-        code <- runSelfCommand (CmdResolve "ghost" Cookie "nope")
+        code <- runSelfCommand (CmdResolve "ghost" Cookie "nope" False)
         code `shouldBe` ExitFailure 1
 
     it "unset on a missing entry exits non-zero" $

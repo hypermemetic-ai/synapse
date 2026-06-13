@@ -52,6 +52,9 @@ module Synapse.Self.Command
   , knownSchemes
   , wrapAsLiteralIfNeeded
 
+    -- * Secret redaction (exported for testing)
+  , redactRef
+
     -- * JWT inspection (exported for testing)
   , JwtSummary(..)
   , JwtClaim(..)
@@ -158,9 +161,12 @@ data SelfCommand
   | CmdUnset        !Text !SelfKind !Text !Bool !Bool
     -- ^ @unset cookie|header \<name\>@. Flags: @--yes@,
     --   @--no-delete-from-keychain@.
-  | CmdResolve      !Text !SelfKind !Text
-    -- ^ @resolve cookie|header \<name\>@. Prints resolved value to
-    --   stdout; errors to stderr; exits non-zero on failure.
+  | CmdResolve      !Text !SelfKind !Text !Bool
+    -- ^ @resolve cookie|header \<name\> [--reveal]@. The final 'Bool' is
+    --   the @--reveal@ flag: without it, the URI is masked (via
+    --   'redactRef') and the resolved cleartext is NOT printed; with it,
+    --   the raw URI and resolved value are printed. Errors go to stderr;
+    --   exits non-zero on failure.
   | CmdUpgrade      !Text !(Maybe SelfKind) !(Maybe Text)
     -- ^ @upgrade-to-keychain [cookie|header] [\<name\>]@. Friendly error
     --   until SELF-8 regardless of arguments.
@@ -275,7 +281,10 @@ parseSelfCommand =
       <*> nameArg
       <*> switch (long "yes" <> short 'y' <> help "Skip confirmation prompts")
       <*> switch (long "no-delete-from-keychain" <> help "If ref was keychain://, do not attempt to delete the keychain item")
-    resolveCmd = (\k n b -> CmdResolve b k n) <$> kindArg <*> nameArg
+    resolveCmd = (\k n r b -> CmdResolve b k n r)
+      <$> kindArg
+      <*> nameArg
+      <*> switch (long "reveal" <> help "Print the resolved cleartext value (and the raw URI); masked by default")
     upgradeCmd = (\k n b -> CmdUpgrade b k n)
       <$> optional kindArg
       <*> optional nameArg
@@ -325,7 +334,7 @@ runSelfCommand = \case
     | isKeychainPlatform        -> runSetSecret b k n
     | otherwise                 -> keychainUnavailable "set-secret"
   CmdUnset b k n yes noKeychain -> runUnset b k n yes noKeychain
-  CmdResolve b k n              -> runResolve b k n
+  CmdResolve b k n reveal       -> runResolve b k n reveal
   CmdUpgrade b mk mn
     | isKeychainPlatform        -> runUpgrade b mk mn
     | otherwise                 -> keychainUnavailable "upgrade-to-keychain"
@@ -525,10 +534,25 @@ renderSection title es now = do
   TIO.putStrLn $ title <> ":"
   mapM_ (renderShowEntry now) es
 
+-- | Redact a credential-reference URI for display. Only @literal:@ refs
+-- carry the secret in the URI itself; every other scheme (@env://@,
+-- @file://@, @keychain://@, …) is a pointer and is safe to show verbatim.
+--
+-- For a @literal:@ ref, keep the @literal:@ prefix and mask the body: a
+-- body longer than 16 chars becomes @\<first6\>...\<last4\>@ (mirroring
+-- 'Synapse.Self.Jwt.truncateKid'); a shorter body is fully masked to
+-- @***@ so a short secret can't be reconstructed from the visible chars.
+redactRef :: Text -> Text
+redactRef uri = case T.stripPrefix "literal:" uri of
+  Nothing   -> uri
+  Just body
+    | T.length body > 16 -> "literal:" <> T.take 6 body <> "..." <> T.takeEnd 4 body
+    | otherwise          -> "literal:***"
+
 renderShowEntry :: UTCTime -> ShowEntry -> IO ()
 renderShowEntry now ShowEntry{..} = do
   let CredentialRef uri = seRef
-  TIO.putStrLn $ "  " <> seName <> " -> " <> uri <> "  [" <> seResolver <> "]"
+  TIO.putStrLn $ "  " <> seName <> " -> " <> redactRef uri <> "  [" <> seResolver <> "]"
   case seResult of
     Left err -> do
       TIO.putStrLn $ "      x " <> renderResolveErrorText err
@@ -574,7 +598,7 @@ entryToJson ShowEntry{..} =
   let CredentialRef uri = seRef
       base =
         [ "name"     .= seName
-        , "uri"      .= uri
+        , "uri"      .= redactRef uri
         , "resolver" .= seResolver
         ]
       outcome = case seResult of
@@ -711,16 +735,18 @@ promptYesNo prompt defaultYes = do
 -- resolve
 -- ---------------------------------------------------------------------------
 
--- | Implement @resolve@. Prints the URI to stdout (first line) and the
--- resolved value (second line) on success. On failure, the URI still
--- goes to stdout (useful for diagnostics) and the error goes to
--- stderr, with a non-zero exit.
+-- | Implement @resolve@. The URI goes to stdout (first line); on a
+-- successful resolution the value (or a placeholder) goes to stdout
+-- (second line). On failure the URI still prints and the error goes to
+-- stderr with a non-zero exit.
 --
--- Unlike @show@, @resolve@ *does* print the resolved value — this is
--- the command users run when they explicitly want to see the secret
--- (e.g. for comparison, or to pipe into another tool).
-runResolve :: Text -> SelfKind -> Text -> IO ExitCode
-runResolve backend k name = do
+-- Masked by default: without @--reveal@ the printed URI is redacted
+-- (via 'redactRef', so a @literal:@ secret is masked) and the resolved
+-- cleartext is replaced with a placeholder. Pass @--reveal@ to print the
+-- raw URI and the resolved value — the explicit opt-in for when the user
+-- actually wants the secret (e.g. to pipe into another tool).
+runResolve :: Text -> SelfKind -> Text -> Bool -> IO ExitCode
+runResolve backend k name reveal = do
   sd <- loadOrExit backend
   let m = kindMap k sd
   case Map.lookup name m of
@@ -730,11 +756,13 @@ runResolve backend k name = do
         <> "` in backend `" <> backend <> "`."
       pure (ExitFailure 1)
     Just ref@(CredentialRef uri) -> do
-      TIO.putStrLn uri
+      TIO.putStrLn (if reveal then uri else redactRef uri)
       r <- resolveRef defaultRegistry ref
       case r of
         Right val -> do
-          TIO.putStrLn val
+          if reveal
+            then TIO.putStrLn val
+            else TIO.putStrLn "(resolved; pass --reveal to print the value)"
           pure ExitSuccess
         Left err -> do
           TIO.hPutStrLn stderr $ "Error: " <> renderResolveErrorText err
