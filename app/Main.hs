@@ -622,10 +622,11 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                       rootSchema <- navigate []
                       case rootSchema of
                         ViewPlugin schema visited -> do
-                          liftIO $ do
-                            TIO.putStr cliHeader
-                            TIO.putStr "\n\n"
-                            TIO.putStr $ renderSchema schema
+                          -- GAP c8b4555d: `synapse <backend>` (no path) lists the
+                          -- backend's activations — the natural discovery gesture —
+                          -- rather than dumping the global usage banner. Mirrors the
+                          -- non-empty-path ViewPlugin branch below.
+                          liftIO $ TIO.putStr $ renderSchema schema
                           -- SYN-2: live-enumerate dynamic children for the rendered hub
                           renderDynamicChildrenBlock visited schema
                         _ -> pure ()
