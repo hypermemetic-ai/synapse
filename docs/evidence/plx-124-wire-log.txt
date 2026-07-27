@@ -1,0 +1,144 @@
+PLX-124 (M3·E) — live wire evidence, 2026-07-27
+===============================================
+
+Environment
+-----------
+  synapse      plx-124-parity (plx-123-turn-dispatch + plx-143-refetch-scars merged)
+  substrate    plexus-substrate @ 5c630784 (PLX-150 tip), target/debug, 127.0.0.1:4499
+  counting proxy  a websocket relay on :4498 forwarding to :4499 and logging every
+                  client->server JSON-RPC `method` (and the inner `.call` method).
+
+1. Round trips per operation, counted at the proxy
+--------------------------------------------------
+  synapse -H .. -P .. substrate orcha pm            (LEGACY navigation, 3 levels)
+      3 x _info
+      1 x substrate.call -> substrate.schema
+      1 x substrate.call -> orcha.schema
+      1 x substrate.call -> orcha.pm.schema         <- one .schema PER LEVEL
+
+  synapse --connectome substrate                    (whole-tree walk)
+      3 x _info
+     10 x substrate.connectome                      <- 1 document + 9 lazy attempts
+
+  synapse substrate echo echo --message hi --count 1
+      3 x _info
+      1 x substrate.call -> substrate.schema
+      2 x substrate.call -> echo.schema
+      1 x substrate.call -> echo.echo               <- 3 .schema, matching PLX-143's
+                                                       post-scar count (was 4)
+
+  FINDING (inventory item 5): `_info` fires THREE times per CLI invocation, on every
+  path, even when -H/-P are given so the registry is bypassed entirely. Nothing
+  memoises it; Synapse.Cache is schema-only. The inventory said this probe becomes
+  the document's identity field. It has not.
+
+2. The exit gate over the real wire
+-----------------------------------
+  From the walk's own wire log (stderr):
+
+      FETCH lines        : 1     <- ONE document fetch, 1,035,232 bytes
+      LOCAL lines        : 25    <- every Static and Indexed edge followed locally
+      CACHE-MISS lines   : 9
+      UNFETCHABLE lines  : 9     <- 9 of 9 lazy fetches fail (PLX-148)
+      CACHE-HIT lines    : 0     <- so K = 0 successful lazy fetches, 0 hits
+
+  "one fetch plus K lazy fetches with hash-keyed cache hits" is therefore witnessed
+  only in its first half on this wire. The lazy half has NO live witness because
+  0 of 5 Dynamic edges on substrate are fetchable — PLX-148, still open. It is
+  asserted mechanically instead, against a counting fetcher, in
+  connectome-nav-test and in parity-test's "M3 exit gate" group.
+
+3. Instance descent, live
+-------------------------
+      $ synapse --connectome substrate tenants t1 arbor
+      ERROR: 't1' is not a child or a method at tenants
+      (exit 0 path; wire log: 1 fetch, 0 hits)
+
+  A clean, specific miss. NOT a resolution. Item 16 is NOT MET; PLX-122 owns it and
+  is blocked on an RFC 002 §10.1 amendment.
+
+4. CORRECTION to the record: the wire now carries an Indexed edge
+-----------------------------------------------------------------
+  PLX-119 measured "the wire carries no Indexed edge ... the lift emits only Dynamic
+  edges" and PLX-122 recorded that as the FIRST of its two structural blocks. That
+  measurement was of the LEGACY lift and was correct for it. The SERVED Connectome,
+  as of substrate 5c630784, carries one:
+
+      edge         : indexed
+      namespace    : tenants
+      list_method  : tenants.list
+      id_field     : tenant_id
+      path_template: tenants/{id}
+      template     : an embedded subtree (11 children)
+
+  All five of §5.1's facts are present. PLX-122's supply-side block is CLOSED on this
+  substrate. Its §10.1 block is not, and §10.1 alone is sufficient to keep M3·C shut.
+
+5. Root facts of the served document
+------------------------------------
+      hash_algorithm : CONNECTOME-HASH/1     <- §4.7 satisfied on the served wire
+      ir_version     : 1                     <- §3.3 satisfied on the served wire
+      ir_hash        : 4f686d82...
+      namespace      : substrate
+      backend_name   : ABSENT                <- item 5, still unmet
+      respond_method : ABSENT                <- item 8, §7.6 SHOULD, still unmet
+
+  Note the split: PLX-119 pinned §3.3 and §4.7 as Reported gaps. They are gaps of
+  the LIFT, not of the served document. Both remain true and connectome-lift-test
+  still pins the lift; parity-test item18 pins the served side.
+
+6. PLX-148 is unchanged
+-----------------------
+  0 of 5 Dynamic edges fetchable; `solar` still declares 1 child in its Connectome
+  subtree while the legacy wire advertises 8 planet activations.
+
+Full walk wire log follows.
+
+
+--- wire log ---
+FETCH        substrate.connectome {}  bytes=1035232 doc_hash=4f686d8219c4d19febdc0f212627d6ce67651ead5c008eb8eebdc80056cea845
+LOCAL        arbor  edge=static node_hash=71250f2ed069fff07cc850348ff36d6f51b11a57bf9fc455e1ef92f0ec512b60
+LOCAL        bash  edge=static node_hash=2ce4c465e8a3c1a87e0cada701ea92fefcbc492d80c0d823c60d4c8a426b03a2
+LOCAL        changelog  edge=static node_hash=577ffcd22452506b5b95a57d73529e899c447cd7f0316094024da5aa58eed3bf
+LOCAL        claudecode  edge=static node_hash=fdaa18e99960002e1cc7ddac7759f6854cdfa9d3a7601e5244364580a410b1d8
+CACHE-MISS   session  key=577cb542c26173278ef936d1de15619711e2f3435ab2ac7219a93b185cd4fc19 (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  session  advertised=577cb542c26173278ef936d1de15619711e2f3435ab2ac7219a93b185cd4fc19 (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `session`"}
+LOCAL        cone  edge=static node_hash=494d2b0eebc7bead3a16d5ab92211bf78765ad8083a7d2cb1190df6cf3dedd80
+CACHE-MISS   of  key=5aa2725728b34dce2c255ae60af6620095cc2d8ce5fd339956c9a8b906254cbd (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  of  advertised=5aa2725728b34dce2c255ae60af6620095cc2d8ce5fd339956c9a8b906254cbd (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `of`"}
+LOCAL        echo  edge=static node_hash=14e684c862f0e804ba60c22f11a67fde26af8644e7077e3a92d5699cc089214b
+CACHE-MISS   health  key=db32914112af146c (legacy shape, NOT a content identity)
+UNFETCHABLE  health  advertised=db32914112af146c (legacy shape, NOT a content identity) — ProtocolError {transportMessage = "no Connectome document is declared for `health`"}
+LOCAL        interactive  edge=static node_hash=2a98cc3729dce0f4594ab8ce561a8b8d9b4b900884ef8f74ae2a710b22de1732
+LOCAL        lattice  edge=static node_hash=65a41385b2616c543bea7ee0f03ffb7bf1f985bfb13ccbd60e26183a9303a5c3
+LOCAL        loopback  edge=static node_hash=a2b5be4321ec3cde7aac0d06ea01db37aa9104bc6d70c46d537103b89618e59e
+LOCAL        mustache  edge=static node_hash=1ba6c77ac0728c9cee9376e1abe44c2e5595f46be59adbb8666aefbb31113753
+LOCAL        orcha  edge=static node_hash=7adbc20f7fdbf3a3a2ba216f3aa37150f506be145869080086362c16144dc36b
+LOCAL        orcha.pm  edge=static node_hash=53ce0f847943bedd4030c078fcad8fb20116596aa36d0db5906d9b342cb99b32
+CACHE-MISS   registry  key=b4d15b5f5ca5774d (legacy shape, NOT a content identity)
+UNFETCHABLE  registry  advertised=b4d15b5f5ca5774d (legacy shape, NOT a content identity) — ProtocolError {transportMessage = "no Connectome document is declared for `registry`"}
+LOCAL        solar  edge=static node_hash=551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1
+CACHE-MISS   body  key=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  body  advertised=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `body`"}
+LOCAL        tenants  edge=indexed node_hash=f99e1de38f73b1e69636b102064e78febcb95aa976b37d33d6d29be808e60e37
+LOCAL        tenants.arbor  edge=static node_hash=71250f2ed069fff07cc850348ff36d6f51b11a57bf9fc455e1ef92f0ec512b60
+LOCAL        tenants.changelog  edge=static node_hash=577ffcd22452506b5b95a57d73529e899c447cd7f0316094024da5aa58eed3bf
+LOCAL        tenants.cone  edge=static node_hash=494d2b0eebc7bead3a16d5ab92211bf78765ad8083a7d2cb1190df6cf3dedd80
+CACHE-MISS   of  key=5aa2725728b34dce2c255ae60af6620095cc2d8ce5fd339956c9a8b906254cbd (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  of  advertised=5aa2725728b34dce2c255ae60af6620095cc2d8ce5fd339956c9a8b906254cbd (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `of`"}
+LOCAL        tenants.echo  edge=static node_hash=14e684c862f0e804ba60c22f11a67fde26af8644e7077e3a92d5699cc089214b
+CACHE-MISS   health  key=db32914112af146c (legacy shape, NOT a content identity)
+UNFETCHABLE  health  advertised=db32914112af146c (legacy shape, NOT a content identity) — ProtocolError {transportMessage = "no Connectome document is declared for `health`"}
+LOCAL        tenants.interactive  edge=static node_hash=2a98cc3729dce0f4594ab8ce561a8b8d9b4b900884ef8f74ae2a710b22de1732
+LOCAL        tenants.lattice  edge=static node_hash=65a41385b2616c543bea7ee0f03ffb7bf1f985bfb13ccbd60e26183a9303a5c3
+LOCAL        tenants.loopback  edge=static node_hash=a2b5be4321ec3cde7aac0d06ea01db37aa9104bc6d70c46d537103b89618e59e
+LOCAL        tenants.mustache  edge=static node_hash=1ba6c77ac0728c9cee9376e1abe44c2e5595f46be59adbb8666aefbb31113753
+CACHE-MISS   registry  key=b4d15b5f5ca5774d (legacy shape, NOT a content identity)
+UNFETCHABLE  registry  advertised=b4d15b5f5ca5774d (legacy shape, NOT a content identity) — ProtocolError {transportMessage = "no Connectome document is declared for `registry`"}
+LOCAL        tenants.solar  edge=static node_hash=551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1
+CACHE-MISS   body  key=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  body  advertised=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `body`"}
+LOCAL        arbor  edge=static node_hash=71250f2ed069fff07cc850348ff36d6f51b11a57bf9fc455e1ef92f0ec512b60
+LOCAL        bash  edge=static node_hash=2ce4c465e8a3c1a87e0cada701ea92fefcbc492d80c0d823c60d4c8a426b03a2
+
+wire summary: 1 fetch(es), 0 hash-keyed cache hit(s)

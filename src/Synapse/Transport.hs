@@ -22,6 +22,14 @@ module Synapse.Transport
 
     -- * Substrate Config Access (SYN-2)
   , getConfig
+
+    -- * Error-code conventions (PLX-124, inventory item 15)
+    --
+    -- Exported so the string-scraping convention synapse depends on is
+    -- pinned by a test rather than only exercised in passing. These are
+    -- pure functions over a transport error's text.
+  , renderProtocolError
+  , extractErrCode
   ) where
 
 import Control.Monad.IO.Class (liftIO)

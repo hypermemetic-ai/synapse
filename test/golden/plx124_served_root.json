@@ -1,0 +1,259 @@
+{
+  "children": [
+    {
+      "children": [],
+      "description": "Echo messages back - demonstrates plexus-macros usage",
+      "edge": "static",
+      "hash": "14e684c862f0e804ba60c22f11a67fde26af8644e7077e3a92d5699cc089214b",
+      "long_description": "Hub-macro generates all the boilerplate for this impl block:\n- `EchoRpc` trait with JSON-RPC subscription methods\n- `EchoRpcServer` implementation\n- Activation trait implementation\n- `EchoMethod` enum with JSON schemas",
+      "methods": [
+        {
+          "auth": "public",
+          "description": "Echo a message back the specified number of times",
+          "dotted_id": "echo.echo",
+          "hash": "aa0fd3408f46315a26d3b288ffb2163f0536992d12a15204fe59c26022c06b7e",
+          "http_method": "POST",
+          "name": "echo",
+          "params": [
+            {
+              "description": "The message to echo",
+              "name": "message",
+              "required": true,
+              "schema": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "title": "string",
+                  "type": "string"
+                },
+                "type_name": "String"
+              }
+            },
+            {
+              "description": "Number of times to repeat (default: 1)",
+              "name": "count",
+              "required": true,
+              "schema": {
+                "schema": {
+                  "$schema": "https://json-schema.org/draft/2020-12/schema",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "title": "uint32",
+                  "type": "integer"
+                },
+                "type_name": "u32"
+              }
+            }
+          ],
+          "updates": {
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "Events from echo operations",
+              "oneOf": [
+                {
+                  "description": "Echo response",
+                  "properties": {
+                    "count": {
+                      "description": "Number of times repeated",
+                      "format": "uint32",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "message": {
+                      "description": "The echoed message",
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "echo",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "message",
+                    "count"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "description": "Pong response (from ping)",
+                  "properties": {
+                    "type": {
+                      "const": "pong",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "title": "EchoEvent"
+            },
+            "type_name": "EchoEvent"
+          }
+        }
+      ],
+      "namespace": "echo",
+      "version": "1.0.0"
+    },
+    {
+      "children": [],
+      "description": "Check hub health and uptime",
+      "edge": "dynamic",
+      "hash": "db32914112af146c",
+      "methods": [],
+      "namespace": "health"
+    },
+    {
+      "children": [
+        {
+          "description": "Look up a celestial body by name (case-insensitive).",
+          "edge": "dynamic",
+          "hash": "d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d",
+          "namespace": "body"
+        }
+      ],
+      "description": "Solar system model - demonstrates nested plugin hierarchy",
+      "edge": "static",
+      "hash": "551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1",
+      "long_description": "Solar system model - demonstrates nested plugin hierarchy",
+      "methods": [
+        {
+          "auth": "public",
+          "description": "Get an overview of the solar system",
+          "dotted_id": "solar.observe",
+          "hash": "215389c26479047962ef919e4d7a1a5a9327012771e29e692412947f4a5c9284",
+          "http_method": "POST",
+          "name": "observe",
+          "updates": {
+            "schema": {
+              "$defs": {
+                "BodyType": {
+                  "description": "Type of celestial body",
+                  "enum": [
+                    "star",
+                    "planet",
+                    "dwarf_planet",
+                    "moon"
+                  ],
+                  "type": "string"
+                }
+              },
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "Events from solar system observations",
+              "oneOf": [
+                {
+                  "description": "Information about a celestial body",
+                  "properties": {
+                    "body_type": {
+                      "$ref": "#/$defs/BodyType"
+                    },
+                    "mass_kg": {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "orbital_period_days": {
+                      "format": "double",
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "parent": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "radius_km": {
+                      "format": "double",
+                      "type": "number"
+                    },
+                    "type": {
+                      "const": "body",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "name",
+                    "body_type",
+                    "mass_kg",
+                    "radius_km"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "description": "System overview",
+                  "properties": {
+                    "moon_count": {
+                      "format": "uint",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "planet_count": {
+                      "format": "uint",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "star": {
+                      "type": "string"
+                    },
+                    "total_bodies": {
+                      "format": "uint",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "type": {
+                      "const": "system",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "star",
+                    "planet_count",
+                    "moon_count",
+                    "total_bodies"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "title": "SolarEvent"
+            },
+            "type_name": "SolarEvent"
+          }
+        }
+      ],
+      "namespace": "solar",
+      "version": "1.0.0"
+    },
+    {
+      "description": "Per-tenant mounts, gated on the caller's resolved tenant",
+      "edge": "indexed",
+      "id_field": "tenant_id",
+      "list_method": "tenants.list",
+      "namespace": "tenants",
+      "path_template": "tenants/{id}",
+      "template": {
+        "children": [],
+        "description": "Central routing and introspection",
+        "hash": "f99e1de38f73b1e69636b102064e78febcb95aa976b37d33d6d29be808e60e37",
+        "methods": [],
+        "namespace": "substrate",
+        "version": "1.0.0"
+      }
+    }
+  ],
+  "description": "Central routing and introspection",
+  "hash": "03d3b06b30ff3f08026ac90f2bfb4715e6967bc00f9c5716bb56352a2bc0c672",
+  "hash_algorithm": "CONNECTOME-HASH/1",
+  "ir_hash": "4f686d8219c4d19febdc0f212627d6ce67651ead5c008eb8eebdc80056cea845",
+  "ir_version": 1,
+  "namespace": "substrate",
+  "version": "1.0.0"
+}
