@@ -19,9 +19,12 @@
 --      consumer returns @[]@, logs a warning through the supplied
 --      sink, no crash.
 --
---   5. Cache TTL: two calls within the TTL window hit the cache,
---      the underlying invoker is called exactly once. After the TTL
---      expires, a third call re-invokes.
+--   5. No cache: PLX-121 deleted the (namespace, listMethodName) +
+--      5-second-TTL cache. Two calls now invoke twice, on purpose —
+--      a list of live instances has no content identity to key on,
+--      and a mutable key invalidated by a clock is exactly the shape
+--      a content-addressed protocol must not have. Pinned so the
+--      cache cannot come back by accident.
 --
 --   6. Timeout: an invoker that blocks longer than the configured
 --      timeout returns @[]@ within the timeout budget (plus a small
@@ -229,8 +232,7 @@ main = hspec $ do
 
     it "returns names from a planet-shaped stream" $ do
       counter <- newIORef 0
-      cache   <- DC.newCache
-      names   <- DC.listChildrenWith silentWarn cache
+      names   <- DC.listChildrenWith silentWarn
                    (fixedInvoker counter planetFrames)
                    ["solar"] "list_planets"
       names `shouldBe`
@@ -238,66 +240,42 @@ main = hspec $ do
 
     it "gracefully handles an empty stream" $ do
       counter <- newIORef 0
-      cache   <- DC.newCache
-      names   <- DC.listChildrenWith silentWarn cache
+      names   <- DC.listChildrenWith silentWarn
                    (fixedInvoker counter emptyFrames)
                    ["solar"] "list_planets"
       names `shouldBe` []
 
     it "returns [] and logs WARN on invoker error (no crash)" $ do
       mv    <- newMVar []
-      cache <- DC.newCache
-      names <- DC.listChildrenWith (captureWarn mv) cache
+      names <- DC.listChildrenWith (captureWarn mv)
                  errorInvoker ["solar"] "list_planets"
       names `shouldBe` []
       warns <- readMVar mv
       length warns `shouldBe` 1
       head warns `shouldSatisfy` ("failed" `T.isInfixOf`)
 
-  describe "SYN-2 / mock substrate: cache TTL" $ do
+  describe "SYN-2 / no cache (PLX-121)" $
 
-    it "two calls within TTL hit the cache (invoker called once)" $ do
+    it "two identical calls invoke TWICE — the TTL cache is gone" $ do
+      -- Was: "two calls within TTL hit the cache (invoker called once)".
+      -- The cache it asserted never produced a hit in the CLI anyway:
+      -- renderDynamicChildrenBlock built a fresh one on every call.
       counter <- newIORef 0
-      cache   <- DC.newCache
-      _       <- DC.listChildrenWith silentWarn cache
-                   (fixedInvoker counter planetFrames)
-                   ["solar"] "list_planets"
-      _       <- DC.listChildrenWith silentWarn cache
-                   (fixedInvoker counter planetFrames)
-                   ["solar"] "list_planets"
+      _ <- DC.listChildrenWith silentWarn
+             (fixedInvoker counter planetFrames)
+             ["solar"] "list_planets"
+      _ <- DC.listChildrenWith silentWarn
+             (fixedInvoker counter planetFrames)
+             ["solar"] "list_planets"
       callCount <- readIORef counter
-      callCount `shouldBe` 1
-
-    it "manual cache lookup confirms entry was stored" $ do
-      counter <- newIORef 0
-      cache   <- DC.newCache
-      _       <- DC.listChildrenWith silentWarn cache
-                   (fixedInvoker counter planetFrames)
-                   ["solar"] "list_planets"
-      mNames <- DC.lookupCache DC.defaultCacheTtlSeconds cache
-                  (DC.cacheKey ["solar"] "list_planets")
-      mNames `shouldSatisfy` (\m -> case m of
-        Just xs -> length xs == 8
-        Nothing -> False)
-
-    it "TTL=0 forces a fresh fetch on every lookup" $ do
-      -- A nominal-diff-time of 0 means "expire immediately": after
-      -- 'storeCache' the entry is already older than zero, so
-      -- 'lookupCache' returns Nothing. The behavioural cache key
-      -- (insert-then-read with 5s) remains the contract; this case
-      -- exercises the TTL boundary directly.
-      cache <- DC.newCache
-      DC.storeCache cache ("solar", "list_planets") ["mercury"]
-      mNames <- DC.lookupCache 0 cache (DC.cacheKey ["solar"] "list_planets")
-      mNames `shouldBe` Nothing
+      callCount `shouldBe` 2
 
   describe "SYN-2 / mock substrate: timeout" $ do
 
     it "returns [] and logs WARN when invoker exceeds the timeout" $ do
       mv    <- newMVar []
-      cache <- DC.newCache
       -- defaultInvocationTimeoutMicros is 2s; sleep 3s.
-      names <- DC.listChildrenWith (captureWarn mv) cache
+      names <- DC.listChildrenWith (captureWarn mv)
                  (slowInvoker (3 * 1000 * 1000) planetFrames)
                  ["solar"] "list_planets"
       names `shouldBe` []
@@ -359,8 +337,7 @@ main = hspec $ do
       -- the synapse renderer, with a sample list_planets stream
       -- replayed through the mock invoker.
       counter <- newIORef 0
-      cache   <- DC.newCache
-      names   <- DC.listChildrenWith silentWarn cache
+      names   <- DC.listChildrenWith silentWarn
                    (fixedInvoker counter planetFrames)
                    ["solar"] "list_planets"
       let rendered = Render.renderSchema solarHubSchema

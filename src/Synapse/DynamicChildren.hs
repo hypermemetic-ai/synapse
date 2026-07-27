@@ -16,7 +16,7 @@
 -- = Design
 --
 -- The module factors cleanly into three layers so the renderer (no IO),
--- the live-substrate caller (IO + timeout + cache), and the tests
+-- the live-substrate caller (IO + timeout), and the tests
 -- (mockable invoker) can each consume the piece they need.
 --
 -- 1. Pure helpers ('isDynamicChildGate', 'dynamicChildGate',
@@ -24,17 +24,41 @@
 --    @DynamicChild@ shape from a 'MethodSchema' / 'PluginSchema'.
 --    No IO. Used by the renderer and by tests.
 --
--- 2. Cache primitives ('DynamicChildrenCache', 'newCache',
---    'lookupCache', 'storeCache') — per-session IORef-backed cache
---    keyed by @(namespace, listMethodName)@ with a TTL (default 5s).
---    Stale entries are acceptable for tab-completion; CLI-runtime
---    cost of a cache hit is one map lookup.
---
--- 3. Invocation helpers ('listChildrenWith', 'searchChildrenWith') —
+-- 2. Invocation helpers ('listChildrenWith', 'searchChildrenWith') —
 --    take an injectable @Invoker@ so tests can mock without going
 --    over the wire. The live caller is 'listChildren' /
 --    'searchChildren' which wires the substrate transport through
 --    'mkSubstrateInvoker'.
+--
+-- = The cache that used to be here (PLX-121)
+--
+-- SYN-2 gave this module a per-session cache keyed by
+-- @(namespace, listMethodName)@ with a 5-second TTL. That key is
+-- mutable and the entry was invalidated by a clock, which is the one
+-- caching shape a content-addressed protocol must not have — and it
+-- has been __deleted, not patched__.
+--
+-- Two reasons, and the second is the load-bearing one:
+--
+-- * It never worked. @renderDynamicChildrenBlock@ built a FRESH cache
+--   on every call ('newCache' at the call site), and synapse is a
+--   one-shot CLI, so no lookup ever saw an entry written by an earlier
+--   one. The TTL protected nothing because nothing survived to expire.
+--
+-- * It cannot be replaced by a hash-keyed cache, and this is a
+--   __finding, not an omission__. What it cached was the RESULT of
+--   invoking a list method — a set of live instance names. The
+--   Connectome carries no such thing. RFC §5.1's Indexed edge carries
+--   an enumeration method's NAME, not its output, and substrate
+--   declares no Indexed edge at all (the legacy @#[child(list = ..)]@
+--   path emits a Dynamic edge, so @list_method@ / @search_method@ /
+--   @id_field@ / @path_template@ never reach the document). There is
+--   no advertised hash for a list of instances to key on, so the
+--   honest move is to remove the mutable-keyed cache and take the
+--   round trip, not to invent an identity for a runtime query.
+--
+-- The hash-keyed cache PLX-121 did build is for Connectome NODES and
+-- lives in "Synapse.Connectome.Nav" / 'Synapse.Monad.lookupNode'.
 --
 -- = Risk mitigations (per SYN-2 risk table)
 --
@@ -42,10 +66,6 @@
 --   'defaultInvocationTimeoutMicros' (2s). On timeout the helper
 --   returns the empty list — the caller renders "no completions"
 --   without crashing or hanging the CLI.
---
--- * /Cache TTL/: 'listChildrenWith' consults the cache before
---   invoking; on a hit it short-circuits. Misses re-fetch and rewrite
---   the cache atomically.
 --
 -- * /Errors/: an invoker that returns 'Left' (transport error, method
 --   not found, malformed response) is treated as "no completions" —
@@ -59,13 +79,6 @@ module Synapse.DynamicChildren
   , dynamicChildGates
   , gateParamName
 
-    -- * Cache
-  , DynamicChildrenCache
-  , newCache
-  , lookupCache
-  , storeCache
-  , cacheKey
-
     -- * Invocation (injectable)
   , Invoker
   , listChildrenWith
@@ -77,7 +90,6 @@ module Synapse.DynamicChildren
   , mkSubstrateInvoker
 
     -- * Configuration
-  , defaultCacheTtlSeconds
   , defaultInvocationTimeoutMicros
   ) where
 
@@ -87,14 +99,10 @@ import Control.Exception (SomeException, catch)
 import Data.Aeson (Value(..), object, (.=))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.IORef
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-import Data.Time.Clock (UTCTime, NominalDiffTime, getCurrentTime, diffUTCTime)
 import qualified Data.Vector as V
 import System.IO (stderr)
 
@@ -174,66 +182,14 @@ gateParamName m = case methodParams m of
   _ -> "name"
 
 -- ============================================================================
--- Cache
+-- Configuration
 -- ============================================================================
-
--- | Per-session cache of @list_children@ results, keyed by
---   @(namespace, listMethodName)@. Entries carry a wall-clock
---   timestamp so 'lookupCache' can enforce the TTL inline.
---
---   The cache lives behind an 'IORef' for cheap shared-mutable access
---   from the CLI's main thread. Tab-completion is single-threaded; if
---   that changes the IORef can be swapped for an 'MVar' without
---   touching call sites.
-newtype DynamicChildrenCache = DynamicChildrenCache
-  (IORef (Map (Text, Text) (UTCTime, [Text])))
-
--- | Default cache TTL in seconds — short enough that stale completions
---   feel responsive after an activation's child set changes, long
---   enough that repeated tab-presses don't hammer the substrate.
-defaultCacheTtlSeconds :: NominalDiffTime
-defaultCacheTtlSeconds = 5
 
 -- | Default per-call invocation timeout in microseconds. Past this we
 --   give up and return "no completions" so the user is not blocked by
 --   a slow or unreachable hub.
 defaultInvocationTimeoutMicros :: Int
 defaultInvocationTimeoutMicros = 2 * 1000 * 1000   -- 2 seconds
-
--- | Build a fresh empty cache.
-newCache :: IO DynamicChildrenCache
-newCache = DynamicChildrenCache <$> newIORef Map.empty
-
--- | Canonical cache key (kept exported so tests can construct one).
-cacheKey :: [Text] -> Text -> (Text, Text)
-cacheKey nsPath fn = (T.intercalate "." nsPath, fn)
-
--- | Cache lookup that enforces the TTL. Expired entries return
---   'Nothing' (and are NOT removed eagerly; the next 'storeCache' will
---   overwrite them).
-lookupCache
-  :: NominalDiffTime
-  -> DynamicChildrenCache
-  -> (Text, Text)
-  -> IO (Maybe [Text])
-lookupCache ttl (DynamicChildrenCache ref) key = do
-  now <- getCurrentTime
-  m   <- readIORef ref
-  pure $ case Map.lookup key m of
-    Just (ts, names)
-      | diffUTCTime now ts < ttl -> Just names
-    _ -> Nothing
-
--- | Insert a fresh entry, stamped with the current time.
-storeCache
-  :: DynamicChildrenCache
-  -> (Text, Text)
-  -> [Text]
-  -> IO ()
-storeCache (DynamicChildrenCache ref) key names = do
-  now <- getCurrentTime
-  atomicModifyIORef' ref $ \m ->
-    (Map.insert key (now, names) m, ())
 
 -- ============================================================================
 -- Invocation (injectable)
@@ -251,7 +207,7 @@ storeCache (DynamicChildrenCache ref) key names = do
 type Invoker = [Text] -> Text -> Value -> IO (Either Text [PlexusStreamItem])
 
 -- | Enumerate dynamic children by calling @<ns>.<listMethodName>@ via
---   the supplied invoker. Caches the result for the configured TTL.
+--   the supplied invoker.
 --
 --   Behavior on edge cases (per SYN-2 risk table):
 --
@@ -261,24 +217,14 @@ type Invoker = [Text] -> Text -> Value -> IO (Either Text [PlexusStreamItem])
 --   * /Timeout/: races the call against
 --     'defaultInvocationTimeoutMicros'; on timeout returns @[]@ and
 --     logs a warning.
---   * /Cache hit/: returns the cached list without invoking.
 listChildrenWith
   :: (Text -> IO ())         -- ^ Warn logger (stderr writer in production)
-  -> DynamicChildrenCache
   -> Invoker
   -> [Text]                  -- ^ Namespace path (e.g. @["solar"]@)
   -> Text                    -- ^ List method name (e.g. @"list_planets"@)
   -> IO [Text]
-listChildrenWith logWarn cache invoker nsPath fn = do
-  let key = cacheKey nsPath fn
-  mCached <- lookupCache defaultCacheTtlSeconds cache key
-  case mCached of
-    Just names -> pure names
-    Nothing    -> do
-      names <- invokeForNames logWarn fn $
-        invoker nsPath fn (object [])
-      storeCache cache key names
-      pure names
+listChildrenWith logWarn invoker nsPath fn =
+  invokeForNames logWarn fn $ invoker nsPath fn (object [])
 
 -- | Filter dynamic children by calling
 --   @<ns>.<searchMethodName>@ with a @query@ parameter. Not cached —
@@ -379,12 +325,11 @@ mkSubstrateInvoker cfg nsPath method params = do
 -- | Live wrapper around 'listChildrenWith'.
 listChildren
   :: SubstrateConfig
-  -> DynamicChildrenCache
   -> [Text]
   -> Text
   -> IO [Text]
-listChildren cfg cache nsPath fn =
-  listChildrenWith stderrWarn cache (mkSubstrateInvoker cfg) nsPath fn
+listChildren cfg nsPath fn =
+  listChildrenWith stderrWarn (mkSubstrateInvoker cfg) nsPath fn
 
 -- | Live wrapper around 'searchChildrenWith'.
 searchChildren

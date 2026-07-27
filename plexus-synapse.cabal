@@ -26,6 +26,8 @@ library
     Synapse.Schema.Types
     Synapse.Schema.Functor
     Synapse.Connectome
+    Synapse.Connectome.Nav
+    Synapse.Wire
     Synapse.Monad
     Synapse.Log
     Synapse.Algebra.Navigate
@@ -122,6 +124,7 @@ executable synapse
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
+    plexus-connectome,
     plexus-synapse,
     aeson >= 2.0 && < 2.3,
     text >= 2.0 && < 2.2,
@@ -500,6 +503,27 @@ test-suite connectome-lift-test
     plexus-synapse,
     aeson >= 2.2 && < 2.3,
     hspec >= 2.10 && < 2.12,
+    text >= 2.0 && < 2.2
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -threaded
+
+test-suite connectome-nav-test
+  -- PLX-121: navigation as pointer-chasing over ONE Connectome document.
+  -- Asserts ROUND-TRIP COUNTS against an injected fetcher that counts its
+  -- calls, because c1 and c2 are stated in counts of fetches.
+  type:             exitcode-stdio-1.0
+  main-is:          ConnectomeNavSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-connectome,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    hspec >= 2.10 && < 2.12,
+    katip >= 0.8 && < 0.9,
     text >= 2.0 && < 2.2
   hs-source-dirs:   test
   default-language: GHC2021

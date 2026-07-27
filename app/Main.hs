@@ -55,6 +55,10 @@ import qualified Control.Exception as E
 import qualified Synapse.Log as Log
 import qualified Katip
 import Synapse.Algebra.Navigate
+import qualified Synapse.Connectome.Nav as CNav
+import Synapse.Wire (readWireLog, renderWireLog)
+import Synapse.Monad (getWireLog)
+import qualified Plexus.Connectome.Types as C
 import Synapse.Algebra.Render (renderSchema)
 import Synapse.CLI.Help (renderMethodHelp)
 import qualified Synapse.DynamicChildren as DC
@@ -102,6 +106,7 @@ data SynapseOpts = SynapseOpts
   , soRaw           :: Bool          -- ^ Output raw content (no templates)
   , soDryRun        :: Bool          -- ^ Show request without sending
   , soSchema        :: Bool          -- ^ Fetch raw schema JSON
+  , soConnectome    :: Bool          -- ^ PLX-121: navigate over the Connectome document
   , soGenerate      :: Bool          -- ^ Generate templates from IR
   , soEmitIR        :: Bool          -- ^ Emit IR for code generation
   , soParams        :: Maybe Text    -- ^ JSON params via -p
@@ -359,7 +364,7 @@ main = do
   case argBackend args of
     Nothing
       -- Suppress banner for data output modes
-      | soEmitIR opts || soSchema opts || soJson opts || soRaw opts ->
+      | soEmitIR opts || soSchema opts || soJson opts || soRaw opts || soConnectome opts ->
           runDisc hostBackend args
       | otherwise -> do
           -- No backend specified, show available backends
@@ -629,6 +634,13 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
           -- Mode 1.5: Respond subcommand (agent sends a response to a pending bidir request)
           if not (null pathSegs) && head pathSegs == "respond"
             then handleRespondCommand rawParams
+
+          -- Mode 1.75 (PLX-121): navigate over the ONE Connectome document.
+          -- With a path: navigate to it. With no path: walk the whole tree.
+          -- Either way the wire log is dumped to stderr, because "the round
+          -- trip class is gone" is a claim about counted round trips.
+          else if soConnectome
+            then runConnectomeMode pathSegs
 
           -- Mode 2: Schema request
           else if soSchema
@@ -1223,8 +1235,12 @@ printResult _ _ cfg item = do
 --   enumerate currently-available children. Each list call:
 --
 --   * is timed-out at 'DC.defaultInvocationTimeoutMicros' (2s);
---   * is cached for the rest of the process at
---     'DC.defaultCacheTtlSeconds' (5s);
+--   * is NOT cached. PLX-121 deleted the @(namespace, listMethodName)@
+--     + 5-second-TTL cache that used to sit here. It was a mutable key
+--     invalidated by a clock, it never produced a hit (the cache was
+--     rebuilt on every call to this function), and the Connectome
+--     carries no content identity for a list of live instances to
+--     replace it with — see "Synapse.DynamicChildren";
 --   * gracefully degrades to "no completions" on any failure (timeout,
 --     transport error, method-not-found, malformed response).
 --
@@ -1242,27 +1258,102 @@ renderDynamicChildrenBlock visited schema = do
     [] -> pure ()   -- no dynamic gates — preserve byte-identical output
     _  -> do
       cfg   <- getConfig
-      cache <- liftIO DC.newCache
       let nsPath = if null visited then [psNamespace schema] else visited
       -- For each gate with a list_method, fetch the children and render.
       liftIO $ do
         TIO.putStrLn ""
         TIO.putStrLn "Dynamic children:"
-        mapM_ (renderOneGate cfg cache nsPath) gates
+        mapM_ (renderOneGate cfg nsPath) gates
   where
-    renderOneGate cfg cache nsPath gate = case DC.gateListMethod gate of
+    renderOneGate cfg nsPath gate = case DC.gateListMethod gate of
       Nothing -> do
         -- Gate exists but no list opt-in. AC #4: render the gate
         -- header alone, no enumeration, no error.
         TIO.putStrLn $ "  " <> DC.gateMethodName gate
           <> " {" <> DC.gateParam gate <> "}  (no list_method advertised)"
       Just listFn -> do
-        names <- DC.listChildren cfg cache nsPath listFn
+        names <- DC.listChildren cfg nsPath listFn
         TIO.putStrLn $ "  " <> DC.gateMethodName gate
           <> " {" <> DC.gateParam gate <> "}"
         case names of
           [] -> TIO.putStrLn "    (no children)"
           _  -> mapM_ (\n -> TIO.putStrLn ("    - " <> n)) names
+
+-- ============================================================================
+-- PLX-121: navigation over the ONE Connectome document
+-- ============================================================================
+
+-- | Drive 'Synapse.Connectome.Nav' and dump the wire log.
+--
+-- The point of the mode is the log. PLX-121's exit gate is "a wire log
+-- (captured, not described) shows a full-tree navigation issuing ONE document
+-- fetch plus K Dynamic-edge fetches, with K explained", and a mode that
+-- printed a pretty tree without a fetch count would prove nothing.
+--
+-- With no path this walks the whole tree, then navigates twice more to
+-- previously-seen subtrees so the log shows what the second and third
+-- navigations cost. That is the measurement, not decoration: on the legacy
+-- wire each of those cost a @{ns}.schema@ round trip per level.
+runConnectomeMode :: [Text] -> SynapseM ()
+runConnectomeMode pathSegs = do
+  if null pathSegs
+    then do
+      result <- CNav.walkTree
+      case result of
+        Left err -> liftIO $ TIO.hPutStrLn stderr (CNav.renderCNavError err)
+        Right entries -> do
+          liftIO $ TIO.putStrLn "connectome walk (one document, every edge followed once):"
+          liftIO $ mapM_ (TIO.putStrLn . renderWalkEntry) entries
+          -- Second and third navigations in the SAME process: the tree is
+          -- already in hand, so these must issue no fetch at all.
+          let revisit segs = do
+                r <- CNav.navigateC segs
+                liftIO $ TIO.putStrLn $
+                  "revisit " <> T.intercalate "." segs <> ": " <> renderLanding r
+          mapM_ revisit (take 2 (map CNav.wePathSegs (filter ((/= []) . CNav.wePathSegs) entries)))
+    else do
+      result <- CNav.navigateC pathSegs
+      liftIO $ TIO.putStrLn (renderLanding result)
+      -- Repeat the identical navigation: proves the second one is free.
+      result2 <- CNav.navigateC pathSegs
+      liftIO $ TIO.putStrLn ("repeat: " <> renderLanding result2)
+  dumpWireLog
+
+-- | Emit the captured transcript on stderr so stdout stays pipeable.
+dumpWireLog :: SynapseM ()
+dumpWireLog = do
+  wl <- getWireLog
+  evs <- liftIO $ readWireLog wl
+  liftIO $ do
+    TIO.hPutStrLn stderr ""
+    TIO.hPutStrLn stderr "--- wire log ---"
+    TIO.hPutStr stderr (renderWireLog evs)
+
+renderLanding :: Either CNav.CNavError CNav.CView -> Text
+renderLanding = \case
+  Left err -> "ERROR: " <> CNav.renderCNavError err
+  Right (CNav.CViewActivation act path) ->
+    "activation " <> renderSegs path
+      <> " (hash " <> C.unHash (C.aHash act)
+      <> ", " <> T.pack (show (length (C.aMethods act))) <> " methods"
+      <> ", " <> T.pack (show (length (C.aChildren act))) <> " children)"
+  Right (CNav.CViewMethod m path) ->
+    "method " <> renderSegs path
+      <> " (hash " <> C.unHash (C.mHash m) <> ")"
+
+renderWalkEntry :: CNav.WalkEntry -> Text
+renderWalkEntry e =
+  "  " <> pad (renderSegs (CNav.wePathSegs e))
+    <> "  edge=" <> CNav.weEdge e
+    <> " methods=" <> T.pack (show (CNav.weMethodCount e))
+    <> " hash=" <> CNav.weActivationHash e
+    <> maybe "" (\err -> "\n      UNREACHABLE: " <> CNav.renderCNavError err) (CNav.weUnreachable e)
+  where
+    pad t = t <> T.replicate (max 0 (34 - T.length t)) " "
+
+renderSegs :: [Text] -> Text
+renderSegs [] = "<root>"
+renderSegs p = T.intercalate "." p
 
 -- ============================================================================
 -- Argument Parsing (Synapse Options Only)
@@ -1316,6 +1407,11 @@ optsParser = do
   soSchema <- switch
     ( long "schema" <> short 's'
    <> help "Fetch raw schema JSON for path" )
+  soConnectome <- switch
+    ( long "connectome"
+   <> help "PLX-121: navigate over the ONE Connectome document ({ns}.connectome). \
+           \With a path, navigate to it; with no path, walk the whole tree. \
+           \The wire log (fetches, local edges, hash-keyed cache hits) goes to stderr." )
   soGenerate <- switch
     ( long "generate-templates" <> short 'g'
    <> help "Generate mustache templates from IR" )

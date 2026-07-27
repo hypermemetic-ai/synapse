@@ -1,0 +1,185 @@
+PLX-121 — captured wire log
+===========================
+
+Captured, not described. Produced by:
+
+  plexus-substrate (main @ 02530269, PLX-142 merged) --port 4477 --no-mcp
+  synapse (plx-121-navigation) --connectome -H 127.0.0.1 -P 4477 substrate [PATH...]
+
+Document under test: substrate.connectome, 622,142 bytes of content
+(the raw notification frame measures 622,390 bytes; PLX-142's "1.6 MB" is
+to_string_pretty as written to disk by examples/fetch_connectome, not the wire),
+document hash 7858e3b66cac82f1530ea5885ab3a47b4b53916b40945af228c4dd079980f9c2 —
+byte-for-byte the hash PLX-142 attested.
+
+HEADLINE: 5 Dynamic edges, 0 of them fetchable. See CAPTURE 1 and CAPTURE 4.
+
+########## CAPTURE 1: full-tree walk (c1)
+connectome walk (one document, every edge followed once):
+  <root>                              edge=root methods=0 hash=0482c5cdd59b1cb2710ba9be47ce306e5a0f878074e12f33f90b45b30dde1eae
+  arbor                               edge=static methods=19 hash=71250f2ed069fff07cc850348ff36d6f51b11a57bf9fc455e1ef92f0ec512b60
+  bash                                edge=static methods=1 hash=2ce4c465e8a3c1a87e0cada701ea92fefcbc492d80c0d823c60d4c8a426b03a2
+  changelog                           edge=static methods=9 hash=577ffcd22452506b5b95a57d73529e899c447cd7f0316094024da5aa58eed3bf
+  claudecode                          edge=static methods=16 hash=fdaa18e99960002e1cc7ddac7759f6854cdfa9d3a7601e5244364580a410b1d8
+  claudecode.session                  edge=dynamic methods=0 hash=577cb542c26173278ef936d1de15619711e2f3435ab2ac7219a93b185cd4fc19
+      UNREACHABLE: the Dynamic edge 'session' cannot be fetched: ProtocolError {transportMessage = "no Connectome document is declared for `session`"}
+      advertised hash: 577cb542c26173278ef936d1de15619711e2f3435ab2ac7219a93b185cd4fc19 (CONNECTOME-HASH/1 shape)
+      RFC 002 §5.1 requires a Dynamic edge to carry the child's namespace and
+      advertised hash 'sufficient to fetch and cache it lazily'. This document
+      satisfies the letter and not the sufficiency clause. That is an
+      IR-completeness finding against the emitter, not a client defect.
+  cone                                edge=static methods=7 hash=494d2b0eebc7bead3a16d5ab92211bf78765ad8083a7d2cb1190df6cf3dedd80
+  cone.of                             edge=dynamic methods=0 hash=5aa2725728b34dce2c255ae60af6620095cc2d8ce5fd339956c9a8b906254cbd
+      UNREACHABLE: the Dynamic edge 'of' cannot be fetched: ProtocolError {transportMessage = "no Connectome document is declared for `of`"}
+      advertised hash: 5aa2725728b34dce2c255ae60af6620095cc2d8ce5fd339956c9a8b906254cbd (CONNECTOME-HASH/1 shape)
+      RFC 002 §5.1 requires a Dynamic edge to carry the child's namespace and
+      advertised hash 'sufficient to fetch and cache it lazily'. This document
+      satisfies the letter and not the sufficiency clause. That is an
+      IR-completeness finding against the emitter, not a client defect.
+  echo                                edge=static methods=3 hash=14e684c862f0e804ba60c22f11a67fde26af8644e7077e3a92d5699cc089214b
+  health                              edge=dynamic methods=0 hash=db32914112af146c
+      UNREACHABLE: the Dynamic edge 'health' cannot be fetched: ProtocolError {transportMessage = "no Connectome document is declared for `health`"}
+      advertised hash: db32914112af146c (legacy shape; not a content identity)
+      RFC 002 §5.1 requires a Dynamic edge to carry the child's namespace and
+      advertised hash 'sufficient to fetch and cache it lazily'. This document
+      satisfies the letter and not the sufficiency clause. That is an
+      IR-completeness finding against the emitter, not a client defect.
+  interactive                         edge=static methods=3 hash=2a98cc3729dce0f4594ab8ce561a8b8d9b4b900884ef8f74ae2a710b22de1732
+  lattice                             edge=static methods=12 hash=65a41385b2616c543bea7ee0f03ffb7bf1f985bfb13ccbd60e26183a9303a5c3
+  loopback                            edge=static methods=5 hash=a2b5be4321ec3cde7aac0d06ea01db37aa9104bc6d70c46d537103b89618e59e
+  mustache                            edge=static methods=5 hash=1ba6c77ac0728c9cee9376e1abe44c2e5595f46be59adbb8666aefbb31113753
+  orcha                               edge=static methods=37 hash=7adbc20f7fdbf3a3a2ba216f3aa37150f506be145869080086362c16144dc36b
+  orcha.pm                            edge=static methods=7 hash=53ce0f847943bedd4030c078fcad8fb20116596aa36d0db5906d9b342cb99b32
+  registry                            edge=dynamic methods=0 hash=b4d15b5f5ca5774d
+      UNREACHABLE: the Dynamic edge 'registry' cannot be fetched: ProtocolError {transportMessage = "no Connectome document is declared for `registry`"}
+      advertised hash: b4d15b5f5ca5774d (legacy shape; not a content identity)
+      RFC 002 §5.1 requires a Dynamic edge to carry the child's namespace and
+      advertised hash 'sufficient to fetch and cache it lazily'. This document
+      satisfies the letter and not the sufficiency clause. That is an
+      IR-completeness finding against the emitter, not a client defect.
+  solar                               edge=static methods=2 hash=551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1
+  solar.body                          edge=dynamic methods=0 hash=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d
+      UNREACHABLE: the Dynamic edge 'body' cannot be fetched: ProtocolError {transportMessage = "no Connectome document is declared for `body`"}
+      advertised hash: d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape)
+      RFC 002 §5.1 requires a Dynamic edge to carry the child's namespace and
+      advertised hash 'sufficient to fetch and cache it lazily'. This document
+      satisfies the letter and not the sufficiency clause. That is an
+      IR-completeness finding against the emitter, not a client defect.
+revisit arbor: activation arbor (hash 71250f2ed069fff07cc850348ff36d6f51b11a57bf9fc455e1ef92f0ec512b60, 19 methods, 0 children)
+revisit bash: activation bash (hash 2ce4c465e8a3c1a87e0cada701ea92fefcbc492d80c0d823c60d4c8a426b03a2, 1 methods, 0 children)
+
+--- wire log ---
+FETCH        substrate.connectome {}  bytes=622142 doc_hash=7858e3b66cac82f1530ea5885ab3a47b4b53916b40945af228c4dd079980f9c2
+LOCAL        arbor  edge=static node_hash=71250f2ed069fff07cc850348ff36d6f51b11a57bf9fc455e1ef92f0ec512b60
+LOCAL        bash  edge=static node_hash=2ce4c465e8a3c1a87e0cada701ea92fefcbc492d80c0d823c60d4c8a426b03a2
+LOCAL        changelog  edge=static node_hash=577ffcd22452506b5b95a57d73529e899c447cd7f0316094024da5aa58eed3bf
+LOCAL        claudecode  edge=static node_hash=fdaa18e99960002e1cc7ddac7759f6854cdfa9d3a7601e5244364580a410b1d8
+CACHE-MISS   session  key=577cb542c26173278ef936d1de15619711e2f3435ab2ac7219a93b185cd4fc19 (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  session  advertised=577cb542c26173278ef936d1de15619711e2f3435ab2ac7219a93b185cd4fc19 (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `session`"}
+LOCAL        cone  edge=static node_hash=494d2b0eebc7bead3a16d5ab92211bf78765ad8083a7d2cb1190df6cf3dedd80
+CACHE-MISS   of  key=5aa2725728b34dce2c255ae60af6620095cc2d8ce5fd339956c9a8b906254cbd (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  of  advertised=5aa2725728b34dce2c255ae60af6620095cc2d8ce5fd339956c9a8b906254cbd (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `of`"}
+LOCAL        echo  edge=static node_hash=14e684c862f0e804ba60c22f11a67fde26af8644e7077e3a92d5699cc089214b
+CACHE-MISS   health  key=db32914112af146c (legacy shape, NOT a content identity)
+UNFETCHABLE  health  advertised=db32914112af146c (legacy shape, NOT a content identity) — ProtocolError {transportMessage = "no Connectome document is declared for `health`"}
+LOCAL        interactive  edge=static node_hash=2a98cc3729dce0f4594ab8ce561a8b8d9b4b900884ef8f74ae2a710b22de1732
+LOCAL        lattice  edge=static node_hash=65a41385b2616c543bea7ee0f03ffb7bf1f985bfb13ccbd60e26183a9303a5c3
+LOCAL        loopback  edge=static node_hash=a2b5be4321ec3cde7aac0d06ea01db37aa9104bc6d70c46d537103b89618e59e
+LOCAL        mustache  edge=static node_hash=1ba6c77ac0728c9cee9376e1abe44c2e5595f46be59adbb8666aefbb31113753
+LOCAL        orcha  edge=static node_hash=7adbc20f7fdbf3a3a2ba216f3aa37150f506be145869080086362c16144dc36b
+LOCAL        orcha.pm  edge=static node_hash=53ce0f847943bedd4030c078fcad8fb20116596aa36d0db5906d9b342cb99b32
+CACHE-MISS   registry  key=b4d15b5f5ca5774d (legacy shape, NOT a content identity)
+UNFETCHABLE  registry  advertised=b4d15b5f5ca5774d (legacy shape, NOT a content identity) — ProtocolError {transportMessage = "no Connectome document is declared for `registry`"}
+LOCAL        solar  edge=static node_hash=551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1
+CACHE-MISS   body  key=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  body  advertised=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `body`"}
+LOCAL        arbor  edge=static node_hash=71250f2ed069fff07cc850348ff36d6f51b11a57bf9fc455e1ef92f0ec512b60
+LOCAL        bash  edge=static node_hash=2ce4c465e8a3c1a87e0cada701ea92fefcbc492d80c0d823c60d4c8a426b03a2
+
+wire summary: 1 fetch(es), 0 hash-keyed cache hit(s)
+
+########## CAPTURE 2: navigate + repeat to solar (c1/c2)
+activation solar (hash 551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1, 2 methods, 1 children)
+repeat: activation solar (hash 551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1, 2 methods, 1 children)
+
+--- wire log ---
+FETCH        substrate.connectome {}  bytes=622142 doc_hash=7858e3b66cac82f1530ea5885ab3a47b4b53916b40945af228c4dd079980f9c2
+LOCAL        solar  edge=static node_hash=551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1
+LOCAL        solar  edge=static node_hash=551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1
+
+wire summary: 1 fetch(es), 0 hash-keyed cache hit(s)
+
+########## CAPTURE 3: deep navigation orcha.pm (c1)
+activation orcha.pm (hash 53ce0f847943bedd4030c078fcad8fb20116596aa36d0db5906d9b342cb99b32, 7 methods, 0 children)
+repeat: activation orcha.pm (hash 53ce0f847943bedd4030c078fcad8fb20116596aa36d0db5906d9b342cb99b32, 7 methods, 0 children)
+
+--- wire log ---
+FETCH        substrate.connectome {}  bytes=622142 doc_hash=7858e3b66cac82f1530ea5885ab3a47b4b53916b40945af228c4dd079980f9c2
+LOCAL        orcha  edge=static node_hash=7adbc20f7fdbf3a3a2ba216f3aa37150f506be145869080086362c16144dc36b
+LOCAL        orcha.pm  edge=static node_hash=53ce0f847943bedd4030c078fcad8fb20116596aa36d0db5906d9b342cb99b32
+LOCAL        orcha  edge=static node_hash=7adbc20f7fdbf3a3a2ba216f3aa37150f506be145869080086362c16144dc36b
+LOCAL        orcha.pm  edge=static node_hash=53ce0f847943bedd4030c078fcad8fb20116596aa36d0db5906d9b342cb99b32
+
+wire summary: 1 fetch(es), 0 hash-keyed cache hit(s)
+
+########## CAPTURE 4: descend a Dynamic edge (solar body)
+ERROR: the Dynamic edge 'body' cannot be fetched: ProtocolError {transportMessage = "no Connectome document is declared for `body`"}
+      advertised hash: d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape)
+      RFC 002 §5.1 requires a Dynamic edge to carry the child's namespace and
+      advertised hash 'sufficient to fetch and cache it lazily'. This document
+      satisfies the letter and not the sufficiency clause. That is an
+      IR-completeness finding against the emitter, not a client defect.
+repeat: ERROR: the Dynamic edge 'body' cannot be fetched: ProtocolError {transportMessage = "no Connectome document is declared for `body`"}
+      advertised hash: d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape)
+      RFC 002 §5.1 requires a Dynamic edge to carry the child's namespace and
+      advertised hash 'sufficient to fetch and cache it lazily'. This document
+      satisfies the letter and not the sufficiency clause. That is an
+      IR-completeness finding against the emitter, not a client defect.
+
+--- wire log ---
+FETCH        substrate.connectome {}  bytes=622142 doc_hash=7858e3b66cac82f1530ea5885ab3a47b4b53916b40945af228c4dd079980f9c2
+LOCAL        solar  edge=static node_hash=551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1
+CACHE-MISS   body  key=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  body  advertised=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `body`"}
+LOCAL        solar  edge=static node_hash=551afcdf106b444d239b4fddc9dc1c5c2f05c062678b025d39c830c6df7671e1
+CACHE-MISS   body  key=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape)
+UNFETCHABLE  body  advertised=d5ae29f8bda0e7ac6e0969e8f885a572983054e6eacc32ac2e659748698e756d (CONNECTOME-HASH/1 shape) — ProtocolError {transportMessage = "no Connectome document is declared for `body`"}
+
+wire summary: 1 fetch(es), 0 hash-keyed cache hit(s)
+
+########## CAPTURE 5: legacy path, same target — count {ns}.schema round trips
+[2026-07-27 03:01:10][synapse.synapse.schema][Debug][shanes-MacBook-Pro.local][PID 81028][ThreadId 1] Fetching schema at path: []
+[2026-07-27 03:01:10][synapse.synapse.schema][Debug][shanes-MacBook-Pro.local][PID 81028][ThreadId 1] Fetching schema at path: ["orcha"]
+[2026-07-27 03:01:10][synapse.synapse.schema][Debug][shanes-MacBook-Pro.local][PID 81028][ThreadId 1] Fetching schema at path: ["orcha","pm"]
+
+########## CAPTURE 6: the round-trip contrast, same target, same substrate
+legacy path (synapse --log-level debug --log-subsystem schema substrate orcha pm):
+  Fetching schema at path: []            <- {ns}.schema round trip 1
+  Fetching schema at path: ["orcha"]     <- round trip 2
+  Fetching schema at path: ["orcha","pm"] <- round trip 3
+connectome path (synapse --connectome substrate orcha pm), SAME target:
+  1 fetch, 2 LOCAL edges, and the repeat navigation costs 0.
+  3 round trips -> 1. That is the round-trip class.
+
+########## CAPTURE 7: IR-completeness finding — solar loses 8 children
+connectome vs legacy child counts, per activation, measured over the wire:
+
+  path            connectome children   legacy children   missing from the document
+  <root>                           14                14   -
+  arbor/bash/changelog/echo/
+  interactive/lattice/loopback/
+  mustache                          0                 0   -
+  claudecode                        1                 0   - (gate is an edge here, a method there)
+  cone                              1                 0   - (same)
+  orcha                             1                 1   -
+  solar                             1                 8   mercury venus earth mars
+                                                          jupiter saturn uranus neptune
+
+`synapse substrate solar earth` works on the legacy wire and is UNREACHABLE over
+the Connectome:
+
+  $ synapse --connectome substrate solar earth
+  ERROR: 'earth' is not a child or a method at solar
+
+The eight statically-registered planet activations are absent from solar's
+declared ActivationIr. Reported, not worked around.

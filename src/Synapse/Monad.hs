@@ -43,13 +43,29 @@ module Synapse.Monad
   , lookupCache
   , insertCache
 
+    -- * Connectome node cache (PLX-121) — keyed on the hash and nothing else
+  , lookupNode
+  , insertNode
+
+    -- * The root document, fetched once per process
+  , readRootDocument
+  , writeRootDocument
+
+    -- * Wire log (PLX-121)
+  , getWireLog
+  , wireEvent
+
+    -- * Injectable document fetcher (PLX-121)
+  , getDocFetcher
+  , withDocFetcher
+
     -- * Logging
   , getLogger
   ) where
 
 import Control.Monad (when)
 import Control.Monad.IO.Class (MonadIO, liftIO)
-import Control.Monad.Reader (MonadReader, ReaderT, runReaderT, asks)
+import Control.Monad.Reader (MonadReader, ReaderT, runReaderT, asks, local)
 import Control.Monad.Except (MonadError, ExceptT, runExceptT, throwError)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
@@ -57,6 +73,7 @@ import Data.HashSet (HashSet)
 import qualified Data.HashSet as HS
 import Data.Hashable (Hashable)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
+import Data.Aeson (Value)
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -64,6 +81,8 @@ import Synapse.Schema.Types
 import Synapse.Backend.Discovery (Backend(..))
 import qualified Synapse.Log as Log
 import qualified Katip
+import qualified Plexus.Connectome.Types as C
+import Synapse.Wire (WireEvent, WireLog, newWireLog, recordEvent)
 
 -- | Environment for Synapse operations
 data SynapseEnv = SynapseEnv
@@ -76,6 +95,30 @@ data SynapseEnv = SynapseEnv
   , seToken   :: !(Maybe Text)                -- ^ JWT sent as Cookie: access_token=<jwt>
   , seCookies :: ![(Text, Text)]              -- ^ SAFE-S04/REQ-5: extra cookies for WS upgrade
   , seHeaders :: ![(Text, Text)]              -- ^ SAFE-S04/REQ-5: extra headers for WS upgrade
+  , seNodeCache :: !(IORef (HashMap Text C.Activation))
+    -- ^ PLX-121: Connectome nodes keyed on a Dynamic edge's __advertised
+    -- hash__ and nothing else. Not the namespace, not the path, not a
+    -- timestamp. A hash is a content identity, so a hit is safe by
+    -- construction — but only while the key is the hash alone. This replaces
+    -- the @(namespace, listMethodName)@ + 5-second-TTL shape: a mutable key
+    -- invalidated by time, which was the correct response to a wire that had
+    -- no content identity, and is obsolete now that one exists.
+  , seRootDoc :: !(IORef (Maybe C.Connectome))
+    -- ^ PLX-121: the whole-tree document. Fetched at most once per process —
+    -- there is no advertised hash for the root to key a cache on, so this is
+    -- memoisation, not caching, and it is named as such.
+  , seWireLog :: !WireLog
+    -- ^ PLX-121: the captured transcript of fetches and cache hits.
+  , seDocFetcher :: !(Maybe (Maybe Text -> IO (Either Text Value)))
+    -- ^ PLX-121: an injectable Connectome-document fetcher. 'Nothing' — the
+    -- production value — goes over the wire.
+    --
+    -- This seam exists because c1 and c2 are stated in /counts of round
+    -- trips/, and a count you cannot assert on is not a criterion. A live
+    -- substrate proves the fetch happens and what it costs; only an injected
+    -- fetcher can prove that the SECOND descent to a given hash calls nothing
+    -- at all. Both are run: see @test\/ConnectomeNavSpec.hs@ and the captured
+    -- wire log.
   }
 
 -- | Errors that can occur during Synapse operations
@@ -147,6 +190,9 @@ initEnv :: Text -> Int -> Text -> Log.Logger -> Maybe Text -> IO SynapseEnv
 initEnv host port backend logger token = do
   cache <- newIORef HM.empty
   visited <- newIORef HS.empty
+  nodeCache <- newIORef HM.empty
+  rootDoc <- newIORef Nothing
+  wireLog <- newWireLog
   pure SynapseEnv
     { seHost    = host
     , sePort    = port
@@ -157,6 +203,10 @@ initEnv host port backend logger token = do
     , seToken   = token
     , seCookies = []
     , seHeaders = []
+    , seNodeCache = nodeCache
+    , seRootDoc = rootDoc
+    , seWireLog = wireLog
+    , seDocFetcher = Nothing
     }
 
 -- | Augment a SynapseEnv with extra cookies and headers for the WS upgrade.
@@ -232,6 +282,66 @@ insertCache :: PluginHash -> PluginSchema -> SynapseM ()
 insertCache hash schema = do
   cacheRef <- asks seCache
   liftIO $ modifyIORef' cacheRef (HM.insert hash schema)
+
+-- ============================================================================
+-- Connectome node cache (PLX-121)
+-- ============================================================================
+
+-- | Look a Connectome node up by a Dynamic edge's advertised hash.
+--
+-- The key is the advertised hash __exactly as advertised__. It is deliberately
+-- never the hash of the document that came back: RFC §5.2 says a parent MUST
+-- fold a Dynamic child's advertised hash and MUST NOT recompute one, and
+-- 'Synapse.Cache.fetchCached' has the opposite asymmetry (it looks up on the
+-- advertised hash and inserts on the fetched one), which makes a hit
+-- unobservable the moment the two disagree. That asymmetry belongs to PLX-143;
+-- this cache simply does not have it, because lookup and insert take the same
+-- key from the same place.
+lookupNode :: Text -> SynapseM (Maybe C.Activation)
+lookupNode key = do
+  ref <- asks seNodeCache
+  HM.lookup key <$> liftIO (readIORef ref)
+
+-- | Insert under the advertised hash. See 'lookupNode' for why that and not
+-- the fetched node's own hash.
+insertNode :: Text -> C.Activation -> SynapseM ()
+insertNode key act = do
+  ref <- asks seNodeCache
+  liftIO $ modifyIORef' ref (HM.insert key act)
+
+-- | The memoised whole-tree document, if it has been fetched this process.
+readRootDocument :: SynapseM (Maybe C.Connectome)
+readRootDocument = asks seRootDoc >>= liftIO . readIORef
+
+writeRootDocument :: C.Connectome -> SynapseM ()
+writeRootDocument doc = do
+  ref <- asks seRootDoc
+  liftIO $ writeIORef ref (Just doc)
+
+-- ============================================================================
+-- Wire log (PLX-121)
+-- ============================================================================
+
+getWireLog :: SynapseM WireLog
+getWireLog = asks seWireLog
+
+-- | Record one observable wire event.
+wireEvent :: WireEvent -> SynapseM ()
+wireEvent ev = do
+  wl <- asks seWireLog
+  liftIO $ recordEvent wl ev
+
+-- | The Connectome-document fetcher in force. 'Nothing' means "go to the wire".
+getDocFetcher :: SynapseM (Maybe (Maybe Text -> IO (Either Text Value)))
+getDocFetcher = asks seDocFetcher
+
+-- | Replace the document fetcher for one action. Used by the tests that assert
+-- round-trip counts.
+withDocFetcher
+  :: (Maybe Text -> IO (Either Text Value))
+  -> SynapseM a
+  -> SynapseM a
+withDocFetcher f = local (\env -> env {seDocFetcher = Just f})
 
 -- ============================================================================
 -- Logging and Config
