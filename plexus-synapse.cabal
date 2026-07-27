@@ -254,6 +254,11 @@ test-suite req8-render-test
   ghc-options:      -threaded
 
 test-suite typeref-json
+  -- PLX-157: this suite used to contain ZERO assertions — it printed the
+  -- encodings and always exited 0, i.e. passed by construction. It now pins
+  -- them. The subject is the `--emit-ir` wire format (tag/contents on TypeRef,
+  -- fd*-prefixed keys on FieldDef), which hub-codegen parses from Rust and
+  -- TypeScript and which nothing else in the tree asserts on.
   type:             exitcode-stdio-1.0
   main-is:          TypeRefJson.hs
   build-depends:
@@ -261,8 +266,8 @@ test-suite typeref-json
     plexus-synapse,
     text >= 2.0 && < 2.2,
     aeson >= 2.2 && < 2.3,
-    aeson-pretty >= 0.8 && < 0.9,
-    bytestring >= 0.11 && < 0.13
+    bytestring >= 0.11 && < 0.13,
+    hspec >= 2.10 && < 2.12
   hs-source-dirs:   test
   default-language: GHC2021
   default-extensions:

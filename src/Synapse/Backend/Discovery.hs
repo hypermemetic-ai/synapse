@@ -55,6 +55,12 @@ module Synapse.Backend.Discovery
     -- * Backend Discovery
   , getBackendAt
 
+    -- * Backend Identity (PLX-157, inventory item 5)
+  , noteBackendNameFromRootFact
+  , cachedBackendName
+  , backendIdentityProbeCount
+  , resetBackendIdentityCache
+
     -- * Health Checks
   , pingBackend
   , pingBackends
@@ -78,6 +84,9 @@ import Plexus.Client (SubstrateConfig(..))
 import qualified Plexus.Transport as ST
 import Plexus.Types (PlexusStreamItem(..), TransportError(..))
 import System.Environment (lookupEnv)
+import Data.IORef (IORef, newIORef, atomicModifyIORef', readIORef, writeIORef)
+import qualified Data.Map.Strict as Map
+import System.IO.Unsafe (unsafePerformIO)
 
 -- ============================================================================
 -- Backend Type
@@ -225,9 +234,109 @@ registryDiscovery registryHost registryPort = BackendDiscovery
 getBackendAt :: Text -> Int -> IO (Maybe Text)
 getBackendAt = discoverBackendName
 
--- | Discover the backend name by calling _info (with 2000ms timeout)
+-- ============================================================================
+-- Backend identity: one answer per endpoint per process (PLX-157, item 5)
+-- ============================================================================
+
+-- $identity
+--
+-- Inventory item 5 said a root @backend_name@ fact would /replace/ the @_info@
+-- probe. Measured, the probe fired __three times per CLI invocation__ against
+-- the same @host:port@, uncached, even with @-H\/-P@ bypassing the registry
+-- entirely — three 2-second-timeout round trips returning the same string
+-- before any user command ran.
+--
+-- Two separate defects were tangled together there, and they are separated
+-- here:
+--
+-- 1. __Three identical uncached calls in one process is a defect on its own__,
+--    independent of anything the Connectome does. 'discoverBackendName' is now
+--    memoised per @(host, port)@ for the life of the process, negatives
+--    included — a dead endpoint should cost one 2s timeout, not three.
+--
+-- 2. __The root fact is preferred where it exists.__ When a consumer has a
+--    Connectome document in hand, RFC 002 §3.3's @backend_name@ is the
+--    authoritative identity and it is seeded here by
+--    'noteBackendNameFromRootFact'; every later resolution for that endpoint
+--    is answered from the document and never probes.
+--
+-- __The residual, stated rather than papered over.__ The root fact cannot
+-- eliminate the /bootstrap/ probe, and no amount of adoption will change that:
+-- the document is served at @{namespace}.connectome@, which is namespaced, so
+-- a client must already know the backend's name in order to ask for the
+-- document that carries its name. @_info@ is unnamespaced and is therefore the
+-- only bootstrap the protocol offers. Item 5's phrasing ("a root backend name
+-- /replaces/ the @_info@ probe") is achievable for every resolution after the
+-- first and not for the first. Closing that last one is an RFC 002 question —
+-- a well-known unnamespaced document endpoint — not a synapse one.
+
+-- | Memoised @_info@ identities, keyed by endpoint. 'Nothing' is a cached
+-- negative: an endpoint that failed to identify once will not be re-probed.
+{-# NOINLINE backendIdentityCache #-}
+backendIdentityCache :: IORef (Map.Map (Text, Int) (Maybe Text))
+backendIdentityCache = unsafePerformIO (newIORef Map.empty)
+
+-- | How many @_info@ round trips 'discoverBackendName' has actually put on the
+-- wire in this process. The measurement instrument for item 5: it is what
+-- makes "three per invocation" and "one per invocation" checkable rather than
+-- asserted.
+{-# NOINLINE backendIdentityProbes #-}
+backendIdentityProbes :: IORef Int
+backendIdentityProbes = unsafePerformIO (newIORef 0)
+
+-- | Read the probe counter.
+backendIdentityProbeCount :: IO Int
+backendIdentityProbeCount = readIORef backendIdentityProbes
+
+-- | Drop everything. For tests that need a clean instrument; production never
+-- calls it.
+resetBackendIdentityCache :: IO ()
+resetBackendIdentityCache = do
+  writeIORef backendIdentityCache Map.empty
+  writeIORef backendIdentityProbes 0
+
+-- | The preferred source: RFC 002 §3.3's @backend_name@ root fact, read off a
+-- Connectome document that has already been fetched.
+--
+-- Seeding this means no further @_info@ probe is issued for that endpoint. It
+-- overwrites a probe-derived entry deliberately — the document is the
+-- backend's own declaration of identity, and the probe is the workaround for
+-- its absence.
+noteBackendNameFromRootFact :: Text -> Int -> Text -> IO ()
+noteBackendNameFromRootFact host port name =
+  atomicModifyIORef' backendIdentityCache $ \m ->
+    (Map.insert (host, port) (Just name) m, ())
+
+-- | Whatever identity is already known for an endpoint without touching the
+-- network. @Nothing@ means "not resolved yet"; @Just Nothing@ means "resolved,
+-- and it does not identify".
+cachedBackendName :: Text -> Int -> IO (Maybe (Maybe Text))
+cachedBackendName host port =
+  Map.lookup (host, port) <$> readIORef backendIdentityCache
+
+-- | Discover the backend name, preferring an already-known identity (a root
+-- fact, or an earlier probe in this process) and falling back to the @_info@
+-- probe.
+--
+-- See the note above on why the fallback cannot be removed entirely.
 discoverBackendName :: Text -> Int -> IO (Maybe Text)
 discoverBackendName host port = do
+  known <- cachedBackendName host port
+  case known of
+    Just answer -> pure answer
+    Nothing -> do
+      answer <- probeBackendName host port
+      atomicModifyIORef' backendIdentityCache $ \m ->
+        -- A root fact that landed while this probe was in flight wins: it is
+        -- the declaration, this is the workaround.
+        (Map.insertWith (\_new old -> old) (host, port) answer m, ())
+      pure answer
+
+-- | The uncached @_info@ round trip (2000ms timeout). The only thing in this
+-- module that puts @_info@ on the wire for identity.
+probeBackendName :: Text -> Int -> IO (Maybe Text)
+probeBackendName host port = do
+  atomicModifyIORef' backendIdentityProbes $ \n -> (n + 1, ())
   let cfg = SubstrateConfig
         { substrateHost    = T.unpack host
         , substratePort    = port

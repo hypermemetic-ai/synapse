@@ -21,13 +21,21 @@
 -- job — it means somebody closed something and this file must be re-read, not
 -- that somebody broke something.
 --
+-- = PLX-157 inverted two of these pins (2026-07-27)
+--
+-- Items 5 and 8 are now MET by a producer, and PLX-124's negative pins for
+-- them were __inverted, not deleted__: each @it@ still asserts the gap against
+-- PLX-124's dated capture and then asserts its closure against a new one, so
+-- the flip is auditable. PLX-112's precedent.
+--
+-- One residual is pinned in item05's place: the @_info@ probe survives as the
+-- __bootstrap__ and cannot be removed by any amount of adoption, because the
+-- document that carries the backend's name is served at
+-- @{namespace}.connectome@ and a client needs the name to ask for it. That is
+-- an RFC 002 question, filed rather than worked around.
+--
 -- Items NOT met, with owners, as of 2026-07-27:
 --
--- * __item05__ (root backend name replaces the @_info@ probe) — the probe still
---   fires on every invocation and the served document declares no
---   @backend_name@ root fact. No ticket owns it; named in PLX-124's report.
--- * __item08__ (@respond_method@ as a document-level capability) — §7.6 SHOULD,
---   absent from both the lift and the served document.
 -- * __item09__ (credential metadata) — met in the direction that matters
 --   (nothing is read from the server), but the richer axis is absent from the
 --   Connectome. __PLX-120, deferred with a stated cost.__
@@ -71,7 +79,10 @@ import qualified Plexus.Schema.Recursive as W
 import qualified Plexus.Types as PT
 
 import qualified Katip
+import Plexus.Client (SubstrateConfig (..))
+import qualified Plexus.Transport as ST
 import Synapse.Backend.Discovery (Backend (..), pingBackend)
+import qualified Synapse.Backend.Discovery as Disc
 import Synapse.Connectome
 import Synapse.Connectome.Nav
 import Synapse.DynamicChildren
@@ -383,30 +394,87 @@ spec = do
   -- Group 2: "already in schema / pure convention the IR formalizes"
   ------------------------------------------------------------------------------
 
-  describe "item05 — root backend name: NOT MET, the _info probe survives" $ do
-    it "the lift has to be TOLD the backend name — the wire does not carry it" $ do
+  describe "item05 — root backend name: MET by declaration; the probe survives only as bootstrap" $ do
+    it "the lift has to be TOLD the backend name — the LEGACY wire does not carry it" $ do
       -- liftConnectome takes the name as an argument precisely because the
-      -- legacy wire has no field for it. That is the shape of the gap.
+      -- legacy wire has no field for it. That is unchanged by PLX-157 and is
+      -- why item 5 could never be closed on the lift side.
       C.rfBackendName (C.cRootFacts lifted) `shouldBe` Just (C.BackendName "substrate")
       let anonymous = liftConnectome "" legacyRoot
       C.rfBackendName (C.cRootFacts anonymous) `shouldBe` Just (C.BackendName "")
 
-    it "NEGATIVE PIN: the SERVED document declares no backend_name root fact" $ do
-      -- Captured from a live substrate (see the fixture header). §3.3 makes
-      -- backend identity a root fact; this document has `namespace` and no
-      -- `backend_name`, so a client must still probe. When the emitter starts
-      -- declaring it, this fails — and item05's first half is met.
-      doc <- servedDocument
-      C.rfBackendName (C.cRootFacts doc) `shouldBe` Nothing
+    -- PLX-157 — PLX-124's two negative pins for item 5, INVERTED rather than
+    -- deleted. Each `it` below is the same assertion with the condition
+    -- flipped, and the superseded capture is still asserted on, so the flip is
+    -- auditable rather than asserted.
 
-    it "NEGATIVE PIN: _info is still the discovery mechanism, uncached" $ do
+    it "INVERTED PIN (was: the SERVED document declares no backend_name)" $ do
+      -- The gap, still pinned from the historical side: PLX-124's capture of
+      -- 2026-07-27 carried `namespace` and no `backend_name`, so a client had
+      -- to probe.
+      old <- servedDocumentPlx124
+      C.rfBackendName (C.cRootFacts old) `shouldBe` Nothing
+      -- And the gap, closed: a document captured from the emitter after
+      -- `DynamicHub::with_backend_name` declares §3.3's root fact. This is the
+      -- assertion PLX-124 said would fail when the gap closed; it now holds in
+      -- the opposite direction.
+      doc <- servedDocument157
+      C.rfBackendName (C.cRootFacts doc) `shouldBe` Just (C.BackendName "substrate")
+
+    it "INVERTED PIN (was: _info is the discovery mechanism, uncached)" $ do
       src <- readSource "src/Synapse/Backend/Discovery.hs"
+      -- `_info` is still on the wire, and deliberately: it is the only
+      -- UNNAMESPACED method the protocol offers, and `{ns}.connectome` needs
+      -- the namespace, so the very first identity resolution cannot come from
+      -- the document. What changed is that it is no longer uncached and no
+      -- longer preferred.
       src `shouldSatisfy` isInfixOf "\"_info\""
-      -- Measured live on 2026-07-27 through a counting proxy: THREE `_info`
-      -- round trips per CLI invocation, on every path, even with -H/-P given.
-      -- Nothing memoises it; Synapse.Cache is schema-only.
-      cacheSrc <- readSource "src/Synapse/Cache.hs"
-      cacheSrc `shouldNotSatisfy` isInfixOf "_info"
+      -- Measured live through docs/evidence/plx-157-info-counter.py against a
+      -- substrate on :4499, same command and same server both times:
+      --   BEFORE (plx-124-parity): _info round trips: 3
+      --   AFTER  (this commit):    _info round trips: 1
+      -- The memo is what deletes the other two.
+      src `shouldSatisfy` isInfixOf "backendIdentityCache"
+      src `shouldSatisfy` isInfixOf "noteBackendNameFromRootFact"
+      -- The root fact is PREFERRED: a document's `backend_name` is seeded into
+      -- the identity cache the moment the document arrives, so no later
+      -- resolution for that endpoint probes at all.
+      nav <- readSource "src/Synapse/Connectome/Nav.hs"
+      nav `shouldSatisfy` isInfixOf "noteBackendNameFromRootFact"
+
+    it "the memo answers a second resolution with ZERO additional probes" $ do
+      -- The mechanical half of the 3 -> 1 measurement, hermetic: no server, so
+      -- every probe fails, and the point is how MANY failed probes are paid.
+      Disc.resetBackendIdentityCache
+      _ <- Disc.getBackendAt "127.0.0.1" unusedPort
+      afterFirst <- Disc.backendIdentityProbeCount
+      afterFirst `shouldBe` 1
+      _ <- Disc.getBackendAt "127.0.0.1" unusedPort
+      _ <- Disc.getBackendAt "127.0.0.1" unusedPort
+      afterThird <- Disc.backendIdentityProbeCount
+      -- Was 3 before PLX-157: a dead endpoint cost three 2-second timeouts.
+      afterThird `shouldBe` 1
+
+    it "a root fact preempts the probe entirely — the document wins" $ do
+      Disc.resetBackendIdentityCache
+      Disc.noteBackendNameFromRootFact "127.0.0.1" unusedPort "substrate"
+      name <- Disc.getBackendAt "127.0.0.1" unusedPort
+      name `shouldBe` Just "substrate"
+      probes <- Disc.backendIdentityProbeCount
+      probes `shouldBe` 0
+
+    it "RESIDUAL, pinned: the bootstrap probe is not removable at the RFC level" $ do
+      -- Item 5's phrasing was "a root backend name REPLACES the _info probe".
+      -- It cannot, for the first resolution: the document that carries the
+      -- name is served at `{namespace}.connectome`, so a client must already
+      -- know the name to ask for it. `_info` is unnamespaced and is the only
+      -- bootstrap on offer. This asserts the circularity rather than describing
+      -- it: the method name is built FROM the backend name.
+      let cfg = probeConfig "substrate"
+      ST.connectomeMethodName cfg `shouldBe` "substrate.connectome"
+      ST.connectomeMethodName (probeConfig "other") `shouldBe` "other.connectome"
+      -- Closing the last probe is an RFC 002 change (a well-known unnamespaced
+      -- document endpoint), not a synapse one. Filed, not diverged from.
 
   describe "item06 — the dotted method-id convention, made explicit per node" $ do
     it "every lifted method carries namespace.name as its dotted id (§10.1)" $ do
@@ -454,12 +522,31 @@ spec = do
       W.methodRequestType bidirMethod `shouldBe` Just "StandardRequest"
       W.methodResponseType bidirMethod `shouldBe` Just "StandardResponse"
 
-    it "NEGATIVE PIN: no document declares a reply-channel method (§7.6 SHOULD)" $ do
+    it "INVERTED PIN (was: no document declares a reply-channel method, §7.6)" $ do
+      -- PLX-157. The lift still cannot produce one — the legacy wire has no
+      -- field for it — so that half of the pin stands unchanged.
       C.rfRespondMethod (C.cRootFacts lifted) `shouldBe` Nothing
-      doc <- servedDocument
-      C.rfRespondMethod (C.cRootFacts doc) `shouldBe` Nothing
+      -- The gap, still pinned from the historical side.
+      old <- servedDocumentPlx124
+      C.rfRespondMethod (C.cRootFacts old) `shouldBe` Nothing
+      -- The gap, closed by a PRODUCER: substrate declares the reply channel,
+      -- so a consumer can now tell before invoking whether it can serve a
+      -- declared callback. This is the assertion PLX-124 said would fail when
+      -- the gap closed.
+      doc <- servedDocument157
+      C.rfRespondMethod (C.cRootFacts doc)
+        `shouldBe` Just (C.MethodName "substrate.respond")
 
-    it "so the `respond` method name stays a client-side CONVENTION" $ do
+    it "the declared channel is the one the runtime actually registers" $ do
+      -- The §7.6 advisory is only retired honestly if the declared name is
+      -- callable. plexus-core registers `{ns}.respond`; the declaration must
+      -- be that dotted id and not the bare `respond` clients assumed.
+      doc <- servedDocument157
+      let ns = C.unNamespace (C.aNamespace (C.cRoot doc))
+      C.rfRespondMethod (C.cRootFacts doc)
+        `shouldBe` Just (C.MethodName (ns <> ".respond"))
+
+    it "the client-side `.respond` CONVENTION now has a declaration to agree with" $ do
       src <- readSource "../plexus-protocol/src/Plexus/Transport.hs"
       src `shouldSatisfy` isInfixOf "\".respond\""
 
@@ -790,10 +877,52 @@ lookupMethod n ms = case [m | m <- ms, C.unMethodName (C.mName m) == n] of
 -- asserts on (root facts, edge kinds, the Indexed edge's five §5.1 facts) is
 -- verbatim from the wire.
 servedDocument :: IO C.Connectome
-servedDocument = do
-  mv <- decodeFileStrict' "test/golden/plx124_served_root.json"
+servedDocument = servedDocumentPlx124
+
+-- | PLX-124's capture (2026-07-27), kept verbatim.
+--
+-- PLX-157 did NOT replace this file. The two captures come from differently
+-- composed substrates — this one has four children, today's has fifteen — for
+-- reasons that predate this ticket, so overwriting it would silently change
+-- what six other item tests assert on. It is retained as the dated record of
+-- the wire BEFORE the root facts were declared, which is what makes the
+-- inverted pins auditable.
+servedDocumentPlx124 :: IO C.Connectome
+servedDocumentPlx124 = goldenDocument "test/golden/plx124_served_root.json"
+
+-- | PLX-157's capture: the same @substrate.connectome@ call against a
+-- substrate built from @plx-157-unowned@, which declares §3.3's
+-- @backend_name@ and §7.6's @respond_method@ on the hub root.
+--
+-- Captured 2026-07-27 from 127.0.0.1:4499 with
+-- @docs\/evidence\/plx-157-info-counter.py@'s sibling capture snippet; the
+-- diff against PLX-124's is exactly three keys — @backend_name@ (added),
+-- @respond_method@ (added), @ir_hash@ (moved). No activation or method hash
+-- moved, which is what §4.6 promises: root facts enter the DOCUMENT preimage
+-- only.
+servedDocument157 :: IO C.Connectome
+servedDocument157 = goldenDocument "test/golden/plx157_served_root.json"
+
+goldenDocument :: FilePath -> IO C.Connectome
+goldenDocument path = do
+  mv <- decodeFileStrict' path
   case mv of
-    Nothing -> fail "test/golden/plx124_served_root.json is not valid JSON"
+    Nothing -> fail (path <> " is not valid JSON")
     Just v -> case CC.decodeConnectome v of
       Left e -> fail ("captured document does not decode as a Connectome: " <> show e)
       Right c -> pure c
+
+-- | A port nothing listens on, so an identity probe is guaranteed to fail.
+-- The memo tests care about how many failures are PAID, not about the answer.
+unusedPort :: Int
+unusedPort = 4531
+
+probeConfig :: Text -> SubstrateConfig
+probeConfig backend =
+  SubstrateConfig
+    { substrateHost = "127.0.0.1"
+    , substratePort = unusedPort
+    , substratePath = "/"
+    , substrateBackend = backend
+    , substrateHeaders = []
+    }

@@ -82,10 +82,12 @@ import Data.List (find)
 import Data.Text (Text)
 import qualified Data.Text as T
 
+import Plexus.Client (SubstrateConfig(..))
 import qualified Plexus.Connectome.Codec as CC
 import qualified Plexus.Connectome.Types as C
 import qualified Plexus.Transport as ST
 
+import qualified Synapse.Backend.Discovery as Disc
 import Synapse.Monad
 import Synapse.Schema.Types (Path)
 import Synapse.Transport (getConfig)
@@ -174,6 +176,20 @@ rootDocument =
       Left err -> pure (Left err)
       Right doc -> do
         writeRootDocument doc
+        -- PLX-157 (item 5) — the root document is the authoritative statement
+        -- of who this backend is. Seed the identity cache from §3.3's
+        -- `backend_name` so no later resolution falls back to an `_info`
+        -- probe. A document that declares nothing (every backend before this
+        -- ticket) leaves the cache untouched and the probe path unchanged.
+        cfg <- getConfig
+        case C.rfBackendName (C.cRootFacts doc) of
+          Nothing -> pure ()
+          Just bn ->
+            liftIO $
+              Disc.noteBackendNameFromRootFact
+                (T.pack (substrateHost cfg))
+                (substratePort cfg)
+                (C.unBackendName bn)
         pure (Right doc)
 
 -- | One document fetch, logged.
