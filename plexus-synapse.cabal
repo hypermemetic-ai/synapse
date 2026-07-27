@@ -8,7 +8,8 @@ maintainer:
 build-type:         Simple
 
 flag build-examples
-  description: Build example programs (schema-discovery)
+  description: Build example/demo programs (reporter-demo,
+               validation-report-test, protocol-test-demo)
   default:     False
   manual:      True
 
@@ -24,6 +25,7 @@ library
   exposed-modules:
     Synapse.Schema.Types
     Synapse.Schema.Functor
+    Synapse.Connectome
     Synapse.Monad
     Synapse.Log
     Synapse.Algebra.Navigate
@@ -70,6 +72,7 @@ library
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
+    plexus-connectome,
     aeson >= 2.0 && < 2.3,
     aeson-pretty >= 0.8 && < 0.9,
     text >= 2.0 && < 2.2,
@@ -137,22 +140,6 @@ executable synapse
     OverloadedStrings
     RecordWildCards
     LambdaCase
-
-executable schema-discovery
-  main-is:          SchemaDiscovery.hs
-  build-depends:
-    base >= 4.17 && < 5,
-    plexus-protocol,
-    plexus-synapse,
-    aeson >= 2.0 && < 2.3,
-    text >= 2.0 && < 2.2,
-    streaming >= 0.2 && < 0.3
-  hs-source-dirs:   examples
-  default-language: GHC2021
-  default-extensions:
-    OverloadedStrings
-  if !flag(build-examples)
-    buildable: False
 
 executable reporter-demo
   main-is:          ReporterDemo.hs
@@ -499,6 +486,25 @@ test-suite r3-credential-posture-test
   default-extensions:
     OverloadedStrings
     QuasiQuotes
+  ghc-options:      -threaded
+
+test-suite connectome-lift-test
+  -- PLX-119: the legacy PluginSchema wire lifted into plexus-connectome, and
+  -- the PINNED list of RFC 002 clauses that wire cannot satisfy.
+  type:             exitcode-stdio-1.0
+  main-is:          ConnectomeLiftSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-connectome,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    hspec >= 2.10 && < 2.12,
+    text >= 2.0 && < 2.2
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
   ghc-options:      -threaded
 
 test-suite keychain-test
