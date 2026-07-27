@@ -1,0 +1,65 @@
+PLX-123 / M3.D -- end-to-end evidence, captured 2026-07-27T04:31:23Z
+
+Server: plexus-registry/examples/plx123_gate.rs on ws://127.0.0.1:4601.
+  Built from plexus-core c41c7cb and
+  plexus-macros f7f3217 -- both POST-PLX-112,
+  so TurnStop + IntoTurnStop are present and the refusal below comes from a real
+  'impl IntoTurnStop for PermissionDenied' compiled by the real macro. No kind is
+  hardcoded anywhere in the server, and TurnError::into_stop_reason is not involved.
+Client: synapse on branch plx-123-turn-dispatch (branched from plx-121-navigation, 9cea16bc).
+
+Cancelled is absent from this transcript ON PURPOSE: RFC 002 6.8 makes cancellation
+cooperative, PLX-112 therefore deferred the server-side spelling, and TurnOutcome has
+no Cancelled variant. Manufacturing one to fill the row would be the fake the ticket
+forbids. See the report's cancellation section.
+
+================ DEFAULT RENDERING MODE ================
+$ synapse gate-hub gate allow --tool rm -rf /
+  EXIT: 0
+  stdout: allowed: true
+tool: rm -rf /
+  stderr: 
+
+$ synapse gate-hub gate ask --tool rm -rf /
+  EXIT: 3
+  stdout: stop: 
+  detail: 
+    code: acp:permission_denied
+    data: 
+      tool: rm -rf /
+    message: the user declined the permission request
+  kind: refused
+value: null
+  stderr: Refused (not an error): acp:permission_denied — the user declined the permission request
+
+$ synapse gate-hub gate budget
+  EXIT: 4
+  stdout: stop: 
+  detail: 
+    code: acp:max_tokens
+    message: the budget for this turn was exhausted
+  kind: limited
+value: null
+  stderr: Limited (not an error): acp:max_tokens — the budget for this turn was exhausted
+
+$ synapse gate-hub gate boom
+  EXIT: 1
+  stdout: stop: 
+  detail: 
+    code: gate.boom
+    message: the gate broke
+  error: 
+    code: gate.boom
+    message: the gate broke
+    retryable: true
+  kind: failed
+value: null
+  stderr: Error: gate.boom — the gate broke
+
+================ --json (bytes mode: envelope deliberately NOT stripped) ================
+$ synapse --json gate-hub gate ask --tool rm -rf /
+  EXIT: 3
+  stdout: {"content":{"stop":{"detail":{"code":"acp:permission_denied","data":{"tool":"rm -rf /"},"message":"the user declined the permission request"},"kind":"refused"},"value":null},"content_type":"gate.ask.terminal","metadata":{"plexus_hash":"91c27f89134d7824","provenance":["gate"],"timestamp":0},"type":"data"}
+{"metadata":{"plexus_hash":"91c27f89134d7824","provenance":["gate"],"timestamp":0},"type":"done"}
+  stderr: Refused (not an error): acp:permission_denied — the user declined the permission request
+

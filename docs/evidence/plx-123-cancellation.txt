@@ -1,0 +1,56 @@
+PLX-123 / M3.D -- DECISION GATE 2: cancellation, demonstrated against a real backend.
+Captured 2026-07-27T04:44:25Z against plexus-registry/examples/plx123_gate.rs on :4601.
+
+THE DECISION (RFC 002 10.2 leaves the channel unspecified; this is where synapse specifies it):
+  trigger : SIGINT. Second SIGINT exits 130 without waiting.
+  channel : the JSON-RPC subscription THIS call opened, on the SAME multiplexed
+            connection, addressed by its SubscriptionId via <ns>.call_unsub -- the
+            unsubscribe method plexus-core already registers next to every <ns>.call.
+            No second socket, no second port, no invented identity.
+  exit    : 5, with a terminal labelled synapse:client_cancelled.
+
+=========== 1. the channel works, and the old encoding did not ===========
+A latent bug: Plexus.Types.mkUnsubscribeRequest was exported and called by nothing,
+so its params encoding had never met a server. It sent the id as a JSON STRING;
+plexus substrates issue NUMERIC ids. Measured both ways against the same server:
+
+gate-hub.call_unsub against the live plx123_gate server (1 update/second):
+  STRING - what the pre-PLX-123 code sent
+    params           : ['7728089446680985']
+    unsub ack        : False
+    updates in the 5s AFTER the unsubscribe: 5
+  NUMBER - the PLX-123 fix
+    params           : [3108779842067685]
+    unsub ack        : True
+    updates in the 5s AFTER the unsubscribe: 1
+
+=========== 2. synapse cancels, end to end ===========
+$ synapse -H 127.0.0.1 -P 4601 gate-hub gate slow     # then SIGINT after ~3.5s
+websocat: Broken pipe (os error 32)
+websocat: error running
+--- sending SIGINT to pid 33120
+  EXIT: 5
+  stdout (updates rendered AS THEY ARRIVED, before the cancel):
+    allowed: true
+    tool: tick 0
+    allowed: true
+    tool: tick 1
+    allowed: true
+    tool: tick 2
+  stderr:
+    Cancelling (sending unsubscribe on the same connection)…
+    Cancelled (not an error): synapse:client_cancelled — the client sent cancellation and stopped consuming; the server was not observed to confirm with a Cancelled terminal (RFC 002 §6.8 makes cancellation cooperative, and §10.2 leaves the channel unspecified — see PLX-84 §10.2, amended 2026-07-26)
+
+=========== 3. WHAT THIS DOES NOT CLAIM ===========
+RFC 002 6.8 makes cancellation cooperative: a conformant Cancelled asserts that the
+signal was DELIVERED to the turn and that the turn RESOLVED with Cancelled.
+Unsubscribing tears down the subscription -- proven above -- but it does not reach
+plexus_core::runtime::LiveTurns::cancel_turn, which is reachable from NO wire method
+and takes a TurnId the server advertises nowhere except inside a callback's request_id.
+So no Cancelled terminal comes back, and synapse does not pretend one did: it renders
+its OWN terminal, coded synapse:client_cancelled, whose message says the server was
+not observed to confirm. Closing that is a server-supply change; it is filed as the
+PLX-84 10.2 amendment (dated 2026-07-26) and NOT faked here.
+
+Note also that the demo server's slow() handler does NOT poll HandlerContext::cancelled().
+Making it do so would prove nothing about the client and would hide exactly this gap.

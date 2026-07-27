@@ -24,18 +24,19 @@ import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as LBS
 import Data.List (stripPrefix)
 import Data.Maybe (isJust)
+import Data.IORef (IORef, newIORef, atomicModifyIORef')
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Encoding as TE
 import Options.Applicative
-import System.Environment (getEnvironment)
+import System.Environment (getEnvironment, lookupEnv)
 import Data.Version (showVersion)
 import qualified Paths_plexus_synapse as Meta
 import System.Directory (getHomeDirectory)
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath ((</>))
-import System.IO (hPutStrLn, stderr, hFlush, stdout)
+import System.IO (hPutStrLn, stderr, hFlush, stdout, hIsTerminalDevice)
 
 
 import Synapse.Schema.Types
@@ -57,7 +58,26 @@ import qualified Katip
 import Synapse.Algebra.Navigate
 import qualified Synapse.Connectome.Nav as CNav
 import Synapse.Wire (readWireLog, renderWireLog)
-import Synapse.Monad (getWireLog)
+import Synapse.Monad (getWireLog, getTurnObservation, readTurnVerdict)
+import Plexus.Client (CancelTurn (..))
+import System.Posix.Signals (Handler(Catch), installHandler, sigINT)
+import System.Posix.Process (exitImmediately)
+-- PLX-123 / M3·D: the update/terminal split, the stop kinds, the exit codes.
+import Synapse.Turn
+  ( TurnItem (..)
+  , TurnObservation
+  , TurnVerdict (..)
+  , classifyItem
+  , observeItem
+  , clientCancelledStop
+  , newTurnObservation
+  , readTurnObservation
+  , turnVerdict
+  , osKind
+  , renderStop
+  , terminalOutput
+  , verdictExitCode
+  )
 import qualified Plexus.Connectome.Types as C
 import Synapse.Algebra.Render (renderSchema)
 import Synapse.CLI.Help (renderMethodHelp)
@@ -446,7 +466,7 @@ runSelfLegacyLocal host port backend opts args = do
     Left err -> do
       hPutStrLn stderr $ renderError err
       exitFailure
-    Right () -> exitSuccess
+    Right () -> exitWithTurnVerdict env
 
 -- | Re-parse the post-@_self@ token stream through the SELF-4
 -- optparse-applicative parser, then run the resulting command.
@@ -588,7 +608,106 @@ run backend host port args = do
     Left err -> do
       hPutStrLn stderr $ renderError err
       exitFailure
-    Right () -> exitSuccess
+    Right () -> exitWithTurnVerdict env
+
+-- | PLX-123 / M3·D — __decision gate 2: how synapse cancels.__
+--
+-- RFC 002 §10.2 leaves the cancellation channel deliberately unspecified —
+-- "cancellation is therefore transport-defined and is NOT projectable the way
+-- callbacks are". The decision, stated here and in the PLX-84 amendment:
+--
+-- 1. __The trigger is SIGINT.__ Ctrl-C is what a person actually presses, and
+--    before this synapse had no signal handling at all: the process died, the
+--    pooled socket died with it, and the server learned nothing.
+-- 2. __The channel is the JSON-RPC subscription this call opened__, on the
+--    same multiplexed connection, addressed by its @SubscriptionId@ via the
+--    @\<ns\>.call_unsub@ method the substrate already registers. No second
+--    socket, no second port, no invented identity. See
+--    'Plexus.Client.substrateRpcCancellable'.
+-- 3. __A second SIGINT exits immediately__, without waiting for anything. A
+--    cancel you cannot escape is a hang with better manners.
+--
+-- __What this does NOT claim, stated because §6.8 requires it to be.__ §6.8
+-- makes cancellation cooperative: a conformant @Cancelled@ asserts the signal
+-- reached the turn and the turn resolved. Unsubscribing tears down the
+-- subscription; it does not reach @LiveTurns::cancel_turn@, which is reachable
+-- from no wire method today and takes a @TurnId@ the server never advertises
+-- outside a callback's @request_id@. So the server does not answer with a
+-- @Cancelled@ terminal, and synapse does not pretend it did: it renders
+-- 'clientCancelledStop', whose detail code is @synapse:client_cancelled@ and
+-- whose message says the server was not observed to confirm. Closing that gap
+-- is a server-supply change, filed rather than faked.
+installCancelHandler :: IORef TurnObservation -> CancelTurn -> IO ()
+installCancelHandler turnRef (CancelTurn cancel) = do
+  fired <- newIORef False
+  _ <- installHandler sigINT (Catch (onSigint fired)) Nothing
+  pure ()
+  where
+    onSigint fired = do
+      already <- atomicModifyIORef' fired (\b -> (True, b))
+      if already
+        then bail 130 "Interrupt again — exiting without waiting."
+        else do
+          TIO.hPutStrLn stderr "Cancelling (sending unsubscribe on the same connection)…"
+          cancel
+          -- Record the client-observed cancellation, so anything that reads
+          -- the observation afterwards sees a Cancelled rather than an
+          -- incomplete turn.
+          observeItem turnRef (TurnTerminal clientCancelledStop)
+          case renderStop clientCancelledStop of
+            Nothing -> pure ()
+            Just b  -> TIO.hPutStrLn stderr b
+          bail 5 ""
+
+    -- Exit from the SIGNAL HANDLER, which runs on its own thread.
+    --
+    -- This is 'exitImmediately' and not 'exitWith' on purpose, and the reason
+    -- was measured rather than assumed. 'exitWith' throws 'ExitSuccess' in
+    -- *this* thread; the main thread is blocked in the stream and never sees
+    -- it, so the first live run printed `synapse: ExitFailure 5` from the
+    -- handler and then went right on rendering the remaining 56 updates
+    -- before exiting 6 on a §6.1 "two terminals" violation — the real
+    -- terminal plus the synthesised one. Cancelling must actually stop the
+    -- process; a cancel that keeps printing is not a cancel.
+    --
+    -- 'exitImmediately' skips handle finalisers, hence the explicit flushes.
+    bail code msg = do
+      if T.null msg then pure () else TIO.hPutStrLn stderr msg
+      hFlush stdout
+      hFlush stderr
+      exitImmediately (ExitFailure code)
+
+-- | PLX-123: exit on the turn's stop reason.
+--
+-- The whole ticket in one function. Before M3·D this was @exitSuccess@ and a
+-- refusal, a failure and a completion were indistinguishable to @$?@ — which
+-- is to say RFC 002 §6.6 was true of the protocol and false of the client.
+--
+-- 'NotATurn' — no turn-shaped item was seen at all — returns 'exitSuccess'
+-- unchanged. That is the branch every legacy activation, every schema fetch
+-- and every @--connectome@ walk takes, and it is why this is additive.
+--
+-- The §6.1 violations get their own code and their own message because a
+-- stream that ends with no terminal, or with two, is a /protocol/ defect and
+-- reporting it as the method's failure would send the reader to the wrong
+-- codebase.
+exitWithTurnVerdict :: SynapseEnv -> IO a
+exitWithTurnVerdict env = exitWithTurnVerdictRef (seTurn env)
+
+exitWithTurnVerdictRef :: IORef TurnObservation -> IO a
+exitWithTurnVerdictRef ref = do
+  verdict <- turnVerdict <$> readTurnObservation ref
+  case verdict of
+    TurnNoTerminal ->
+      TIO.hPutStrLn stderr
+        "Protocol error: the turn emitted updates and no terminal \
+        \(RFC 002 §6.1: a turn MUST emit exactly one terminal)."
+    TurnManyTerminals n ->
+      TIO.hPutStrLn stderr $
+        "Protocol error: the turn emitted " <> T.pack (show n)
+          <> " terminals (RFC 002 §6.1: exactly one)."
+    _ -> pure ()
+  exitWith (verdictExitCode verdict)
 
 -- | Dispatch based on navigation result
 dispatch :: Args -> RendererConfig -> SynapseM ()
@@ -818,12 +937,16 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
               TIO.hPutStrLn stderr $ "[synapse] Unknown --bidir-mode: " <> modeStr <> ", using auto-detect"
               detectBidirMode
           Nothing -> detectBidirMode
-      -- Use bidirectional streaming handler
-      invokeStreamingWithBidir
+      -- Use bidirectional streaming handler.
+      -- PLX-123: the renderer is turn-aware; the observation it folds into
+      -- lives in the env so the stop kind survives to the exit code.
+      turnRef <- getTurnObservation
+      invokeStreamingWithBidirCancellable
+        (installCancelHandler turnRef)
         namespacePath
         methodName'
         params
-        (printResult soJson soRaw rendererCfg')
+        (printTurnResult turnRef soJson soRaw rendererCfg')
         (handleBidirRequest bidirMode Nothing)
 
     -- Extract default values from JSON Schema properties
@@ -1185,6 +1308,77 @@ encodeDryRun backend namespacePath method params =
         , "params" .= params
         ]
     ]
+
+-- | PLX-123 / M3·D — the turn-aware renderer.
+--
+-- Every item is classified against the turn projection (see "Synapse.Turn")
+-- before anything is printed, so RFC 002 §6.2's "updates and the terminal MUST
+-- be distinguishable by a consumer" is finally true of this consumer:
+--
+-- * an __update__ renders as it arrives, exactly as a @Data@ item always has —
+--   the update /is/ the streamed output;
+-- * the __terminal__ is folded into the invocation's observation (so its stop
+--   kind can reach the process exit code, which a callback returning @()@
+--   otherwise could not), announced on __stderr__ by kind, and contributes to
+--   __stdout__ under PLX-145's envelope-stripping rule;
+-- * anything the turn projection did not produce goes down the pre-M3 path
+--   byte for byte. That branch is every legacy activation, every
+--   bidirectional method and every progress/error/done frame, and keeping it
+--   textually untouched is what makes this additive.
+--
+-- __Mode rule, stated once.__ The stop banner and the exit code apply in every
+-- mode. The stdout envelope-stripping applies to the default rendering mode
+-- only: @--json@ and @--raw@ are the "give me the bytes" modes and a caller
+-- who asked for the bytes gets the envelope, unstripped. This is deliberate
+-- and is pinned by test.
+printTurnResult
+  :: IORef TurnObservation
+  -> Bool -> Bool -> RendererConfig -> HubStreamItem -> IO ()
+printTurnResult ref soJson soRaw cfg item = do
+  let cls = classifyItem item
+  observeItem ref cls
+  case cls of
+    TurnOpaque     -> printResult soJson soRaw cfg item
+    TurnUpdate _   -> printResult soJson soRaw cfg item
+    TurnTerminal s -> do
+      -- The banner first: on a non-complete terminal the value is very often
+      -- null, and a user who sees nothing at all learns nothing at all.
+      case renderStop s of
+        Nothing     -> pure ()
+        Just banner -> do
+          coloured <- colouriseStop (osKind s) banner
+          TIO.hPutStrLn stderr coloured
+          hFlush stderr
+      if soJson || soRaw
+        then printResult soJson soRaw cfg item
+        else case terminalOutput s of
+          Nothing  -> pure ()
+          Just out -> printResult soJson soRaw cfg (reContent item out)
+  where
+    reContent (HubData h p ct _) v = HubData h p ct v
+    reContent other _              = other
+
+-- | Colour, but only when stderr is a terminal and @NO_COLOR@ is unset.
+--
+-- This is the /visual/ half of "a refusal must not read as an error". The
+-- textual half ("Refused (not an error)") is in 'renderStop' and survives
+-- pipes, logs and tests; this half is what a human at a prompt actually sees.
+-- 'Failed' is the only kind painted red.
+colouriseStop :: Maybe C.StopKind -> Text -> IO Text
+colouriseStop kind s = do
+  tty <- hIsTerminalDevice stderr
+  noColor <- lookupEnv "NO_COLOR"
+  pure $ if not tty || noColor /= Nothing
+    then s
+    else sgr <> s <> "\ESC[0m"
+  where
+    sgr = case kind of
+      Just C.Failed    -> "\ESC[31m"  -- red: this one, and only this one
+      Nothing          -> "\ESC[31m"  -- a protocol violation is ours to shout about
+      Just C.Refused   -> "\ESC[33m"  -- yellow: a considered no
+      Just C.Limited   -> "\ESC[33m"
+      Just C.Cancelled -> "\ESC[2m"   -- dim
+      Just C.Complete  -> ""
 
 -- | Print a stream result
 -- soJson: output raw JSON stream items

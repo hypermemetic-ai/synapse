@@ -55,6 +55,10 @@ module Synapse.Monad
   , getWireLog
   , wireEvent
 
+    -- * Turn observation (PLX-123)
+  , getTurnObservation
+  , readTurnVerdict
+
     -- * Injectable document fetcher (PLX-121)
   , getDocFetcher
   , withDocFetcher
@@ -83,6 +87,8 @@ import qualified Synapse.Log as Log
 import qualified Katip
 import qualified Plexus.Connectome.Types as C
 import Synapse.Wire (WireEvent, WireLog, newWireLog, recordEvent)
+import Synapse.Turn (TurnObservation, TurnVerdict, newTurnObservation,
+                     readTurnObservation, turnVerdict)
 
 -- | Environment for Synapse operations
 data SynapseEnv = SynapseEnv
@@ -109,6 +115,12 @@ data SynapseEnv = SynapseEnv
     -- memoisation, not caching, and it is named as such.
   , seWireLog :: !WireLog
     -- ^ PLX-121: the captured transcript of fetches and cache hits.
+  , seTurn :: !(IORef TurnObservation)
+    -- ^ PLX-123: what the current invocation's turn turned out to be (RFC 002
+    -- §6.1). It lives here for the same reason 'seWireLog' does: the renderer
+    -- is a callback with no return value, and the stop kind has to survive the
+    -- stream in order to reach the process exit code. Empty for every
+    -- invocation that is not turn-native, which is what keeps those unchanged.
   , seDocFetcher :: !(Maybe (Maybe Text -> IO (Either Text Value)))
     -- ^ PLX-121: an injectable Connectome-document fetcher. 'Nothing' — the
     -- production value — goes over the wire.
@@ -193,6 +205,7 @@ initEnv host port backend logger token = do
   nodeCache <- newIORef HM.empty
   rootDoc <- newIORef Nothing
   wireLog <- newWireLog
+  turn <- newTurnObservation
   pure SynapseEnv
     { seHost    = host
     , sePort    = port
@@ -206,6 +219,7 @@ initEnv host port backend logger token = do
     , seNodeCache = nodeCache
     , seRootDoc = rootDoc
     , seWireLog = wireLog
+    , seTurn = turn
     , seDocFetcher = Nothing
     }
 
@@ -332,6 +346,19 @@ wireEvent ev = do
   liftIO $ recordEvent wl ev
 
 -- | The Connectome-document fetcher in force. 'Nothing' means "go to the wire".
+-- ============================================================================
+-- Turn observation (PLX-123)
+-- ============================================================================
+
+-- | The accumulator the renderer folds terminals into.
+getTurnObservation :: SynapseM (IORef TurnObservation)
+getTurnObservation = asks seTurn
+
+-- | The verdict on the invocation just run — 'NotATurn' when nothing
+-- turn-shaped was seen, which is every pre-M3 path.
+readTurnVerdict :: SynapseEnv -> IO TurnVerdict
+readTurnVerdict env = turnVerdict <$> readTurnObservation (seTurn env)
+
 getDocFetcher :: SynapseM (Maybe (Maybe Text -> IO (Either Text Value)))
 getDocFetcher = asks seDocFetcher
 

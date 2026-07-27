@@ -28,6 +28,7 @@ library
     Synapse.Connectome
     Synapse.Connectome.Nav
     Synapse.Wire
+    Synapse.Turn
     Synapse.Monad
     Synapse.Log
     Synapse.Algebra.Navigate
@@ -136,7 +137,9 @@ executable synapse
     katip >= 0.8 && < 0.9,
     optparse-applicative >= 0.18 && < 0.19,
     prettyprinter >= 1.7 && < 1.8,
-    time >= 1.12 && < 1.14
+    time >= 1.12 && < 1.14,
+    -- PLX-123: SIGINT is the cancellation trigger (decision gate 2).
+    unix >= 2.7 && < 2.9
   hs-source-dirs:   app
   default-language: GHC2021
   default-extensions:
@@ -502,6 +505,28 @@ test-suite connectome-lift-test
     plexus-connectome,
     plexus-synapse,
     aeson >= 2.2 && < 2.3,
+    hspec >= 2.10 && < 2.12,
+    text >= 2.0 && < 2.2
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -threaded
+
+test-suite turn-test
+  -- PLX-123 / M3.D: the update/terminal split, five stop kinds, five exit
+  -- codes, and a Refused that is visibly NOT an error. The refused/limited/
+  -- failed envelopes are CAPTURED from the live run in
+  -- docs/evidence/plx-123-refused-e2e.txt, not hand-written.
+  type:             exitcode-stdio-1.0
+  main-is:          TurnSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-connectome,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    bytestring >= 0.11 && < 0.13,
     hspec >= 2.10 && < 2.12,
     text >= 2.0 && < 2.2
   hs-source-dirs:   test

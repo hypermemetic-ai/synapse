@@ -16,6 +16,7 @@ module Synapse.Transport
     -- * Method Invocation (streaming)
   , invokeStreaming
   , invokeStreamingWithBidir
+  , invokeStreamingWithBidirCancellable
 
     -- * Bidirectional Response
   , sendResponse
@@ -34,7 +35,7 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Network.WebSockets as WS
 
-import Plexus.Client (SubstrateConfig(..), cookieHeader)
+import Plexus.Client (SubstrateConfig(..), CancelTurn(..), cookieHeader)
 import qualified Plexus.Transport as ST
 import qualified Plexus.Types as PT
 
@@ -247,7 +248,24 @@ invokeStreamingWithBidir
   -> (HubStreamItem -> IO ())                              -- ^ Handler for non-request items
   -> (Text -> PT.Request Value -> IO (Maybe (PT.Response Value)))  -- ^ Handler for bidirectional requests
   -> SynapseM ()
-invokeStreamingWithBidir namespacePath method params onItem onBidirRequest = do
+invokeStreamingWithBidir = invokeStreamingWithBidirCancellable (\_ -> pure ())
+
+-- | PLX-123 / M3·D — 'invokeStreamingWithBidir' plus the cancel handle.
+--
+-- The extra argument is called once, as soon as the substrate confirms the
+-- subscription and before the first item is pulled, with an action that
+-- cancels __this__ invocation. See 'Plexus.Client.substrateRpcCancellable' for
+-- the channel decision (RFC 002 §10.2 leaves it to the transport) and for the
+-- precise limits of what it asserts.
+invokeStreamingWithBidirCancellable
+  :: (CancelTurn -> IO ())
+  -> Path
+  -> Text
+  -> Value
+  -> (HubStreamItem -> IO ())
+  -> (Text -> PT.Request Value -> IO (Maybe (PT.Response Value)))
+  -> SynapseM ()
+invokeStreamingWithBidirCancellable onCancel namespacePath method params onItem onBidirRequest = do
   cfg <- getConfig
   let wrappedHandler item = case item of
         PT.StreamRequest _ _ reqId reqData _timeout -> do
@@ -260,7 +278,7 @@ invokeStreamingWithBidir namespacePath method params onItem onBidirRequest = do
               pure ()
             Nothing -> pure ()  -- agent will respond via separate call
         _ -> onItem item
-  result <- liftIO $ ST.invokeMethodStreaming cfg namespacePath method params wrappedHandler
+  result <- liftIO $ ST.invokeMethodStreamingCancellable onCancel cfg namespacePath method params wrappedHandler
   case result of
     Left transportErr -> do
       backend <- asks seBackend
