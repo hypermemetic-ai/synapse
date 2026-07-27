@@ -695,7 +695,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                           renderDynamicChildrenBlock visited schema
 
                         -- Landed on a method: invoke or show help
-                        ViewMethod method path -> do
+                        ViewMethod method parentPlugin path -> do
                           let fullPath = T.intercalate "." path
 
                           -- IR-15: emit stderr deprecation warnings right before any
@@ -714,7 +714,13 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                                 let namespacePath = init path
                                 when (not (null namespacePath)) $ do
                                   let activationNs = T.intercalate "." namespacePath
-                                  parentPlugin <- fetchSchemaAt namespacePath
+                                  -- PLX-143: `parentPlugin` comes from the
+                                  -- ViewMethod itself. It is the schema at
+                                  -- `namespacePath` that navigation already
+                                  -- fetched and found this method in, so the
+                                  -- `fetchSchemaAt namespacePath` that used to
+                                  -- stand here was a second round trip for a
+                                  -- value the caller was already holding.
                                   liftIO $ emitActivationWarning
                                     soNoDeprecationWarnings
                                     activationNs
@@ -863,12 +869,13 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
       view <- navigate segs
       case view of
         ViewPlugin schema _ -> pure $ Right $ toJSON schema
-        ViewMethod method path -> do
-          -- Use method-specific schema query for detailed method info
-          let parentPath = init path
-              methodName' = last path
-          detailedMethod <- fetchMethodSchema parentPath methodName'
-          pure $ Right $ toJSON detailedMethod
+        -- PLX-143: this used to call `fetchMethodSchema (init path) (last path)`,
+        -- which fetches `<init path>.schema` and then `find`s the method by name
+        -- in `psMethods`. That is the same request and the same selection that
+        -- `navigate` performed one line above (Navigate.findMethod over the
+        -- schema at `init path`), so it returned the very `MethodSchema` already
+        -- bound here. Same value, one fewer round trip.
+        ViewMethod method _parent _path -> pure $ Right $ toJSON method
 
     -- Invoke raw JSON-RPC request
     invokeRawRpc :: Value -> SynapseM [HubStreamItem]

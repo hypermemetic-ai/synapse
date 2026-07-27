@@ -7,7 +7,6 @@ module Synapse.Transport
   ( -- * Schema Fetching
     fetchSchema
   , fetchSchemaAt
-  , fetchMethodSchema
 
     -- * Method Invocation (collected)
   , invoke
@@ -131,15 +130,14 @@ fetchSchemaAt path = do
         "Schema fetch succeeded: " <> T.pack (show path) <> " (" <> psNamespace schema <> ")"
       pure schema
 
--- | Fetch a specific method's schema (more efficient than full plugin schema)
--- Uses the parameter-based query: plugin.schema with {"method": "name"}
-fetchMethodSchema :: Path -> Text -> SynapseM MethodSchema
-fetchMethodSchema path methodName = do
-  cfg <- getConfig
-  result <- liftIO $ ST.fetchMethodSchemaAt cfg path methodName
-  case result of
-    Left err -> throwNav $ FetchError (transportErrorToText err) path
-    Right schema -> pure schema
+-- PLX-143: `fetchMethodSchema` used to live here. It was never "more efficient
+-- than the full plugin schema" as its comment claimed — since PLX-13's schema
+-- unification, `Plexus.Transport.fetchMethodSchemaAt` fetches `<path>.schema`
+-- (the whole plugin document) and then `find`s the method by name in
+-- `psMethods`. Its one caller was `--schema <ns> <method>`, which reached it
+-- immediately after `navigate` had performed the identical fetch and the
+-- identical `find` (`Synapse.Algebra.Navigate.findMethod`). It is deleted
+-- rather than left unused so the round trip cannot quietly return.
 
 -- | Invoke a method and return stream items
 invoke :: Path -> Text -> Value -> SynapseM [HubStreamItem]

@@ -93,7 +93,10 @@ navigateFrom schema visited = \case
         -- Not a child — check if it's a method
         case findMethod seg schema of
           Just method
-            | null rest -> pure $ ViewMethod method (visited ++ [seg])
+            -- PLX-143: hand the caller the parent we just searched. It is the
+            -- schema the method was found in, so the deprecation display and the
+            -- --schema method view need no second fetch.
+            | null rest -> pure $ ViewMethod method schema (visited ++ [seg])
             | otherwise -> throwNav $ MethodNotTerminal seg visited
           Nothing -> throwNav $ NotFound seg visited (Just schema)
 

@@ -531,6 +531,26 @@ test-suite connectome-nav-test
     OverloadedStrings
   ghc-options:      -threaded
 
+test-suite refetch-scars-test
+  -- PLX-143: the two re-fetch scars, and the cache that looked up on one hash
+  -- and inserted on another. Navigation here runs against 127.0.0.1:1, so a
+  -- surviving round trip fails to connect rather than quietly succeeding.
+  type:             exitcode-stdio-1.0
+  main-is:          RefetchScarsSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    hspec >= 2.10 && < 2.12,
+    katip >= 0.8 && < 0.9,
+    text >= 2.0 && < 2.2
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -threaded
+
 test-suite keychain-test
   -- SELF-8 keychain tests. Opt-in via `-f build-keychain-tests` because
   -- they shell out to macOS `security` and touch the real keychain.
