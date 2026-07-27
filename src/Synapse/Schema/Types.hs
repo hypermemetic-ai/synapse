@@ -79,7 +79,17 @@ type Path = [Text]
 -- | A position in the schema tree after navigation
 data SchemaView
   = ViewPlugin PluginSchema Path   -- ^ Landed on a plugin, path taken to get here
-  | ViewMethod MethodSchema Path   -- ^ Landed on a method, path taken to get here
+  -- | Landed on a method: the method, __the parent schema it was found in__, and
+  -- the path taken to get here.
+  --
+  -- PLX-143: the parent is carried rather than re-fetched. 'navigateFrom' holds
+  -- the exact parent 'PluginSchema' in scope at the instant it constructs this
+  -- view (it is the schema it just called 'findMethod' on), and every consumer
+  -- that wanted something off that parent — the activation-level deprecation
+  -- notice, the @--schema \<ns\> \<method\>@ detail view — used to issue a second
+  -- @{ns}.schema@ round trip for a value that was already in hand. Carrying it
+  -- deletes both round trips by construction rather than by caching.
+  | ViewMethod MethodSchema PluginSchema Path
   deriving stock (Show, Eq)
 
 -- | Navigation errors

@@ -1,0 +1,126 @@
+PLX-143 — the two re-fetch scars, and the cache that keyed on two things
+================================================================================
+Captured 2026-07-27 against a live substrate (plexus-substrate debug build) on
+127.0.0.1:4488. Document hash of the served tree: 1b9c083a1d9a9aea.
+
+Round trips are counted by a TCP relay in front of the substrate that counts
+`.schema` responses in the (unmasked) server->client WebSocket stream. Both
+binaries were built from this repository: OLD = plx-121-navigation (9cea16bc),
+NEW = the same tree plus this ticket's change.
+
+
+1. ROUND TRIPS REMOVED — measured, not inferred
+--------------------------------------------------------------------------------
+
+  target                                     OLD   NEW   delta
+  ---------------------------------------------------------------
+  synapse --schema substrate echo echo         3     2     -1
+  synapse --schema substrate orcha pm list_graphs
+                                               4     3     -1
+  synapse substrate echo echo --message hi     4     3     -1
+  synapse substrate health check               3     2     -1
+
+  The `--schema <ns> <method>` rows lose the `fetchMethodSchema` re-pull.
+  The invocation rows lose the deprecation re-read (which fired unconditionally
+  whenever the method sat under a namespace, deprecated or not). Corroborated by
+  synapse's own schema debug log for the invocation case: OLD logged
+  `Fetching schema at path: []`, `["echo"]`, `["echo"]`, `["echo"]`;
+  NEW logs `[]`, `["echo"]`, `["echo"]`. The remaining duplicate `["echo"]` is
+  buildIR, which is out of this ticket's scope.
+
+
+2. OUTPUT IS BYTE-IDENTICAL
+--------------------------------------------------------------------------------
+
+  `--schema` output diffed with cmp(1), OLD vs NEW, same substrate:
+
+    echo echo               IDENTICAL   1080 bytes
+    orcha pm list_graphs    IDENTICAL   1477 bytes
+    health check            IDENTICAL    881 bytes
+    bash execute            IDENTICAL   1863 bytes
+    cone list               IDENTICAL   1302 bytes
+
+  Note `orcha pm` is deliberately in this list: it is the one edge on this
+  substrate whose advertised child hash is the empty string (see §3).
+
+  The deprecation display could NOT be witnessed on this wire: nothing on this
+  substrate is deprecated (0 deprecated activations, 0 deprecated methods across
+  all 14 root children). Both binaries print nothing, which is agreement but not
+  evidence. The equivalence is pinned instead in test/RefetchScarsSpec.hs, which
+  compares the warning line rendered from the CARRIED parent against the one
+  rendered from the document the old re-read fetched.
+
+
+3. csHash vs psHash — THE ANSWER IS "ALMOST"
+--------------------------------------------------------------------------------
+
+Question: does the hash a parent ADVERTISES for a child (`csHash`) equal the
+hash that child's own `.schema` response REPORTS for itself (`psHash`)? The old
+Cache.hs looked up on the first and inserted on the second.
+
+Measured across every parent->child edge this substrate serves:
+
+  namespace     csHash (parent says)  psHash (child says)   verdict
+  ---------------------------------------------------------------------
+  lattice       249e52451b64a26e      249e52451b64a26e      EQUAL
+  solar         f763a2ca448aca90      f763a2ca448aca90      EQUAL
+  bash          c81c09a791a9818f      c81c09a791a9818f      EQUAL
+  cone          91c01cbee192289c      91c01cbee192289c      EQUAL
+  mustache      b2ce5872ce4b5b3c      b2ce5872ce4b5b3c      EQUAL
+  orcha         08d2e4926c1a2e9a      08d2e4926c1a2e9a      EQUAL
+  changelog     89708f59634c44c6      89708f59634c44c6      EQUAL
+  loopback      f4b4d2979e3fb35e      f4b4d2979e3fb35e      EQUAL
+  registry      b4d15b5f5ca5774d      b4d15b5f5ca5774d      EQUAL
+  interactive   d2471d8ac107b03f      d2471d8ac107b03f      EQUAL
+  health        db32914112af146c      db32914112af146c      EQUAL
+  echo          010c90be887c9053      010c90be887c9053      EQUAL
+  arbor         484fd63f02799ecb      484fd63f02799ecb      EQUAL
+  claudecode    d471b9cdec5fbe99      d471b9cdec5fbe99      EQUAL
+  ---- one level down ----
+  solar.mercury a22ac060c67a9cba      (8 planets, all advertised, non-empty)
+  solar.venus   9e0eecf67a739504
+  solar.earth   9b070a0aa9553226
+  solar.mars    85bf6504f3a097ba
+  solar.jupiter 2433ca46d7c24de7
+  solar.saturn  32b1d6eb02f3ace0
+  solar.uranus  8352eee18e167c9d
+  solar.neptune 5e0d4b4a2e25d445
+  orcha.pm      ""                    50bfa7415dec30dd      *** DIFFER ***
+
+The raw summary, verbatim off the wire:
+
+  {"description": "Project management subsystem.", "hash": "", "namespace": "pm"}
+
+So: 22 of 23 edges agree exactly, and one disagrees — by advertising no hash at
+all. This is not corruption and not a client bug. It is the macro synthesis path:
+plexus-macros/src/codegen/activation.rs:594-620 emits `hash: String::new()` for
+`#[child]` methods when an activation does not hand-write `plugin_children`, and
+says so in its own comment ("the macro has no compile-time hash source for the
+child plugin's schema"). `solar` hand-writes `plugin_children` precisely to avoid
+this (plexus-substrate/src/activations/solar/activation.rs:145-149); `orcha` does
+not, so `orcha.pm` ships an empty hash. Rust serializes it (no
+skip_serializing_if), and Haskell decodes it strictly (`o .: "hash"`, no
+defaulting) — so the empty string arrives intact as a *value*, not as a decode
+failure.
+
+Consequence under the OLD code: navigating to `orcha pm` looked the cache up
+under "" (always a miss, nothing is ever stored there) and inserted under
+"50bfa7415dec30dd" (which nobody ever looks up). `orcha.pm` was permanently
+uncacheable, silently, with no error — exactly the failure mode the ticket
+predicted, present on the real wire today.
+
+Two further notes, reported rather than fixed here:
+
+  * `Synapse.Algebra.Navigate` calls `checkCycle (csHash child)` on the same
+    advertised hash. With one empty-hash edge on this substrate there is no live
+    false positive, but two identity-less children on a single descent path would
+    be reported as a Cycle. That is a wire-shaped hazard, not a cache one.
+  * A hub's own composite hash folds its children's summary hashes in
+    `HashMap` iteration order (plexus-core/src/plexus/plexus.rs:927,
+    schema.rs:771-805), so it can vary between boots of byte-identical code.
+    Both sides of the comparison above come from ONE substrate process, so this
+    does not affect the result — but it means a hash captured from one process
+    must not be compared against another's.
+
+All hashes above are 16-hex legacy digests (DefaultHasher, `{:016x}`), not
+CONNECTOME-HASH/1. Never compare these against Connectome node hashes.
