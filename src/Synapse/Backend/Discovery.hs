@@ -54,6 +54,12 @@ module Synapse.Backend.Discovery
 
     -- * Registry Registration
   , registerWithRegistry
+
+    -- * Registry Endpoint
+  , registryUrlEnvVar
+  , defaultRegistryHost
+  , defaultRegistryPort
+  , registryEndpointFromEnv
   ) where
 
 import Data.Aeson (ToJSON, FromJSON, (.:), (.:?), withObject)
@@ -73,6 +79,8 @@ import qualified Plexus.Transport as ST
 import Plexus.Types (PlexusStreamItem(..), TransportError(..))
 import qualified Synapse.Log as Log
 import qualified System.IO as IO
+import qualified Data.Text.Read as TR
+import System.Environment (lookupEnv)
 
 -- ============================================================================
 -- Backend Type
@@ -405,3 +413,53 @@ registerWithRegistry registryHost registryPort registryBackend name host port = 
     _ <- ST.invokeMethod cfg ["registry"] "register" params
       `catch` \(_e :: SomeException) -> pure (Left $ NetworkError "Registry unavailable")
     pure ()
+
+-- ============================================================================
+-- Registry Endpoint
+-- ============================================================================
+--
+-- SYNAPSE-7: the endpoint helpers synapse-cc 0.3.4 imports
+-- (src/SynapseCC/RegistryResolve.hs). They were written with Z2H-6 on
+-- the feature/Z2H-6-registry branch (e176373), which was never merged to
+-- main, so synapse-cc's main did not build against synapse's. These are
+-- that commit's definitions, unchanged and additive: nothing in synapse
+-- calls them yet, so no behavior here moves.
+
+-- | Environment variable naming the registry endpoint, shared with
+-- plexus-transport's boot-time self-registration.
+registryUrlEnvVar :: String
+registryUrlEnvVar = "PLEXUS_REGISTRY_URL"
+
+defaultRegistryHost :: Text
+defaultRegistryHost = "127.0.0.1"
+
+defaultRegistryPort :: Int
+defaultRegistryPort = 4444
+
+-- | Resolve the registry endpoint from @PLEXUS_REGISTRY_URL@
+-- (e.g. @ws:\/\/127.0.0.1:4444@ or @host:port@), falling back to
+-- @127.0.0.1:4444@. Malformed values fall back to the default rather
+-- than failing the invocation.
+registryEndpointFromEnv :: IO (Text, Int)
+registryEndpointFromEnv = do
+  mUrl <- lookupEnv registryUrlEnvVar
+  pure $ case mUrl of
+    Nothing -> (defaultRegistryHost, defaultRegistryPort)
+    Just raw -> parseRegistryUrl (T.strip (T.pack raw))
+
+-- | Parse @[ws://]host[:port]@.
+parseRegistryUrl :: Text -> (Text, Int)
+parseRegistryUrl raw
+  | T.null raw = (defaultRegistryHost, defaultRegistryPort)
+  | otherwise =
+      let noScheme = case T.breakOn "://" raw of
+            (_, rest) | not (T.null rest) -> T.drop 3 rest
+            _                             -> raw
+          noPath = T.takeWhile (/= '/') noScheme
+          (host, portTxt) = case T.breakOnEnd ":" noPath of
+            (h, p) | not (T.null h) -> (T.dropEnd 1 h, p)
+            _                       -> (noPath, "")
+      in case TR.decimal portTxt of
+           Right (p, "") | not (T.null host) -> (host, p)
+           _ | T.null noPath -> (defaultRegistryHost, defaultRegistryPort)
+             | otherwise     -> (noPath, defaultRegistryPort)
