@@ -226,6 +226,11 @@ synapse substrate tags set --tags '"red, green",blue'   # an element with a comm
 
 # Boolean flags (bare flag = true)
 synapse substrate cone create --ephemeral
+synapse substrate cone create --ephemeral=false
+
+# A value may begin with dashes; --key=value works too
+synapse substrate echo once --message "--- starts with dashes"
+synapse substrate echo once --message="$(cat note.md)"
 
 # Raw JSON override
 synapse substrate cone chat -p '{
@@ -235,6 +240,22 @@ synapse substrate cone chat -p '{
 ```
 
 Path parameters (`--path`, `--working_dir`, etc.) expand `~`, resolve relative paths, and substitute `$ENV` variables automatically.
+
+### Flag values
+
+Once synapse has found the method, it reads each flag by its parameter's type:
+
+| typed | read as |
+| -- | -- |
+| `--body VALUE` | the next argument is the value, whatever it begins with: `---`, `--force`, `-5`, `--`, or nothing (`''`) |
+| `--body=VALUE` | everything after the first `=`, which may be empty or contain `=` |
+| `--summary` (a boolean) | `true`; it takes the next argument only when that is `true` or `false` (or `1`, `0`), so `--summary --limit 3` is two flags |
+| `--summary=false` | `false` |
+| `--no-such x` (names no parameter) | `Unknown parameter: --no-such`, nothing is sent; such a flag takes the next argument unless it begins with `--` |
+
+So a markdown body with frontmatter passes as itself: `--body "$(cat body.md)"` or `--body="$(cat body.md)"`. Only the flag's name is normalized (`--blocked-by` is `blocked_by`), never its value. An argument that no flag takes (`--summary yes`) is an error, and nothing is sent. `--help` is always help, even right after a flag: to send the text `--help`, write `--body=--help`. Synapse's own options (`-P`, `-n`, `--json`, …) still go before the backend name.
+
+**Changed in 3.14.1.** Through 3.14.0 a value that began with `--` was read as the next flag (`--body "---…"` failed with `Unknown parameter: --_`), any flag followed by another flag was bare whatever its type, and `--body=…` was read as a flag named `body=…`.
 
 ### Lists
 

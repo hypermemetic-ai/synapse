@@ -11,7 +11,9 @@
 -- @
 -- Command line args
 --   ↓
--- parsePathAndParams (extract --key value pairs)
+-- parsePathAndParams (find the path and the flag arguments)
+--   ↓
+-- pairFlags (pair --key value / --key=value by parameter type)
 --   ↓
 -- [(Text, Text)] raw params
 --   ↓
@@ -282,8 +284,8 @@ injectSmartDefaults env _ir methodDef existingParams = do
 
 -- | Inject "true" for boolean flags that were present but had no value
 --
--- When a user writes @--force@ without a value, parsePathAndParams marks it
--- as @("force", "")@. This function looks at the method definition to determine
+-- A bare @--force@ is already @("force", "true")@ from @pairFlags@; @--force=@
+-- arrives as @("force", "")@. This function looks at the method definition to determine
 -- which empty-value params are actually booleans, and fills them with "true".
 --
 -- Non-boolean params with empty values are left as-is and will fail validation

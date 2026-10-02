@@ -55,7 +55,7 @@ import qualified Katip
 import Synapse.Algebra.Navigate
 import Synapse.Algebra.Render (renderSchema)
 import Synapse.CLI.Help (renderMethodHelp)
-import Synapse.CLI.Parse (parseParams)
+import Synapse.CLI.Parse (parseParams, parsePathAndParams, pairFlags)
 import qualified Synapse.CLI.Parse as Parse
 import Synapse.IR.Types (IR, irMethods, MethodDef)
 import qualified Data.Map.Strict as Map
@@ -469,7 +469,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
   case argBackend of
     Just "_self" -> do
       -- _self meta-command: parse subcommand and rest from argPath
-      let (pathSegs, rawParams, _) = parsePathAndParams argPath
+      let (pathSegs, rawParams, _, _) = parsePathAndParams argPath
       case pathSegs of
         (subcommand : rest) -> do
           Self.dispatch subcommand rest rawParams
@@ -493,7 +493,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
 
         Nothing -> do
           -- Parse path and inline params (--key value pairs)
-          let (pathSegs, rawParams, helpRequested) = parsePathAndParams argPath
+          let (pathSegs, rawParams, flagArgs, helpRequested) = parsePathAndParams argPath
 
           -- Normal Plexus RPC routing
           -- Apply parameter transformations (path expansion, env vars)
@@ -614,8 +614,15 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                                           -- Use IR-driven parsing for inline params
                                           case Map.lookup fullPath (irMethods ir) of
                                             Just methodDef -> do
+                                              -- Pair the flags again by parameter type, now that the
+                                              -- method is known (a value may begin with dashes)
+                                              methodParams <- case pairFlags ir methodDef flagArgs of
+                                                Right pairs -> liftIO $ transformParams transformEnv defaultTransformers pairs
+                                                Left errs -> do
+                                                  liftIO $ mapM_ (hPutStrLn stderr . renderParseError) errs
+                                                  throwParse "Parameter parsing failed"
                                               -- Inject boolean defaults for flags without values
-                                              let paramsWithBools = injectBooleanDefaults ir methodDef inlineParams
+                                              let paramsWithBools = injectBooleanDefaults ir methodDef methodParams
                                               -- Inject smart defaults for missing required params (e.g., --path defaults to cwd)
                                               paramsWithDefaults <- liftIO $ injectSmartDefaults transformEnv ir methodDef paramsWithBools
                                               case parseParams ir methodDef paramsWithDefaults of
@@ -735,37 +742,6 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
           (Just (String method), Nothing) -> invokeRaw method (object [])
           _ -> throwParse "JSON-RPC must have 'method' field"
         _ -> throwParse "JSON-RPC must be an object"
-
--- | Parse path segments and --key value params
--- Returns (path segments, [(key, value)] params, help requested)
--- Example: ["echo", "once", "--message", "hello", "--count", "3"]
---       -> (["echo", "once"], [("message", "hello"), ("count", "3")], False)
--- Example: ["echo", "once", "--help"]
---       -> (["echo", "once"], [], True)
-parsePathAndParams :: [Text] -> ([Text], [(Text, Text)], Bool)
-parsePathAndParams = go [] [] False
-  where
-    go path params helpReq [] = (reverse path, reverse params, helpReq)
-    go path params helpReq (x:xs)
-      -- --help flag: mark help requested, don't add as param
-      | x == "--help" || x == "-h" =
-          go path params True xs
-      -- --key value pair (value must not start with --)
-      | Just key <- T.stripPrefix "--" x
-      , not (T.null key)
-      , (val:rest) <- xs
-      , not (T.isPrefixOf "--" val) =
-          let normalizedKey = T.replace "-" "_" key  -- Normalize kebab-case to snake_case
-          in go path ((normalizedKey, val) : params) helpReq rest
-      -- --key with no value or next arg is another flag (boolean flag)
-      | Just key <- T.stripPrefix "--" x
-      , not (T.null key) =
-          let normalizedKey = T.replace "-" "_" key  -- Normalize kebab-case to snake_case
-          in go path ((normalizedKey, "") : params) helpReq xs
-      -- Regular path segment - split on dots to support Plexus RPC path syntax (e.g., cone.chat)
-      | otherwise =
-          let segments = map (T.replace "-" "_") $ filter (not . T.null) $ T.splitOn "." x
-          in go (reverse segments ++ path) params helpReq xs
 
 -- | Build JSON object from key-value pairs
 buildParamsObject :: [(Text, Text)] -> Value
@@ -987,6 +963,9 @@ renderParseError = \case
   Parse.MalformedListValue name value reason ->
     "Malformed list value for --" <> T.unpack name <> ": " <> T.unpack value <>
     " (" <> T.unpack reason <> ")"
+  Parse.UnexpectedArgument arg ->
+    "Unexpected argument: " <> T.unpack arg <>
+    "\n\nA value follows its flag (--key VALUE or --key=VALUE); a boolean flag takes none unless it is true or false."
 
 
 -- | Write a generated template to disk (no logging)

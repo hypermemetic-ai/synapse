@@ -13,6 +13,7 @@ import Test.Hspec
 
 import Synapse.CLI.Help (renderParamHelp)
 import Synapse.CLI.Parse
+import Synapse.CLI.Transform (injectBooleanDefaults)
 import Synapse.IR.Types
 
 main :: IO ()
@@ -195,6 +196,106 @@ main = hspec $ do
       renderParamHelp listIR (listParam "links" (RefArray (named "Link")))
         `shouldSatisfy` elem "    Repeat the flag for each element"
 
+  -- SYNAPSE-4: a flag that takes a value takes the next argument whatever it
+  -- begins with, and --key=value is a flag and its value. One group per row
+  -- of the ticket's table, run through both passes and parseParams.
+  describe "flag values that begin with dashes" $ do
+    describe "a parameter that takes a value takes the next argument, whatever it begins with" $ do
+      it "--body '---\\nid: X\\n---' (frontmatter)" $
+        invoke ["--body", frontmatter] `shouldBe` sends [("body", String frontmatter)]
+      it "--body --force" $
+        invoke ["--body", "--force"] `shouldBe` sends [("body", "--force")]
+      it "--offset -5" $
+        invoke ["--offset", "-5"] `shouldBe` sends [("offset", Number (-5))]
+      it "--body -- (exactly two dashes)" $
+        invoke ["--body", "--"] `shouldBe` sends [("body", "--")]
+      it "--body '' (empty)" $
+        invoke ["--body", ""] `shouldBe` sends [("body", "")]
+      it "the flag after such a value is still a flag" $
+        invoke ["--body", "---", "--id", "MNG-1"] `shouldBe` sends [("body", "---"), ("id", "MNG-1")]
+
+    describe "--key=value" $ do
+      it "--body='---\\nid: X\\n---'" $
+        invoke ["--body=" <> frontmatter] `shouldBe` sends [("body", String frontmatter)]
+      it "--body= (empty)" $
+        invoke ["--body="] `shouldBe` sends [("body", "")]
+      it "--body=a=b (the value keeps every = after the first)" $
+        invoke ["--body=a=b"] `shouldBe` sends [("body", "a=b")]
+      it "--body=--force" $
+        invoke ["--body=--force"] `shouldBe` sends [("body", "--force")]
+      it "--id=MNG-1 --offset=-5" $
+        invoke ["--id=MNG-1", "--offset=-5"] `shouldBe` sends [("id", "MNG-1"), ("offset", Number (-5))]
+
+    describe "a boolean, bare" $ do
+      it "--summary --limit 3 -> summary true, limit 3" $
+        invoke ["--summary", "--limit", "3"] `shouldBe` sends [("summary", Bool True), ("limit", Number 3)]
+      it "--limit 3 --summary (last) -> summary true" $
+        invoke ["--limit", "3", "--summary"] `shouldBe` sends [("summary", Bool True), ("limit", Number 3)]
+
+    describe "a boolean with an explicit value" $ do
+      it "--summary true --limit 3" $
+        invoke ["--summary", "true", "--limit", "3"] `shouldBe` sends [("summary", Bool True), ("limit", Number 3)]
+      it "--summary false" $
+        invoke ["--summary", "false"] `shouldBe` sends [("summary", Bool False)]
+      it "--summary=false" $
+        invoke ["--summary=false"] `shouldBe` sends [("summary", Bool False)]
+      it "--summary 0 (a spelling already read as a boolean)" $
+        invoke ["--summary", "0"] `shouldBe` sends [("summary", Bool False)]
+      it "--summary yes: yes is not its value, and no flag takes it" $
+        invoke ["--summary", "yes"] `shouldBe` Left [UnexpectedArgument "yes"]
+
+    describe "a list parameter (SYNAPSE-2, unchanged)" $ do
+      it "--commits a,b --commits c" $
+        invoke ["--commits", "a,b", "--commits", "c"] `shouldBe` sends [("commits", strings ["a", "b", "c"])]
+      it "--commits=a,b" $
+        invoke ["--commits=a,b"] `shouldBe` sends [("commits", strings ["a", "b"])]
+      it "--blocked-by=MNG-1,MNG-2 --blocked-by MNG-3" $
+        invoke ["--blocked-by=MNG-1,MNG-2", "--blocked-by", "MNG-3"]
+          `shouldBe` sends [("blocked_by", strings ["MNG-1", "MNG-2", "MNG-3"])]
+
+    describe "a dotted key" $ do
+      it "--identifier.type by_name --identifier.name foo (unchanged)" $
+        invoke ["--identifier.type", "by_name", "--identifier.name", "foo"]
+          `shouldBe` sends [("identifier", object [("type", "by_name"), ("name", "foo")])]
+      it "--identifier.name takes a value that begins with dashes" $
+        invoke ["--identifier.type", "by_name", "--identifier.name", "--x"]
+          `shouldBe` sends [("identifier", object [("type", "by_name"), ("name", "--x")])]
+      it "a bare boolean field does not swallow the next flag" $
+        invoke ["--options.verbose", "--limit", "3"]
+          `shouldBe` sends [("options", object [("verbose", Bool True), ("label", Null)]), ("limit", Number 3)]
+
+    describe "a flag that names no parameter" $ do
+      it "--no-such x: Unknown parameter, named as typed" $
+        invoke ["--no-such", "x"] `shouldBe` Left [UnknownParam "no-such" []]
+      it "--no-such=---x: named without its value" $
+        invoke ["--no-such=---x"] `shouldBe` Left [UnknownParam "no-such" []]
+      it "--bodyy x: still suggests the parameter" $
+        invoke ["--bodyy", "x"] `shouldBe` Left [UnknownParam "bodyy" ["body"]]
+      it "takes the next argument unless it begins with --, as before" $
+        invoke ["--no-such", "--body", "b"] `shouldBe` Left [UnknownParam "no-such" []]
+
+    describe "keys are normalized, values never" $ do
+      it "--blocked-by MNG-1 -> blocked_by" $
+        invoke ["--blocked-by", "MNG-1"] `shouldBe` sends [("blocked_by", strings ["MNG-1"])]
+      it "--title --a-b-c keeps its dashes" $
+        invoke ["--title", "--a-b-c"] `shouldBe` sends [("title", "--a-b-c")]
+      it "--title=--a-b-c keeps its dashes" $
+        invoke ["--title=--a-b-c"] `shouldBe` sends [("title", "--a-b-c")]
+
+    describe "parsePathAndParams (before the method is known)" $ do
+      it "finds the path when a value begins with dashes" $ do
+        let (path, _, flags, helpReq) = parsePathAndParams ["tickets", "amend", "--body", frontmatter, "--id", "MNG-1"]
+        (path, flags, helpReq) `shouldBe` (["tickets", "amend"], ["--body", frontmatter, "--id", "MNG-1"], False)
+      it "a value of exactly -- is not a path segment" $
+        parsePathAndParams ["tickets", "amend", "--body", "--"]
+          `shouldBe` (["tickets", "amend"], [("body", "--")], ["--body", "--"], False)
+      it "--key=value takes nothing after it" $
+        parsePathAndParams ["--id=MNG-1", "tickets", "get"]
+          `shouldBe` (["tickets", "get"], [("id", "MNG-1")], ["--id=MNG-1"], False)
+      it "--help is still help, even after a flag" $
+        parsePathAndParams ["tickets", "amend", "--body", "--help"]
+          `shouldBe` (["tickets", "amend"], [("body", "")], ["--body"], True)
+
 isLeft :: Either a b -> Bool
 isLeft (Left _) = True
 isLeft (Right _) = False
@@ -256,3 +357,59 @@ strs = arr . map String
 
 nums :: [Integer] -> Either ParseError Value
 nums = arr . map (Number . fromInteger)
+
+-- ============================================================================
+-- Fixtures for flag values
+-- ============================================================================
+
+-- | A method's flag arguments as synapse reads them once the method is known:
+-- both passes, then 'parseParams' (no backend needed)
+invoke :: [Text] -> Either [ParseError] Value
+invoke args =
+  let (_, _, flags, _) = parsePathAndParams ("tickets" : "amend" : args)
+  in pairFlags dashIR dashMethod flags
+       >>= parseParams dashIR dashMethod . injectBooleanDefaults dashIR dashMethod
+
+-- | The object 'parseParams' builds from these fields
+sends :: [(Text, Value)] -> Either [ParseError] Value
+sends fields = Right $ object [(K.fromText k, v) | (k, v) <- fields]
+
+strings :: [Text] -> Value
+strings = Array . V.fromList . map String
+
+frontmatter :: Text
+frontmatter = "---\nid: X\n---\nbody"
+
+-- | An optional parameter of the given type
+optParam :: Text -> TypeRef -> ParamDef
+optParam name ty = (listParam name ty) { pdRequired = False }
+
+-- | menger's amend/list/link_commits parameters, plus a dotted enum and struct
+dashMethod :: MethodDef
+dashMethod = methodWith
+  [ optParam "body" (RefOptional (RefPrimitive "string" Nothing))
+  , optParam "id" (RefPrimitive "string" Nothing)
+  , optParam "title" (RefOptional (RefPrimitive "string" Nothing))
+  , optParam "summary" (RefOptional (RefPrimitive "boolean" Nothing))
+  , optParam "limit" (RefOptional (RefPrimitive "integer" (Just "uint32")))
+  , optParam "offset" (RefPrimitive "integer" Nothing)
+  , optParam "commits" (RefArray (RefPrimitive "string" Nothing))
+  , optParam "blocked_by" (RefOptional (RefArray (RefPrimitive "string" Nothing)))
+  , optParam "identifier" (named "Identifier")
+  , optParam "options" (named "Options")
+  ]
+
+-- | An IR with a discriminated enum and a struct with a boolean field
+dashIR :: IR
+dashIR = emptyIR
+  { irTypes = Map.fromList
+      [ ("t.Identifier", TypeDef "Identifier" "t" Nothing (KindEnum "type"
+          [ VariantDef "by_name" Nothing [FieldDef "name" (RefPrimitive "string" Nothing) Nothing True Nothing]
+          , VariantDef "by_id" Nothing [FieldDef "id" (RefPrimitive "string" Nothing) Nothing True Nothing]
+          ]))
+      , ("t.Options", TypeDef "Options" "t" Nothing (KindStruct
+          [ FieldDef "verbose" (RefPrimitive "boolean" Nothing) Nothing False Nothing
+          , FieldDef "label" (RefPrimitive "string" Nothing) Nothing False Nothing
+          ]))
+      ]
+  }

@@ -81,7 +81,8 @@ synapse --schema cone chat
 Arguments are derived from JSON Schema. The CLI accepts simple values:
 - Strings: `--name "my-cone"`
 - UUIDs: `--id "550e8400-e29b-41d4-a716-446655440000"` or just `--id my-cone`
-- Booleans: `--ephemeral true`
+- Booleans: `--ephemeral` (bare = true), `--ephemeral true`, `--ephemeral=false`
+- Values that begin with dashes (a markdown body with frontmatter): `--body "$(cat body.md)"` or `--body="$(cat body.md)"`; a flag that takes a value takes the next argument whatever it begins with (see README "Flag values")
 - Lists of scalars: `--tags a,b,c` or `--tags a --tags b`; an element containing a comma is double-quoted, with the quotes protected from the shell: `--tags '"a,b",c'` (see README "Lists")
 - Raw JSON override: `-p '{"custom": "params"}'`
 

@@ -50,9 +50,25 @@
 -- --tags backend,critical --tags '"a,b"'
 -- -> {"tags": ["backend", "critical", "a,b"]}
 -- @
+--
+-- = Command line
+--
+-- The pairs come from the command line in two passes. 'parsePathAndParams'
+-- runs before the method is known and finds the path; 'pairFlags' runs once
+-- it is, and uses each parameter's type to decide whether a flag takes the
+-- argument after it, so a value may begin with dashes:
+--
+-- @
+-- --summary --body "--- id: X" --limit=3      (summary a boolean)
+-- -> [("summary", "true"), ("body", "--- id: X"), ("limit", "3")]
+-- @
 module Synapse.CLI.Parse
-  ( -- * Parsing
-    parseParams
+  ( -- * Command line
+    parsePathAndParams
+  , pairFlags
+
+    -- * Parsing
+  , parseParams
   , ParseError(..)
 
     -- * List values
@@ -64,9 +80,12 @@ module Synapse.CLI.Parse
   , buildParamValue
   ) where
 
+import Control.Monad (foldM)
 import Data.Aeson (Value(..), object)
 import qualified Data.Aeson.Key as K
+import Data.Either (partitionEithers)
 import Data.List (find)
+import Data.Maybe (fromMaybe)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
@@ -100,7 +119,140 @@ data ParseError
       -- ^ Referenced type not found in IR
   | MalformedListValue Text Text Text
       -- ^ List flag value with broken quoting (param name, flag value, reason)
+  | UnexpectedArgument Text
+      -- ^ Argument that no flag takes as its value
   deriving (Show, Eq)
+
+-- ============================================================================
+-- Command Line
+-- ============================================================================
+
+-- | Whether a flag written without @=@ takes the argument after it
+data FlagArity
+  = TakesNext        -- ^ Always, whatever it begins with: the parameter takes a value
+  | TakesBoolean     -- ^ Only when it reads as a boolean: the parameter is a boolean
+  | TakesUnlessFlag  -- ^ Unless it begins with @--@ (and is not @--@): no parameter is known
+
+-- | Split the arguments after the backend into path segments, (key, value)
+-- pairs, the flag arguments the pairs came from, and whether help was asked
+-- for.
+--
+-- This runs before the method is known, so a flag takes the next argument
+-- unless that begins with @--@ and is not exactly @--@. That is enough to find
+-- the path. Once the method is known, 'pairFlags' pairs the flag arguments
+-- again by type; the pairs returned here serve only where there is no method
+-- schema (@_self@, @respond@, a method missing from the IR).
+--
+-- Example: ["echo", "once", "--message", "hello", "--count", "3"]
+--       -> (["echo", "once"], [("message", "hello"), ("count", "3")],
+--           ["--message", "hello", "--count", "3"], False)
+-- Example: ["echo", "once", "--help"]
+--       -> (["echo", "once"], [], [], True)
+parsePathAndParams :: [Text] -> ([Text], [(Text, Text)], [Text], Bool)
+parsePathAndParams = go [] [] [] False
+  where
+    go path params flags helpReq [] = (reverse path, reverse params, reverse flags, helpReq)
+    go path params flags helpReq (x:xs)
+      -- --help flag: mark help requested, don't add as param
+      | x == "--help" || x == "-h" =
+          go path params flags True xs
+      -- --key value, --key=value, or a bare --key
+      | Just flag <- T.stripPrefix "--" x
+      , not (T.null flag) =
+          let (key, val, n) = takeFlag (const TakesUnlessFlag) flag xs
+              (taken, rest) = splitAt n xs
+          in go path ((normalizeKey key, fromMaybe "" val) : params)
+                (reverse (x : taken) ++ flags) helpReq rest
+      -- Regular path segment - split on dots to support Plexus RPC path syntax (e.g., cone.chat)
+      | otherwise =
+          let segments = map (T.replace "-" "_") $ filter (not . T.null) $ T.splitOn "." x
+          in go (reverse segments ++ path) params flags helpReq xs
+
+-- | Pair a method's flag arguments (from 'parsePathAndParams') by the types
+-- of its parameters:
+--
+-- * @--key=value@: everything after the first @=@, empty or not
+-- * a boolean: @true@ when bare; it takes the next argument only when that
+--   reads as a boolean (@true@, @false@, @1@, @0@), so @--summary --limit 3@
+--   is two flags
+-- * any other parameter: the next argument, whatever it begins with
+--   (@---@, @--force@, @-5@, @--@)
+-- * a flag that names no parameter: as in 'parsePathAndParams'; its key
+--   stays as typed, so 'UnknownParam' names it so
+--
+-- Keys are normalized (kebab-case to snake_case); values never are. An
+-- argument that no flag takes is an 'UnexpectedArgument'.
+pairFlags :: IR -> MethodDef -> [Text] -> Either [ParseError] [(Text, Text)]
+pairFlags ir method args = case partitionEithers (go args) of
+  ([], pairs) -> Right pairs
+  (errs, _) -> Left errs
+  where
+    go [] = []
+    go (x:xs) = case T.stripPrefix "--" x of
+      Just flag | not (T.null flag) ->
+        let (typed, val, n) = takeFlag arity flag xs
+            key = normalizeKey typed
+            pair = case arity key of
+              TakesNext -> (key, fromMaybe "" val)
+              TakesBoolean -> (key, fromMaybe "true" val)
+              TakesUnlessFlag -> (typed, fromMaybe "" val)
+        in Right pair : go (drop n xs)
+      _ -> Left (UnexpectedArgument x) : go xs
+
+    arity = flagArity ir method
+
+-- | Read one flag (the text after @--@) against the arguments after it:
+-- its key as typed, its value ('Nothing' when bare), and how many of those
+-- arguments it took (0 or 1).
+takeFlag :: (Text -> FlagArity) -> Text -> [Text] -> (Text, Maybe Text, Int)
+takeFlag arity flag next
+  | (key, eqValue) <- T.breakOn "=" flag, not (T.null eqValue) =
+      (key, Just (T.drop 1 eqValue), 0)
+  | otherwise = case (arity (normalizeKey flag), next) of
+      (TakesNext, val : _) -> (flag, Just val, 1)
+      (TakesBoolean, val : _) | isBooleanWord val -> (flag, Just val, 1)
+      (TakesUnlessFlag, val : _) | val == "--" || not ("--" `T.isPrefixOf` val) -> (flag, Just val, 1)
+      _ -> (flag, Nothing, 0)
+  where
+    -- The spellings 'inferTypedValue' reads as a boolean
+    isBooleanWord val = T.toLower val `elem` ["true", "false", "1", "0"]
+
+-- | How the flag with this (normalized) key takes its value: by the type of
+-- the parameter it names, or of the field a dotted key names
+flagArity :: IR -> MethodDef -> Text -> FlagArity
+flagArity ir method key = case T.splitOn "." key of
+  name : fields
+    | Just param <- find ((== name) . pdName) (mdParams method) ->
+        case foldM (fieldType ir) (pdType param) fields of
+          Just ty | isBooleanRef ir ty -> TakesBoolean
+          _ -> TakesNext
+  _ -> TakesUnlessFlag
+
+-- | The type of a field of a struct, or of any variant of an enum
+fieldType :: IR -> TypeRef -> Text -> Maybe TypeRef
+fieldType ir ref name = case ref of
+  RefOptional inner -> fieldType ir inner name
+  RefNamed qn -> case tdKind <$> Map.lookup (qualifiedNameFull qn) (irTypes ir) of
+    Just (KindStruct fields) -> fdType <$> find ((== name) . fdName) fields
+    Just (KindEnum _ variants) -> fdType <$> find ((== name) . fdName) (concatMap vdFields variants)
+    Just (KindAlias target) -> fieldType ir target name
+    _ -> Nothing
+  _ -> Nothing
+
+-- | Is this a boolean (optional, or a named type that is one)?
+isBooleanRef :: IR -> TypeRef -> Bool
+isBooleanRef ir = \case
+  RefPrimitive typ _ -> typ == "boolean"
+  RefOptional inner -> isBooleanRef ir inner
+  RefNamed qn -> case tdKind <$> Map.lookup (qualifiedNameFull qn) (irTypes ir) of
+    Just (KindPrimitive typ _) -> typ == "boolean"
+    Just (KindAlias target) -> isBooleanRef ir target
+    _ -> False
+  _ -> False
+
+-- | Normalize a flag key from kebab-case to snake_case
+normalizeKey :: Text -> Text
+normalizeKey = T.replace "-" "_"
 
 -- ============================================================================
 -- Main Parsing Function
