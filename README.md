@@ -239,7 +239,7 @@ synapse substrate cone chat -p '{
 }'
 ```
 
-Path parameters (`--path`, `--working_dir`, etc.) expand `~`, resolve relative paths, and substitute `$ENV` variables automatically.
+Path parameters (`--path`, `--working_dir`, etc.) expand `~`, resolve relative paths, and substitute `$ENV` variables automatically. **No other value is touched**: `--body 'costs $HOME'` sends `costs $HOME`. (Before 3.14.2 every value had `$VAR` substituted — a ticket body read from a file with `--body "$(cat body.md)"` lost its literal `$HOME`, `$PATH`, … The shell already expands what you leave unquoted, so synapse doing it again only ever rewrote text you had protected.)
 
 ### Flag values
 

@@ -192,17 +192,24 @@ expandPath cwd mHome pathText = do
 -- Environment Variable Expansion
 -- ============================================================================
 
--- | Expand environment variables in parameter values
+-- | Expand environment variables in path parameter values
 --
 -- Handles:
--- - @--value $VAR@ → @--value \<env_value\>@
--- - @--message \"Hello $USER\"@ → @--message \"Hello alice\"@
+-- - @--path $PROJECT/src@ → @--path \/home\/user\/proj\/src@
+--
+-- Path parameters only (SYNAPSE-6), as the README has always said. Any
+-- other value is sent exactly as it arrived: a shell has already expanded
+-- every @$VAR@ the caller left unquoted or double-quoted, so the only
+-- @$@ that reaches synapse is one the caller protected on purpose —
+-- single quotes, a value read from a file (@--body "$(cat body.md)"@).
+-- Expanding it again rewrote text the caller meant literally: a ticket
+-- body mentioning @$HOME@ was sent as @\/home\/alice@.
 --
 -- Simple implementation: only expands $VARNAME format (not ${VAR}).
 -- Fail-safe: Returns original value if variable not found.
 envExpansion :: Transformer
 envExpansion TransformEnv{..} (key, val)
-  | T.any (== '$') val = do
+  | isPathParam key && T.any (== '$') val = do
       let expanded = expandEnvVars teEnv val
       pure (key, expanded)
   | otherwise = pure (key, val)

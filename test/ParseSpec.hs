@@ -13,11 +13,30 @@ import Test.Hspec
 
 import Synapse.CLI.Help (renderParamHelp)
 import Synapse.CLI.Parse
-import Synapse.CLI.Transform (injectBooleanDefaults)
+import Synapse.CLI.Transform (TransformEnv(..), envExpansion, injectBooleanDefaults)
 import Synapse.IR.Types
 
 main :: IO ()
 main = hspec $ do
+  describe "envExpansion (SYNAPSE-6): $VAR is substituted in path parameters only" $ do
+    let env = TransformEnv
+          { teCwd = "/work", teHome = Just "/home/alice"
+          , teEnv = [("HOME", "/home/alice"), ("PROJECT", "/home/alice/proj")] }
+        expand k v = envExpansion env (k, v)
+
+    it "a ticket body keeps $HOME literally" $
+      expand "body" "costs $HOME and $PROJECT" `shouldReturn` ("body", "costs $HOME and $PROJECT")
+
+    it "a title, a message, any non-path value keeps it too" $ do
+      expand "title" "$HOME" `shouldReturn` ("title", "$HOME")
+      expand "message" "Hello $PROJECT" `shouldReturn` ("message", "Hello $PROJECT")
+
+    it "a path parameter still expands" $
+      expand "path" "$PROJECT/src" `shouldReturn` ("path", "/home/alice/proj/src")
+
+    it "an unset variable in a path parameter is left as written" $
+      expand "working_dir" "$NOPE/x" `shouldReturn` ("working_dir", "$NOPE/x")
+
   describe "groupByPrefix" $ do
     it "groups dotted keys by prefix" $ do
       let input = [("identifier.type", "by_name"), ("identifier.name", "foo"), ("prompt", "hi")]
