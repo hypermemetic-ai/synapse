@@ -984,6 +984,9 @@ renderParseError = \case
       ss -> "\n\nDid you mean one of: " <> T.unpack (T.intercalate ", " ss) <> "?"
   Parse.TypeNotFound name ->
     "Type not found in IR: " <> T.unpack name
+  Parse.MalformedListValue name value reason ->
+    "Malformed list value for --" <> T.unpack name <> ": " <> T.unpack value <>
+    " (" <> T.unpack reason <> ")"
 
 
 -- | Write a generated template to disk (no logging)

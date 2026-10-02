@@ -65,6 +65,7 @@ import qualified Data.Text as T
 
 import Synapse.IR.Types
 import Synapse.Algebra.Render (deprecationMarker, formatDeprecationLine)
+import Synapse.CLI.Parse (isScalarElement)
 
 -- ============================================================================
 -- Configuration
@@ -153,12 +154,24 @@ renderParamBlock style ir param =
         Just di -> [indent2 <> formatDeprecationLine di]
         Nothing -> []
 
+      -- How to pass several elements of a list (SYNAPSE-2)
+      listLines = case listElement (pdType param) of
+        Just inner
+          | isScalarElement ir inner ->
+              [indent2 <> "Repeat the flag or use commas: " <> rawFlag <> " a,b"]
+          | otherwise -> [indent2 <> "Repeat the flag for each element"]
+        Nothing -> []
+      listElement = \case
+        RefArray inner -> Just inner
+        RefOptional inner -> listElement inner
+        _ -> Nothing
+
       -- Type expansion (for enums/unions)
       expansionLines = if hsExpandEnums style
         then map (indent2 <>) (expandType ir (pdName param) (pdType param))
         else []
 
-  in [""] ++ [headerLine] ++ descLines ++ deprecationLines ++ expansionLines
+  in [""] ++ [headerLine] ++ descLines ++ deprecationLines ++ listLines ++ expansionLines
 
 -- ============================================================================
 -- Parameter Help

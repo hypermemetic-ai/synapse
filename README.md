@@ -219,9 +219,10 @@ synapse substrate cone chat \
   --identifier.name my-assistant \
   --prompt "hello"
 
-# Arrays — repeated flags or comma-separated
+# Lists — repeated flags or comma-separated (see Lists below)
 synapse substrate tags set --tags backend --tags critical
 synapse substrate tags set --tags backend,critical,urgent
+synapse substrate tags set --tags '"red, green",blue'   # an element with a comma
 
 # Boolean flags (bare flag = true)
 synapse substrate cone create --ephemeral
@@ -234,6 +235,33 @@ synapse substrate cone chat -p '{
 ```
 
 Path parameters (`--path`, `--working_dir`, etc.) expand `~`, resolve relative paths, and substitute `$ENV` variables automatically.
+
+### Lists
+
+A list parameter takes its elements one flag at a time, several to a flag, or both. When the elements are scalars (strings, integers, numbers, booleans, or a named type that is one of those, such as an id or a string enum), each flag value is read as one comma-separated record, with double quotes for an element that contains a comma:
+
+| flag value as synapse receives it | elements |
+| -- | -- |
+| `a,b,c` | `a` `b` `c` |
+| `a` | `a` |
+| `"a,b,c,d","e,f,g"` | `a,b,c,d` and `e,f,g` — a double-quoted element keeps its commas |
+| `"say ""hi""",b` | `say "hi"` and `b` — `""` inside quotes is one quote |
+| `a, b ,c` | `a` `b` `c` — space around an unquoted element is dropped |
+| `a,,b,` | `a` `b` — an empty unquoted element is dropped |
+| `"",a` | the empty string and `a` |
+| `"a,b` or `"a"x,b` | an error naming the parameter and the value; nothing is sent |
+
+Repeated flags append in order: `--tags a,b --tags c` is `a` `b` `c`. Elements are then typed as before (`--ids 1,2,3` sends `[1,2,3]` for an integer list). A list of objects, of lists, or of untyped values is not split — each flag value is one element, since JSON has commas of its own. Nothing else splits: a comma in `--title` is just a comma, and `-p '{…}'` is sent as written. `<method> --help` marks each list parameter with the forms it takes.
+
+**The shell removes double quotes before synapse runs**, so an element that contains a comma needs its quotes protected by single quotes:
+
+| typed | what synapse receives |
+| -- | -- |
+| `--commits a,b,c,e` | `a,b,c,e` — four elements |
+| `--multi "a,b,c,d","e,f,g"` | `a,b,c,d,e,f,g` — seven elements; the shell dropped the quotes |
+| `--multi '"a,b,c,d","e,f,g"'` | `"a,b,c,d","e,f,g"` — two elements |
+
+**Changed in 3.14.0.** Through 3.13 every flag value was exactly one element, commas included (`--tags a,b` sent `["a,b"]`). Now a single element that contains a comma must be quoted (`--tags '"a,b"'`), and a value that begins with `"` is read as a quoted element.
 
 ## Credentials & Headers
 

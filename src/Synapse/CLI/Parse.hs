@@ -42,10 +42,22 @@
 -- -> [("tags", [("", "backend"), ("", "critical"), ("", "urgent")])]
 -- -> {"tags": ["backend", "critical", "urgent"]}
 -- @
+--
+-- For a list of scalars, each flag value is also a comma-separated record
+-- (see 'splitListValue'):
+--
+-- @
+-- --tags backend,critical --tags '"a,b"'
+-- -> {"tags": ["backend", "critical", "a,b"]}
+-- @
 module Synapse.CLI.Parse
   ( -- * Parsing
     parseParams
   , ParseError(..)
+
+    -- * List values
+  , isScalarElement
+  , splitListValue
 
     -- * Helpers (exposed for testing)
   , groupByPrefix
@@ -86,6 +98,8 @@ data ParseError
       -- ^ Unknown variant name (param name, provided value, valid variants, suggestions)
   | TypeNotFound Text
       -- ^ Referenced type not found in IR
+  | MalformedListValue Text Text Text
+      -- ^ List flag value with broken quoting (param name, flag value, reason)
   deriving (Show, Eq)
 
 -- ============================================================================
@@ -203,11 +217,18 @@ buildParamValue ir param kvs = case pdType param of
       else buildParamValue ir param{pdType = inner} kvs
 
   RefArray innerType ->
-    -- Collect all repeated --key value entries (no comma splitting - use shell separation)
-    let values = [val | ("", val) <- kvs]
-    in if null values
+    -- Collect all repeated --key value entries; for a list of scalars each
+    -- entry is itself a comma-separated record (objects/lists/any stay whole)
+    let rawValues = [val | ("", val) <- kvs]
+        elements val
+          | isScalarElement ir innerType =
+              either (Left . MalformedListValue (pdName param) val) Right (splitListValue val)
+          | otherwise = Right [val]
+    in if null rawValues
        then Left $ InvalidValue (pdName param) "array requires at least one value"
-       else Right $ Array $ V.fromList $ map (buildTypedValue ir innerType) values
+       else do
+         values <- concat <$> traverse elements rawValues
+         Right $ Array $ V.fromList $ map (buildTypedValue ir innerType) values
 
   RefAny ->
     -- Dynamic type, try to parse as JSON or use as string
@@ -305,6 +326,67 @@ buildTypedValue ir ref val = case ref of
   RefArray _ -> inferValue val  -- Best effort for arrays
   RefAny -> inferValue val
   RefUnknown -> String val
+
+-- ============================================================================
+-- List Values
+-- ============================================================================
+
+-- | Is this list element type a scalar (string, integer, number, boolean, or
+-- a named type that is one of those)? Only lists of scalars split their flag
+-- values on commas; objects, lists and untyped values are passed whole.
+isScalarElement :: IR -> TypeRef -> Bool
+isScalarElement ir = \case
+  RefPrimitive typ _ -> typ `elem` scalarTypes
+  RefNamed qn -> case Map.lookup (qualifiedNameFull qn) (irTypes ir) of
+    Just TypeDef{tdKind = KindPrimitive typ _} -> typ `elem` scalarTypes
+    Just TypeDef{tdKind = KindStringEnum _} -> True
+    Just TypeDef{tdKind = KindAlias target} -> isScalarElement ir target
+    _ -> False
+  RefOptional inner -> isScalarElement ir inner
+  RefArray _ -> False
+  RefAny -> False
+  RefUnknown -> False
+  where
+    scalarTypes = ["string", "integer", "number", "boolean"]
+
+-- | Split one flag value of a scalar list into its elements.
+--
+-- The value is one comma-separated record. Unquoted fields are trimmed and
+-- dropped when empty. A field starting with @"@ runs to its closing quote,
+-- keeps its commas and spaces, and reads @""@ inside as one quote.
+--
+-- @
+-- a,b,c           -> ["a", "b", "c"]
+-- a, b ,c         -> ["a", "b", "c"]
+-- a,,b,           -> ["a", "b"]
+-- "a,b","c"       -> ["a,b", "c"]
+-- "say ""hi""",b  -> ["say \"hi\"", "b"]
+-- "",a            -> ["", "a"]
+-- "a,b  or "a"x,b -> Left reason
+-- @
+splitListValue :: Text -> Either Text [Text]
+splitListValue = field
+  where
+    field t = case T.uncons (T.stripStart t) of
+      Just ('"', rest) -> quoted "" rest
+      _ ->
+        let (raw, rest) = T.breakOn "," t
+            val = T.strip raw
+        in ([val | not (T.null val)] ++) <$> afterComma rest
+
+    -- Inside quotes: a doubled quote is one quote, a single one closes the field
+    quoted acc t = case T.breakOn "\"" t of
+      (_, "") -> Left "a quoted element has no closing quote"
+      (chunk, close) -> case T.uncons (T.drop 1 close) of
+        Just ('"', more) -> quoted (acc <> chunk <> "\"") more
+        _ -> case T.uncons (T.stripStart (T.drop 1 close)) of
+          Nothing -> Right [acc <> chunk]
+          Just (',', more) -> ((acc <> chunk) :) <$> field more
+          Just _ -> Left "a closing quote must be followed by a comma or the end"
+
+    afterComma rest = case T.uncons rest of
+      Nothing -> Right []
+      Just (_, more) -> field more  -- drop the comma
 
 -- ============================================================================
 -- Value Inference
