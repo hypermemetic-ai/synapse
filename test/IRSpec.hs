@@ -89,7 +89,7 @@ irSpec :: IR -> Spec
 irSpec ir = do
   describe "Schema fetching" $ do
     it "builds IR from root" $
-      irVersion ir `shouldBe` "2.0"
+      irVersion ir `shouldBe` "3.0"
 
     it "IR contains methods" $
       Map.size (irMethods ir) `shouldSatisfy` (> 0)

@@ -415,40 +415,56 @@ synapse --generate-templates substrate
 Synapse emits a structured Intermediate Representation for building typed clients:
 
 ```bash
-$ synapse --emit-ir substrate > substrate.ir.json
+$ synapse --emit-ir <backend> conformance > conformance.ir.json
 ```
+
+IR 3.0 (plexus 0.7) carries each method's contract as its schema states it:
+its item type (`mdReturns`), its error type when it can say no (`mdError`),
+its progress type when it reports progress (`mdProgress`), and whether it
+yields one item or many (`mdCardinality`). An excerpt of RETURNS-7's
+conformance fixture, whose whole IR is
+`plexus-macros/fixtures/conformance/expected/ir.json`:
 
 ```json
 {
-  "irVersion": "2.0",
+  "irVersion": "3.0",
   "irTypes": {
-    "echo.EchoEvent": {
-      "tdKind": {
-        "tag": "KindEnum",
-        "keDiscriminator": "event",
-        "keVariants": [
-          {"vdName": "echo", "vdFields": [
-            {"fdName": "message", "fdType": {"tag": "RefPrimitive", "contents": ["string", null]}},
-            {"fdName": "count", "fdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}}
-          ]}
-        ]
-      }
+    "conformance.Loaded": {
+      "tdKind": {"tag": "KindStruct", "ksFields": [
+        {"fdName": "items", "fdRequired": true, "fdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}}
+      ]}
+    },
+    "conformance.LoadError": {
+      "tdKind": {"tag": "KindEnum", "keDiscriminator": "type", "keVariants": [
+        {"vdName": "too_many", "vdFields": [
+          {"fdName": "max", "fdRequired": true, "fdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}},
+          {"fdName": "n", "fdRequired": true, "fdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}}
+        ]}
+      ]}
     }
   },
   "irMethods": {
-    "echo.echo": {
-      "mdStreaming": true,
+    "conformance.load": {
+      "mdCardinality": "many",
       "mdParams": [
-        {"pdName": "message", "pdType": {"tag": "RefPrimitive", "contents": ["string", null]}, "pdRequired": true},
-        {"pdName": "count", "pdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}, "pdRequired": true}
+        {"pdName": "n", "pdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}, "pdRequired": true}
       ],
-      "mdReturns": {"tag": "RefNamed", "contents": ["echo", "EchoEvent"]}
+      "mdReturns": {"tag": "RefNamed", "contents": {"qnNamespace": "conformance", "qnLocalName": "Loaded"}},
+      "mdError": {"tag": "RefNamed", "contents": {"qnNamespace": "conformance", "qnLocalName": "LoadError"}},
+      "mdProgress": {"tag": "RefNamed", "contents": {"qnNamespace": "conformance", "qnLocalName": "LoadStep"}}
     }
   }
 }
 ```
 
-Types are deduplicated by content hash across namespaces. Streaming is inferred from return type structure (enum with >1 non-error variant = streaming).
+Nothing is inferred: `mdCardinality` is the schema's `cardinality`, and every
+`RefNamed` has a `TypeDef` — a struct, a tagged enum (`keDiscriminator` is the
+property every variant gives a `const`, whatever it is called; a newtype
+variant over a struct carries the struct's fields), a string enum or an alias.
+One title in one namespace is one type: two methods whose schemas give a title
+the same shape share one `TypeDef`, and two shapes under one title fail the
+build, naming both methods. Identical types in different namespaces are then
+deduplicated (prefer the parent namespace, then the shortest).
 
 ## Client Generation (synapse-cc)
 
