@@ -31,7 +31,8 @@ import Plexus.Schema.Recursive
   )
 
 import Synapse.IR.Types
-  ( MethodDef(..)
+  ( Cardinality(..)
+  , MethodDef(..)
   , TypeRef(..)
   )
 
@@ -42,40 +43,45 @@ baseMethodDef = MethodDef
   , mdFullPath            = "solar.planet"
   , mdNamespace           = "solar"
   , mdDescription         = Just "Fetch a planet child by name."
-  , mdStreaming           = False
   , mdParams              = []
   , mdReturns             = RefAny
+  , mdError               = Nothing
+  , mdProgress            = Nothing
+  , mdCardinality         = CardinalityOne
   , mdBidirType           = Nothing
   , mdBidirResponseType   = Nothing
   , mdBidirResponseSchema = Nothing
   , mdRole                = MethodRoleRpc
   }
 
--- | Build a JSON @MethodSchema@ with an optional @role@ key. Passing
---   'Nothing' produces the pre-IR shape (no @role@ key at all).
+-- | Build a 0.7 JSON @MethodSchema@ with an optional @role@ key. Passing
+--   'Nothing' produces the pre-IR shape (no @role@ key at all). @returns@
+--   and @cardinality@ are required since plexus 0.7.
 methodSchemaJson :: Maybe Value -> Value
 methodSchemaJson mRole =
   let base =
         [ "name"        .= ("planet" :: String)
         , "description" .= ("Fetch a planet child by name." :: String)
         , "hash"        .= ("h-planet" :: String)
+        , "returns"     .= object []
+        , "cardinality" .= ("one" :: String)
         ]
   in object $ case mRole of
        Nothing   -> base
        Just role -> ("role" .= role) : base
 
--- | A hand-written pre-IR-12 MethodDef JSON blob: same field names as
---   the generic derivation produces, minus @mdRole@. Exercising the
---   back-compat path of synapse's manual @FromJSON MethodDef@ instance.
+-- | A hand-written IR 3.0 MethodDef JSON blob without @mdRole@ (as
+--   pre-IR-12 producers wrote it). Exercising the default of synapse's
+--   manual @FromJSON MethodDef@ instance.
 preIrMethodDefJson :: Value
 preIrMethodDefJson = object
   [ "mdName"        .= ("planet" :: String)
   , "mdFullPath"    .= ("solar.planet" :: String)
   , "mdNamespace"   .= ("solar" :: String)
   , "mdDescription" .= Aeson.Null
-  , "mdStreaming"   .= False
   , "mdParams"      .= ([] :: [Value])
   , "mdReturns"     .= object [ "tag" .= ("RefAny" :: String) ]
+  , "mdCardinality" .= ("one" :: String)
   ]
 
 main :: IO ()

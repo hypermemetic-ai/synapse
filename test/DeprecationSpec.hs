@@ -26,7 +26,8 @@ import System.IO (hClose, hFlush, openTempFile, stderr)
 import Test.Hspec
 
 import Plexus.Schema.Recursive
-  ( DeprecationInfo(..)
+  ( Cardinality(..)
+  , DeprecationInfo(..)
   , MethodRole(..)
   , MethodSchema(..)
   , ParamSchema(..)
@@ -46,7 +47,7 @@ import Synapse.Deprecation
   , formatMethodWarningLine
   , resetDeprecationStateForTesting
   )
-import Synapse.IR.Builder (extractMethodDef)
+import Synapse.IR.Builder (extractMethodDef, renderIRBuildError)
 import Synapse.IR.Types (IR(..), emptyIR)
 
 -- ---------------------------------------------------------------------------
@@ -59,9 +60,12 @@ baseMethod = MethodSchema
   , methodDescription    = "Relocate a document."
   , methodHash           = "hash-move-doc"
   , methodParams         = Nothing
-  , methodReturns        = Nothing
-  , methodStreaming      = False
+  , methodReturns        = object []
+  , methodError          = Nothing
+  , methodProgress       = Nothing
+  , methodCardinality    = CardinalityOne
   , methodBidirectional  = False
+  , methodHttpMethod     = "POST"
   , methodRequestType    = Nothing
   , methodResponseType   = Nothing
   , methodDeprecation    = Nothing
@@ -87,10 +91,12 @@ basePlugin = PluginSchema
   , psVersion         = "1.0"
   , psDescription     = "Document activation"
   , psLongDescription = Nothing
+  , psSelfHash        = Nothing
   , psHash            = "hash-docs"
   , psMethods         = [deprecatedMethod, plainMethod]
   , psChildren        = Nothing
   , psDeprecation     = Nothing
+  , psRequest         = Nothing
   }
 
 deprecatedPlugin :: PluginSchema
@@ -165,7 +171,8 @@ methodWithDeprecatedParam = baseMethod
 --   'pdDeprecation' lives, lifted there by 'extractMethodDef').
 helpFixture :: (IR, T.Text)
 helpFixture =
-  let (_types, mdef) = extractMethodDef "docs" "docs" methodWithDeprecatedParam
+  let mdef = either (error . T.unpack . renderIRBuildError) snd
+               (extractMethodDef "docs" "docs" methodWithDeprecatedParam)
       fullPath       = "docs.relocate"
       ir = emptyIR { irMethods = Map.singleton fullPath mdef }
   in (ir, renderMethodHelp ir mdef)

@@ -107,7 +107,7 @@ renderMethodHelpWith style ir method = T.unlines $
     header = mdFullPath method <> streamingIndicator
 
     streamingIndicator
-      | mdStreaming method = " [streaming]"
+      | mdCardinality method == CardinalityMany = " [streaming]"
       | otherwise = ""
 
     descSection = case mdDescription method of
