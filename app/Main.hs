@@ -71,7 +71,7 @@ import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.FilePath ((</>))
 import qualified Synapse.Self.Commands as Self
 import qualified Synapse.Self.Command as SelfCmd
-import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscovery, pingBackends, getBackendAt, registerWithRegistry)
+import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscovery, pingBackends, getBackendAt, getBackendAtWith, registerWithRegistry)
 import System.Exit (ExitCode(..), exitWith)
 
 -- ============================================================================
@@ -192,6 +192,18 @@ resolveToken opts _backend =
         let tok = T.strip contents
         pure $ if T.null tok then Nothing else Just tok
 
+-- | IDENTITY-16: the upgrade headers a discovery probe carries — the token
+-- (as the access_token cookie), --cookie and --header, as the command line
+-- and its env forms give them. Stored per-backend defaults are not read
+-- here: the probe runs before the backend is named.
+--
+-- (No signature: the result is the websockets package's header list, which
+-- this executable does not depend on by name.)
+probeHeaders opts = do
+  mToken <- resolveToken opts ""
+  (cookies, headers) <- collectRequestContext opts
+  pure (mergeUpgradeHeaders mToken cookies headers)
+
 -- ============================================================================
 -- Env Construction (SELF-2 read path)
 -- ============================================================================
@@ -288,7 +300,11 @@ main = do
   Log.logDebug logger Log.SubsystemDiscovery $
     "Checking backend at " <> soHost opts <> ":" <> T.pack (show (soPort opts))
 
-  maybeBackend <- getBackendAt (soHost opts) (soPort opts)
+  -- IDENTITY-16: the probe carries what the command line supplied (-t,
+  -- --token-file, --cookie, --header and their env forms), so a backend that
+  -- refuses anonymous upgrades still answers it.
+  probe <- probeHeaders opts
+  maybeBackend <- getBackendAtWith probe (soHost opts) (soPort opts)
 
   Log.logDebug logger Log.SubsystemDiscovery $
     "Backend check complete: " <> T.pack (show maybeBackend)
@@ -397,7 +413,8 @@ runWithDiscovery discovery backendName args = do
       -- Verify the resolved backend actually identifies as the requested name.
       -- This catches cases where -P points to a different backend than expected,
       -- or the registry has stale entries.
-      actualName <- getBackendAt (backendHost backend) (backendPort backend)
+      probe <- probeHeaders opts
+      actualName <- getBackendAtWith probe (backendHost backend) (backendPort backend)
       case actualName of
         Just name | name /= backendName -> do
           hPutStrLn stderr $ "Backend mismatch: requested '" <> T.unpack backendName
@@ -420,7 +437,8 @@ runWithDiscovery discovery backendName args = do
     Nothing -> do
       -- Backend not found in registry - check if this was a direct connection attempt
       -- where the protocol handshake failed
-      maybeDirectBackend <- getBackendAt (soHost opts) (soPort opts)
+      probe <- probeHeaders opts
+      maybeDirectBackend <- getBackendAtWith probe (soHost opts) (soPort opts)
       logger <- makeLoggerFromOpts opts
       env <- buildEnv (soHost opts) (soPort opts) backendName logger opts
       case maybeDirectBackend of

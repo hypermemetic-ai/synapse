@@ -47,6 +47,7 @@ module Synapse.Backend.Discovery
 
     -- * Backend Discovery
   , getBackendAt
+  , getBackendAtWith
 
     -- * Health Checks
   , pingBackend
@@ -75,6 +76,7 @@ import Control.Concurrent (threadDelay)
 import Data.IORef (newIORef, writeIORef, readIORef)
 import Control.Monad (void)
 import Plexus.Client (SubstrateConfig(..))
+import qualified Network.WebSockets as WS
 import qualified Plexus.Transport as ST
 import Plexus.Types (PlexusStreamItem(..), TransportError(..))
 import qualified Synapse.Log as Log
@@ -228,15 +230,26 @@ registryDiscovery registryHost registryPort = BackendDiscovery
 getBackendAt :: Text -> Int -> IO (Maybe Text)
 getBackendAt = discoverBackendName
 
+-- | IDENTITY-16: 'getBackendAt', its _info probe carrying the caller's
+-- upgrade headers (the token's cookie, --cookie, --header; see
+-- 'Synapse.Transport.mergeUpgradeHeaders'). A backend that refuses
+-- anonymous upgrades answers the probe only with them.
+getBackendAtWith :: WS.Headers -> Text -> Int -> IO (Maybe Text)
+getBackendAtWith = discoverBackendNameWith
+
 -- | Discover the backend name by calling _info (with 2000ms timeout)
 discoverBackendName :: Text -> Int -> IO (Maybe Text)
-discoverBackendName host port = do
+discoverBackendName = discoverBackendNameWith []
+
+-- | 'discoverBackendName' with upgrade headers.
+discoverBackendNameWith :: WS.Headers -> Text -> Int -> IO (Maybe Text)
+discoverBackendNameWith headers host port = do
   let cfg = SubstrateConfig
         { substrateHost    = T.unpack host
         , substratePort    = port
         , substratePath    = "/"
         , substrateBackend = "" -- Not used for _info
-        , substrateHeaders = []
+        , substrateHeaders = headers
         }
       timeout = do
         threadDelay 2000000  -- 2 second timeout

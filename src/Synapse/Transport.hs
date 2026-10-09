@@ -19,6 +19,9 @@ module Synapse.Transport
 
     -- * Bidirectional Response
   , sendResponse
+
+    -- * Upgrade headers (IDENTITY-16: discovery probes carry them too)
+  , mergeUpgradeHeaders
   ) where
 
 import Control.Monad.IO.Class (liftIO)
