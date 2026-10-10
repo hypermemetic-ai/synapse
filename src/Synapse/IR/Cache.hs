@@ -12,6 +12,7 @@ module Synapse.IR.Cache
   , newIRCache
   , lookupIR
   , insertIR
+  , irCacheKey
   , clearCache
   , getCacheStats
   , CacheStats(..)
@@ -81,7 +82,19 @@ newIRCache config = do
     , cacheStats = stats
     }
 
--- | Look up IR by hash
+-- | AUTH-8: the key an IR is kept under — the plugin hash, qualified by
+-- the caller's view when the hub has one (@VIEW_HASH@ joined with @-@, a
+-- file name). Callers pass this to 'lookupIR' / 'insertIR' so two
+-- callers' views of one hub never share an IR on disk.
+irCacheKey :: Maybe Text -> Text -> Text
+irCacheKey Nothing hash = hash
+irCacheKey (Just v) hash
+  | T.null v = hash
+  | otherwise = T.map safe v <> "-" <> hash
+  where
+    safe c = if c `elem` ("/\\:" :: String) then '_' else c
+
+-- | Look up IR by hash (see 'irCacheKey' for a view's)
 lookupIR :: IRCache -> Text -> IO (Maybe IR)
 lookupIR IRCache{..} hash
   | not (cacheEnabled cacheConfig) = pure Nothing

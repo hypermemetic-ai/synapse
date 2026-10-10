@@ -49,6 +49,7 @@ module Synapse.Backend.Discovery
   , getBackendAt
   , getBackendAtWith
   , probeBackendAtWith
+  , probedInfo
 
     -- * Health Checks
   , pingBackend
@@ -74,7 +75,10 @@ import Control.Exception (catch, SomeException)
 import Data.Either (isRight)
 import Control.Concurrent.Async (mapConcurrently, race, async, wait)
 import Control.Concurrent (threadDelay)
-import Data.IORef (newIORef, writeIORef, readIORef)
+import Data.IORef (IORef, newIORef, writeIORef, readIORef, modifyIORef')
+import qualified Data.Map.Strict as Map
+import System.IO.Unsafe (unsafePerformIO)
+import Plexus.Auth (BackendInfo, parseBackendInfo)
 import Control.Monad (void)
 import Plexus.Client (SubstrateConfig(..))
 import qualified Network.WebSockets as WS
@@ -278,10 +282,22 @@ probeBackendAtWith headers host port = do
     Right (Right items) -> do
       -- Extract the backend name from subscription response
       case [Aeson.fromJSON content | StreamData _ _ _ content <- items] of
-        (Aeson.Success (Aeson.Object obj):_) | Just (Aeson.String name) <- KM.lookup "backend" obj ->
+        (Aeson.Success v@(Aeson.Object obj):_) | Just (Aeson.String name) <- KM.lookup "backend" obj -> do
+          -- AUTH-8: kept for the rest of the process — the view and the
+          -- auth block this connection's credential was answered with
+          mapM_ (\i -> modifyIORef' infoMemo (Map.insert (host, port) i)) (parseBackendInfo v)
           pure (Right name)
         _ ->
           pure (Left "the _info probe answered no backend name")
+
+-- | AUTH-8: what the last successful _info probe at HOST:PORT answered in
+-- this process (its view and auth block), when it was probed.
+probedInfo :: Text -> Int -> IO (Maybe BackendInfo)
+probedInfo host port = Map.lookup (host, port) <$> readIORef infoMemo
+
+{-# NOINLINE infoMemo #-}
+infoMemo :: IORef (Map.Map (Text, Int) BackendInfo)
+infoMemo = unsafePerformIO (newIORef Map.empty)
 
 -- | Query the registry for all backends
 queryRegistry :: Text -> Int -> Text -> IO [Backend]

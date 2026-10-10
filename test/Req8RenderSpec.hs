@@ -33,6 +33,7 @@ fixture = PluginSchema
   , psMethods         = [method1]
   , psChildren        = Nothing
   , psDeprecation     = Nothing
+  , psRoles = Nothing, psView = Nothing
   , psRequest         = Nothing
   }
   where
@@ -49,6 +50,7 @@ fixture = PluginSchema
       , methodDeprecation   = Nothing
       , methodParamSchemas  = Nothing
       , methodRole          = defaultRole
+      , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False
       }
 
 -- | Stub role — renderSchema doesn't branch on role for this test.

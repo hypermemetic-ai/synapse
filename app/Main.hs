@@ -39,7 +39,7 @@ import System.IO (hPutStrLn, stderr, hFlush, stdout, hIsTerminalDevice)
 
 
 import Synapse.Schema.Types
-import Synapse.Monad (SynapseM, SynapseEnv(..), SynapseError(..), BackendErrorType(..), TransportContext(..), TransportErrorCategory(..), initEnv, runSynapseM, throwNav, throwTransport, throwParse, throwBackend, withRequestContext)
+import Synapse.Monad (SynapseM, SynapseEnv(..), SynapseError(..), BackendErrorType(..), TransportContext(..), TransportErrorCategory(..), initEnv, runSynapseM, throwNav, throwTransport, throwParse, throwBackend, withRequestContext, withViewKey)
 import qualified Synapse.Self as Self
   ( CredentialRef(..)
   , ResolveError(..)
@@ -53,7 +53,11 @@ import qualified Control.Exception as E
 import qualified Synapse.Log as Log
 import qualified Katip
 import Synapse.Algebra.Navigate
-import Synapse.Algebra.Render (renderSchema)
+import Synapse.Algebra.Render (renderSchema, renderSchemaFor, defaultStyle)
+import Synapse.Auth (AnonPage(..), anonymousMethods, renderAnonymousPage, renderCallerHeader, renderRefusal, SessionGrant(..))
+import Plexus.Auth (BackendInfo(..), View(..), viewText)
+import Plexus.Types (itemRefusal)
+import Control.Monad.Except (catchError, throwError)
 import Synapse.CLI.Help (renderMethodHelp)
 import Synapse.CLI.Parse (parseParams, parsePathAndParams, pairFlags)
 import qualified Synapse.CLI.Parse as Parse
@@ -72,7 +76,7 @@ import System.FilePath ((</>))
 import qualified Synapse.Self.Commands as Self
 import qualified Synapse.Self.Command as SelfCmd
 import qualified Synapse.Note.Command as NoteCmd
-import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscovery, pingBackends, getBackendAt, getBackendAtWith, probeBackendAtWith, registerWithRegistry)
+import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscovery, pingBackends, getBackendAt, getBackendAtWith, probeBackendAtWith, registerWithRegistry, probedInfo)
 import Control.Applicative ((<|>))
 import System.Environment (lookupEnv)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -497,11 +501,15 @@ runLogin :: SynapseOpts -> [Text] -> IO ()
 runLogin opts rest = do
   lo <- handleParseResult (execParserPure defaultPrefs IdCmd.loginInfo (map T.unpack rest))
   asked <- askedAgent opts
+  -- AUTH-8: no key and no agent named — a person, through the browser
+  when (IdCmd.loKey lo == Nothing && IdCmd.loAs lo == Nothing && asked == Nothing) $
+    runLoginPerson opts lo
   agent <- maybe (dieWith "name the agent to log in as: --as AGENT (or SYNAPSE_AS)") pure (IdCmd.loAs lo <|> asked)
+  let keyName = maybe "default" id (IdCmd.loKey lo)
   st <- Store.systemStoreEnv
-  seed <- Store.lookupKey st (IdCmd.loKey lo) >>= \case
+  seed <- Store.lookupKey st keyName >>= \case
     Left e -> dieWith e
-    Right Nothing -> dieWith ("no key " <> IdCmd.loKey lo <> " (synapse _key new " <> IdCmd.loKey lo <> ")")
+    Right Nothing -> dieWith ("no key " <> keyName <> " (synapse _key new " <> keyName <> ")")
     Right (Just (s, _)) -> pure s
   (host, port) <- loginAddress opts (IdCmd.loBackend lo)
   logger <- makeLoggerFromOpts opts
@@ -512,7 +520,7 @@ runLogin opts rest = do
         , Store.srPrincipal = if T.null (Session.lrPrincipal lr) then Proof.principalOf seed else Session.lrPrincipal lr
         , Store.srAgent = Session.lrAgent lr
         , Store.srExpiresAt = Session.lrExpiresAt lr
-        , Store.srKey = IdCmd.loKey lo
+        , Store.srKey = keyName
         , Store.srScope = IdCmd.loScope lo
         , Store.srTtl = IdCmd.loTtl lo
         , Store.srBackend = IdCmd.loBackend lo
@@ -533,6 +541,56 @@ runLogin opts rest = do
     , ("scope", scope)
     , ("until", until')
     , ("kept in", kept)
+    ]
+  exitSuccess
+
+-- | AUTH-8: the session slot a person's sign-in is kept under.
+personAgent :: Text
+personAgent = "me"
+
+-- | AUTH-8: @synapse -P PORT _login BACKEND@ — a person signs in through
+-- the browser (the loopback flow), and the session is kept as an agent's
+-- is (keychain, else file), under the name @me@, with no key to make it
+-- again from: when it ends, synapse says to sign in again.
+runLoginPerson :: SynapseOpts -> IdCmd.LoginOpts -> IO ()
+runLoginPerson opts lo = do
+  let backend = IdCmd.loBackend lo
+  (host, port) <- loginAddress opts backend
+  logger <- makeLoggerFromOpts opts
+  r <- Session.loginPerson logger host port backend 300 (TIO.hPutStrLn stderr)
+  g <- either (\e -> dieWith ("sign-in to " <> backend <> " at " <> Store.addressKey host port <> " failed: " <> e)) pure r
+  who <- case sgWhoami g of
+    Just w -> pure (Just w)
+    Nothing -> Session.whoamiWith logger host port backend (sgToken g)
+  let rec = Store.SessionRec
+        { Store.srToken = sgToken g
+        , Store.srPrincipal = sgPrincipal g
+        , Store.srAgent = personAgent
+        , Store.srExpiresAt = sgExpiresAt g
+        , Store.srKey = ""          -- a person's: nothing to sign in again from
+        , Store.srScope = sgCeiling g
+        , Store.srTtl = Nothing
+        , Store.srBackend = backend
+        }
+  st <- Store.systemStoreEnv
+  src <- Store.writeSession st host port rec
+  Store.writeDefaultAgent st host port personAgent
+  let named = case who of
+        Just w -> maybe "" id (T.stripPrefix "you are " (renderCallerHeader w))
+        Nothing -> case sgName g of
+          Just n -> n <> " (" <> sgPrincipal g <> ")"
+          Nothing -> sgPrincipal g
+      until' = case sgExpiresAt g of
+        Just t -> T.pack (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC" (posixSecondsToUTCTime (fromIntegral t)))
+        Nothing -> "(the server named no end)"
+      kept = case src of
+        Store.SessionFromKeychain -> "keychain"
+        Store.SessionFromFile p -> T.pack p
+        Store.SessionFromEnv -> "PLEXUS_SESSION"
+  TIO.putStrLn $ "signed in to " <> backend <> " as " <> named
+  mapM_ (\(k, v) -> TIO.putStrLn ("  " <> T.justifyLeft 10 ' ' k <> v))
+    [ ("until", until')
+    , ("kept in", kept <> " (as " <> personAgent <> ")")
     ]
   exitSuccess
 
@@ -675,7 +733,7 @@ run backend host port args = do
   let opts = argOpts args
   logger <- makeLoggerFromOpts opts
   Log.logInfo logger Log.SubsystemCLI $ "Synapse starting: backend=" <> backend <> ", host=" <> host <> ", port=" <> T.pack (show port)
-  env <- buildEnv host port backend logger opts
+  env <- withView host port =<< buildEnv host port backend logger opts
   rendererCfg <- defaultRendererConfig
   Log.logDebug logger Log.SubsystemCLI "Running dispatch..."
   result <- runSynapseM env (dispatch args rendererCfg)
@@ -692,7 +750,7 @@ run backend host port args = do
     new <- Session.reattest logger st host port
     case new of
       Just _ -> do
-        env' <- buildEnv host port backend logger opts
+        env' <- withView host port =<< buildEnv host port backend logger opts
         runSynapseM env' (dispatch args rendererCfg)
       Nothing -> do
         mapM_ (\m -> hPutStrLn stderr ("Error: " <> T.unpack m)) ended
@@ -701,7 +759,22 @@ run backend host port args = do
     Left err -> do
       hPutStrLn stderr $ renderError err
       exitFailure
-    Right () -> exitSuccess
+    Right () -> do
+      -- AUTH-8: a refusal was shown — the call did not happen
+      refused' <- Session.wasRefused
+      if refused' then exitWith (ExitFailure refusedExit) else exitSuccess
+
+-- | AUTH-8: the exit status of a call the hub refused (sysexits' EX_NOPERM).
+refusedExit :: Int
+refusedExit = 77
+
+-- | AUTH-8: the env's cache keys qualified by the caller's view, as the
+-- _info probe at this address answered it (the view's hash, else its kind).
+withView :: Text -> Int -> SynapseEnv -> IO SynapseEnv
+withView host port env = do
+  info <- probedInfo host port
+  let key = info >>= \i -> infoViewHash i <|> (viewText <$> infoView i)
+  pure (withViewKey key env)
 
 -- | Dispatch based on navigation result
 dispatch :: Args -> RendererConfig -> SynapseM ()
@@ -774,24 +847,35 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
 
                 else do
                   -- Mode 5: Normal navigation
+                  info <- currentInfo
+                  let anonymous = (info >>= infoView) == Just Anonymous
                   if null pathSegs
                     then do
                       -- SYNAPSE-12: a backend named, its help is the
                       -- backend's alone — no banner, options or meta-commands.
-                      rootSchema <- navigate []
+                      -- AUTH-8: to an anonymous caller, only the door.
+                      rootSchema <- if anonymous
+                        then (Just <$> navigate []) `catchError` \_ -> pure Nothing
+                        else Just <$> navigate []
                       case rootSchema of
-                        ViewPlugin schema _ -> liftIO $ do
-                          TIO.putStr $ renderSchema schema
-                          backendHelpFooter
+                        _ | anonymous -> showAnonymous info (rootSchema >>= viewSchema)
+                        Just (ViewPlugin schema _) -> showPluginHelp info schema
                         _ -> pure ()
                     else do
                       -- Navigate to target
-                      view <- navigate pathSegs
+                      -- AUTH-8: an anonymous caller asking for anything the
+                      -- door does not show is shown the door
+                      view <- navigate pathSegs `catchError` \e -> case e of
+                        NavError (NotFound {}) | anonymous -> do
+                          root <- (Just <$> navigate []) `catchError` \_ -> pure Nothing
+                          showAnonymous info (root >>= viewSchema)
+                          liftIO $ do
+                            TIO.hPutStrLn stderr $ "synapse: sign in to reach " <> T.intercalate " " pathSegs
+                            exitWith (ExitFailure refusedExit)
+                        _ -> throwError e
                       case view of
                         -- Landed on a plugin: show help
-                        ViewPlugin schema _ -> liftIO $ do
-                          TIO.putStr $ renderSchema schema
-                          backendHelpFooter
+                        ViewPlugin schema _ -> showPluginHelp info schema
 
                         -- Landed on a method: invoke or show help
                         ViewMethod method path -> do
@@ -899,6 +983,47 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                                       -- IR-15: fire stderr deprecation warnings before real invocation.
                                       else fireDeprecationWarnings >> invokeMethod path params
   where
+    -- AUTH-8: what the _info probe at this address answered (view, auth)
+    currentInfo :: SynapseM (Maybe BackendInfo)
+    currentInfo = do
+      h <- asks seHost
+      p <- asks sePort
+      liftIO (probedInfo h p)
+
+    viewSchema = \case
+      ViewPlugin schema _ -> Just schema
+      _ -> Nothing
+
+    -- A plugin's help: as SYNAPSE-12 laid it out; in a caller's view (AUTH-4)
+    -- with who the caller is under the description, and each method's
+    -- grant and where it is held when the schema says them.
+    showPluginHelp :: Maybe BackendInfo -> PluginSchema -> SynapseM ()
+    showPluginHelp info schema = case info >>= infoView of
+      Just Caller -> do
+        who <- Session.whoamiM
+        liftIO $ do
+          TIO.putStr $ renderSchemaFor defaultStyle (renderCallerHeader <$> who) schema
+          backendHelpFooter
+      _ -> liftIO $ do
+        TIO.putStr $ renderSchema schema
+        backendHelpFooter
+
+    -- AUTH-8: the page an anonymous caller sees: the door, and how to sign in.
+    showAnonymous :: Maybe BackendInfo -> Maybe PluginSchema -> SynapseM ()
+    showAnonymous info root = do
+      backend <- asks seBackend
+      authSchema <- (Just <$> fetchSchemaAt ["auth"]) `catchError` \_ -> pure Nothing
+      let invokePrefix = "synapse"
+            <> (if soHost /= defaultHost then " -H " <> soHost else "")
+            <> (if soPort /= defaultPort then " -P " <> T.pack (show soPort) else "")
+          page = AnonPage
+            { apBackend = backend
+            , apVersion = psVersion <$> root
+            , apMethods = anonymousMethods (info >>= infoAuth) authSchema
+            , apInvoke = invokePrefix
+            }
+      liftIO $ TIO.putStr (renderAnonymousPage page)
+
     handleRespondCommand :: [(Text, Text)] -> SynapseM ()
     handleRespondCommand params = do
       let mRequestId = lookup "request_id" params
@@ -1071,11 +1196,13 @@ cliHeader = splash <> T.pack (fst $ renderFailure failure "synapse") <> selfHelp
       , "      Ed25519 keys an agent proves who it is with (keychain, else"
       , "      ~/.plexus/keys/NAME.key; PLEXUS_KEY and $CREDENTIALS_DIRECTORY read first)"
       , ""
+      , "  synapse -P PORT _login BACKEND"
       , "  synapse -P PORT _login BACKEND --key NAME --as AGENT [--scope ROLE@SCOPE] [--ttl SECS]"
       , "  synapse -P PORT _logout BACKEND [--as AGENT]"
-      , "      Log in from a key; later calls to that backend carry the session by"
-      , "      themselves (--as AGENT / SYNAPSE_AS picks one; else the last logged in),"
-      , "      and log in again from the key when it ends"
+      , "      A person signs in through the browser (a loopback on 127.0.0.1; kept as"
+      , "      'me'); an agent logs in from a key. Later calls to that backend carry the"
+      , "      session by themselves (--as AGENT / SYNAPSE_AS picks one; else the last"
+      , "      logged in), and an agent's logs in again from the key when it ends"
       , ""
       , "  synapse _self template"
       , "      Manage Mustache templates (CRUD operations)"
@@ -1288,8 +1415,18 @@ encodeDryRun backend namespacePath method params =
 -- soRaw: skip template rendering, just output content JSON
 -- otherwise: try template rendering, fall back to content JSON
 printResult :: Bool -> Bool -> RendererConfig -> HubStreamItem -> IO ()
-printResult True _ _ item = LBS.putStrLn $ encode item
-printResult _ True _ item = case item of
+printResult json raw cfg item = case itemRefusal item of
+  -- AUTH-8: a refusal says what it needed (and the call exits non-zero)
+  Just r -> do
+    Session.noteRefused
+    if json then LBS.putStrLn (encode item) else do
+      ceiling' <- Session.currentCeiling
+      TIO.hPutStr stderr (renderRefusal ceiling' r)
+  Nothing -> printResult' json raw cfg item
+
+printResult' :: Bool -> Bool -> RendererConfig -> HubStreamItem -> IO ()
+printResult' True _ _ item = LBS.putStrLn $ encode item
+printResult' _ True _ item = case item of
   -- Raw mode: just output the content
   HubData _ _ _ dat -> do
     LBS.putStrLn $ encode dat
@@ -1301,7 +1438,7 @@ printResult _ True _ item = case item of
   HubError _ _ err _ ->
     hPutStrLn stderr $ "Error: " <> T.unpack err
   _ -> pure ()
-printResult _ _ cfg item = do
+printResult' _ _ cfg item = do
   -- Template mode: try to render with template
   mRendered <- renderItem cfg item
   case mRendered of

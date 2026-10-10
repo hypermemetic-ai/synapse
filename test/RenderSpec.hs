@@ -24,7 +24,8 @@ method name desc params = MethodSchema
   { methodName = name, methodDescription = desc, methodHash = "h", methodParams = params
   , methodReturns = Nothing, methodStreaming = True, methodBidirectional = False
   , methodRequestType = Nothing, methodResponseType = Nothing, methodDeprecation = Nothing
-  , methodParamSchemas = Nothing, methodRole = MethodRoleRpc }
+  , methodParamSchemas = Nothing, methodRole = MethodRoleRpc
+  , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False }
 
 hub :: PluginSchema
 hub = PluginSchema
@@ -41,6 +42,7 @@ hub = PluginSchema
       , ChildSummary "comments" "Comments on the app and on ticket bodies — add, list (filtered), resolve, reopen, watch" "h2"
       ]
   , psDeprecation = Nothing
+  , psRoles = Nothing, psView = Nothing
   }
 
 findParams, linkParams :: Value

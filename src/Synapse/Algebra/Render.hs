@@ -3,6 +3,7 @@ module Synapse.Algebra.Render
   ( -- * Rendering Functions
     renderSchema
   , renderSchemaWith
+  , renderSchemaFor
   , renderMethod
   , renderMethodFull
   , renderChild
@@ -29,7 +30,7 @@ import Control.Applicative ((<|>))
 import Data.List (intersperse, sortOn)
 
 import Synapse.Schema.Types
-import Plexus.Schema.Recursive (DeprecationInfo(..), ParamSchema(..))
+import Plexus.Schema.Recursive (DeprecationInfo(..), ParamSchema(..), hasAuthColumns)
 
 -- | Rendering style configuration
 data RenderStyle = RenderStyle
@@ -61,9 +62,18 @@ renderSchema = renderSchemaWith defaultStyle
 
 -- | Render with custom style
 renderSchemaWith :: RenderStyle -> PluginSchema -> Text
-renderSchemaWith style PluginSchema{..} = T.unlines (dropTrailingBlanks body)
+renderSchemaWith style = renderSchemaFor style Nothing
+
+-- | AUTH-8: render for a caller — the header line saying who it is
+-- (@you are … · editor on MENGER@) under the description, when given; and,
+-- when the schema's methods carry their grants (AUTH-3) or where they are
+-- held (AUTH-4), those as two aligned columns on each method's line. A
+-- schema with neither renders exactly as 'renderSchemaWith' always has.
+renderSchemaFor :: RenderStyle -> Maybe Text -> PluginSchema -> Text
+renderSchemaFor style callerLine ps@PluginSchema{..} = T.unlines (dropTrailingBlanks body)
   where
     width = rsWidth style
+    authCols = hasAuthColumns ps
 
     -- SYNAPSE-12: one blank line between blocks, never more; the name and
     -- version, the description under it, then each section under a header.
@@ -71,6 +81,7 @@ renderSchemaWith style PluginSchema{..} = T.unlines (dropTrailingBlanks body)
       [ [heading]
       , deprecationNotice
       , map ("  " <>) (wrap (width - 2) psDescription)
+      , maybe [] (\l -> ["  " <> l]) callerLine
       , requestBlock
       , section "activations" False childBlocks
       , section "methods" True methodBlocks
@@ -110,10 +121,27 @@ renderSchemaWith style PluginSchema{..} = T.unlines (dropTrailingBlanks body)
     childBlocks = [ entry (csNamespace c) (csDescription c) | c <- children ]
 
     methodBlocks =
-      [ entry (decoratedName m) (methodDescription m)
+      [ methodEntry m
           ++ maybe [] (\di -> [T.replicate descCol " " <> formatDeprecationLine di]) (methodDeprecation m)
           ++ paramLines (methodParams m)
       | m <- methods ]
+
+    methodEntry m
+      | authCols = entryCols (decoratedName m) (methodDescription m) (grantOf m) (heldOf m)
+      | otherwise = entry (decoratedName m) (methodDescription m)
+
+    -- AUTH-8: the grant and where it is held, each its own column after
+    -- the description's (which wraps narrower to make room), on the
+    -- method's first line.
+    grantOf m = maybe "" id (methodGrant m)
+    heldOf m = maybe "" (T.intercalate ", ") (methodHeldOn m)
+    grantW = maximum (0 : map (T.length . grantOf) methods)
+    descW = max 20 (width - descCol - 2 - grantW - 2 - maximum (0 : map (T.length . heldOf) methods))
+    entryCols name desc grant held =
+      let (d0, drest) = case wrap descW desc of { [] -> ("", []); (x : xs) -> (x, xs) }
+          cols = T.stripEnd (T.justifyLeft grantW ' ' grant <> "  " <> held)
+          first' = T.justifyLeft descW ' ' d0 <> "  " <> cols
+      in hang descCol ("  " <> name) (first' : drest)
 
     -- A name and its description, the description wrapped in its column;
     -- a name too long for the column puts the description under it.
