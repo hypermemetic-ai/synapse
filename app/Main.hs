@@ -71,6 +71,7 @@ import System.Directory (createDirectoryIfMissing, getHomeDirectory)
 import System.FilePath ((</>))
 import qualified Synapse.Self.Commands as Self
 import qualified Synapse.Self.Command as SelfCmd
+import qualified Synapse.Note.Command as NoteCmd
 import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscovery, pingBackends, getBackendAt, registerWithRegistry)
 import System.Exit (ExitCode(..), exitWith)
 
@@ -275,6 +276,10 @@ main = do
   args <- execParser argsInfo
   let opts = argOpts args
 
+  -- SYNAPSE-11: notes are local — no handshake and no discovery, so a note
+  -- can be written with no backend running; only an upgrade asks one.
+  when (argBackend args == Just "_note") $ runNote opts (argPath args)
+
   -- Initialize logger (default: ErrorS, only show errors)
   logger <- makeLoggerFromOpts opts
 
@@ -370,6 +375,48 @@ runSelfV4 rest = do
   case code of
     ExitSuccess   -> pure ()
     ExitFailure _ -> exitWith code
+
+-- | SYNAPSE-11: @synapse _note …@ — the post-@_note@ tokens parsed by the
+-- note command's own parser, run, and the process ended with its code.
+runNote :: SynapseOpts -> [Text] -> IO ()
+runNote opts rest = do
+  cmd <- handleParseResult (execParserPure defaultPrefs NoteCmd.noteCommandInfo (map T.unpack rest))
+  code <- NoteCmd.runNoteCommand (createTicketVia opts) cmd
+  exitWith code
+
+-- | SYNAPSE-11: an upgrade's ticket — @tickets.create@ on the backend named,
+-- reached as any synapse call reaches it: through the registry at the
+-- connection point (@-H@/@-P@), or the connection point itself when that
+-- is the backend. The new ticket's id, or why there is none.
+createTicketVia :: SynapseOpts -> Text -> Value -> IO (Either Text Text)
+createTicketVia opts backendName params = do
+  logger <- makeLoggerFromOpts opts
+  registered <- getBackendInfo (registryDiscovery (soHost opts) (soPort opts)) backendName
+  let (host, port) = maybe (soHost opts, soPort opts) (\b -> (backendHost b, backendPort b)) registered
+  actual <- getBackendAt host port
+  case actual of
+    Nothing -> pure $ Left $ "no backend '" <> backendName <> "' answers at " <> host <> ":" <> T.pack (show port)
+      <> " — reach it as any synapse call does, e.g. synapse -P <port> _note upgrade …"
+    Just name | name /= backendName -> pure $ Left $
+      host <> ":" <> T.pack (show port) <> " is '" <> name <> "', not '" <> backendName
+        <> "' — pass its port with -P before _note, or --backend " <> name
+    Just _ -> do
+      env <- buildEnv host port backendName logger opts
+      result <- runSynapseM env (invoke ["tickets"] "create" params)
+      pure $ case result of
+        Left err -> Left (T.pack (renderError err))
+        Right items -> createdTicket items
+  where
+    createdTicket items =
+      case [ c | HubData _ _ _ c <- items ] of
+        contents
+          | (tid : _) <- [ t | Object o <- contents, Just (String "created") <- [KM.lookup "type" o]
+                             , Just (Object tk) <- [KM.lookup "ticket" o], Just (String t) <- [KM.lookup "id" tk] ] -> Right tid
+          | (msg : _) <- [ m | Object o <- contents, Just (String "error") <- [KM.lookup "type" o]
+                             , Just (String m) <- [KM.lookup "message" o] ] -> Left msg
+        _ -> case [ e | HubError _ _ e _ <- items ] of
+          (e : _) -> Left e
+          [] -> Left "the backend answered with no ticket"
 
 -- | Print a backend in the list
 printBackend :: Backend -> IO ()
@@ -783,6 +830,15 @@ cliHeader = splash <> T.pack (fst $ renderFailure failure "synapse") <> selfHelp
     selfHelp = T.unlines
       [ ""
       , "Meta-commands (local, no RPC):"
+      , ""
+      , "  synapse _note add|list|show|upgrade|path"
+      , "      Notes: dated, untitled, in one place ($SYNAPSE_NOTES_DIR, else"
+      , "      ~/.plexus/notes); upgrade makes one a ticket (tickets.create)"
+      , ""
+      , "      Examples:"
+      , "        synapse _note add \"the palette should remember its query\""
+      , "        synapse _note list"
+      , "        synapse -P 4455 _note upgrade 20261010-1503 --epic MENGER"
       , ""
       , "  synapse _self template"
       , "      Manage Mustache templates (CRUD operations)"
