@@ -7,6 +7,7 @@
 -- synapse _key new [NAME] [--store auto|file|keychain]   -- NAME defaults to "default"; never overwrites
 -- synapse _key show [NAME]                                -- key:\<hex\>
 -- synapse _key list
+-- synapse [-H HOST] -P PORT _login BACKEND                       -- a person: the browser (AUTH-8)
 -- synapse [-H HOST] -P PORT _login BACKEND [--key NAME] --as AGENT [--scope role\@SCOPE …] [--ttl SECS]
 -- synapse [-H HOST] -P PORT _logout BACKEND [--as AGENT]
 -- @
@@ -116,7 +117,7 @@ runKeyCommand st = \case
 
 data LoginOpts = LoginOpts
   { loBackend :: Text
-  , loKey     :: Text
+  , loKey     :: Maybe Text   -- ^ AUTH-8: none (and no agent named) is a person signing in through the browser
   , loAs      :: Maybe Text
   , loScope   :: [Text]
   , loTtl     :: Maybe Integer
@@ -125,13 +126,13 @@ data LoginOpts = LoginOpts
 loginInfo :: ParserInfo LoginOpts
 loginInfo = info (p <**> helper)
   ( fullDesc
- <> header "synapse _login - log in from a key; later calls to this backend carry the session by themselves"
- <> progDesc "Proves the key (a plexus-key proof at the upgrade), asks session.login, and keeps the session (keychain, else ~/.plexus/sessions/HOST_PORT/AGENT.json). The agent becomes this backend's default. Global options (-H, -P) go before _login."
+ <> header "synapse _login - sign in; later calls to this backend carry the session by themselves"
+ <> progDesc "A person (no --key, no --as): opens the browser to sign in and waits on a loopback port (127.0.0.1) for it to come back (auth.login's browser flow; 5 minutes). An agent (--key and/or --as): proves the key (a plexus-key proof at the upgrade) and asks auth.login for a session (session.login on a hub without auth). Either way the session is kept (keychain, else ~/.plexus/sessions/HOST_PORT/AGENT.json; a person's under the name 'me') and becomes this backend's default. Global options (-H, -P) go before _login."
   )
   where
     p = LoginOpts
       <$> (T.pack <$> strArgument (metavar "BACKEND" <> help "The hub's name, e.g. menger"))
-      <*> (T.pack <$> strOption (long "key" <> short 'k' <> metavar "NAME" <> value "default" <> showDefault <> help "The key to prove"))
+      <*> optional (T.pack <$> strOption (long "key" <> short 'k' <> metavar "NAME" <> help "The key to prove (an agent; 'default' when only --as is given)"))
       <*> optional (T.pack <$> strOption (long "as" <> metavar "AGENT" <> help "The agent id to log in as (else SYNAPSE_AS)"))
       <*> (splitScopes <$> many (T.pack <$> strOption (long "scope" <> metavar "ROLE@SCOPE" <> help "The session's ceiling, e.g. editor@MENGER-12 (repeat, or commas); default: the key's own grants")))
       <*> optional (option auto (long "ttl" <> metavar "SECS" <> help "Session lifetime in seconds (the server's default 12 h, at most 24 h)"))

@@ -67,6 +67,7 @@ baseMethod = MethodSchema
   , methodDeprecation    = Nothing
   , methodParamSchemas   = Nothing
   , methodRole           = MethodRoleRpc
+  , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False
   }
 
 deprecatedMethod :: MethodSchema
@@ -91,6 +92,7 @@ basePlugin = PluginSchema
   , psMethods         = [deprecatedMethod, plainMethod]
   , psChildren        = Nothing
   , psDeprecation     = Nothing
+  , psRoles = Nothing, psView = Nothing
   }
 
 deprecatedPlugin :: PluginSchema

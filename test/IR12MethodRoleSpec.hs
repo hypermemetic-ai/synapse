@@ -30,8 +30,12 @@ import Plexus.Schema.Recursive
   , MethodSchema(..)
   )
 
+import qualified Data.Map.Strict as Map
+import Synapse.IR.Builder (extractMethodDef)
 import Synapse.IR.Types
-  ( MethodDef(..)
+  ( IR(..)
+  , emptyIR
+  , MethodDef(..)
   , TypeRef(..)
   )
 
@@ -49,6 +53,9 @@ baseMethodDef = MethodDef
   , mdBidirResponseType   = Nothing
   , mdBidirResponseSchema = Nothing
   , mdRole                = MethodRoleRpc
+  , mdGrant               = Nothing
+  , mdTarget              = Nothing
+  , mdLongDescription     = Nothing
   }
 
 -- | Build a JSON @MethodSchema@ with an optional @role@ key. Passing
@@ -168,3 +175,41 @@ main = hspec $ do
       case eitherDecode (encode preIrMethodDefJson) :: Either String MethodDef of
         Left e -> expectationFailure $ "decode failed: " <> e
         Right md -> mdRole md `shouldBe` MethodRoleRpc
+
+  -- AUTH-9: what a method requires reaches hub-codegen through the IR.
+  describe "AUTH-9: grant, target, long_description and roles in the IR" $ do
+    let schemaWith extra = object $
+          [ "name" .= ("set_status" :: String)
+          , "description" .= ("Change a ticket's status" :: String)
+          , "hash" .= ("h" :: String)
+          ] <> extra
+        lifted j = case Aeson.fromJSON j :: Aeson.Result MethodSchema of
+          Aeson.Error e -> error e
+          Aeson.Success ms -> snd (extractMethodDef "tickets" "tickets" ms)
+        keysOf v = case v of
+          Object o -> o
+          _ -> KM.empty
+
+    it "lifts the schema's grant, target and long_description onto the method" $ do
+      let md = lifted $ schemaWith
+            [ "grant" .= ("tickets.set_status" :: String)
+            , "target" .= ("id" :: String)
+            , "long_description" .= ("Moves it through Pending → Ready." :: String)
+            ]
+          o = keysOf (Aeson.toJSON md)
+      (mdGrant md, mdTarget md) `shouldBe` (Just "tickets.set_status", Just "id")
+      KM.lookup "mdGrant" o `shouldBe` Just (String "tickets.set_status")
+      KM.lookup "mdTarget" o `shouldBe` Just (String "id")
+      KM.lookup "mdLongDescription" o `shouldBe` Just (String "Moves it through Pending → Ready.")
+      fmap mdTarget (eitherDecode (encode md)) `shouldBe` Right (Just "id")
+
+    it "a pre-AUTH schema's method carries none of the keys" $ do
+      let o = keysOf (Aeson.toJSON (lifted (schemaWith [])))
+      map (`KM.member` o) ["mdGrant", "mdTarget", "mdLongDescription"] `shouldBe` [False, False, False]
+
+    it "irPluginRoles is emitted only when some plugin has roles" $ do
+      KM.member "irPluginRoles" (keysOf (Aeson.toJSON emptyIR)) `shouldBe` False
+      let roles = Map.singleton "tickets" (Map.singleton "editor" ["tickets.set_status"])
+          withRoles = emptyIR { irPluginRoles = Just roles }
+      KM.lookup "irPluginRoles" (keysOf (Aeson.toJSON withRoles)) `shouldBe` Just (Aeson.toJSON roles)
+      fmap irPluginRoles (eitherDecode (encode withRoles)) `shouldBe` Right (Just roles)

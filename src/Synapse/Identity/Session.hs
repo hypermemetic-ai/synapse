@@ -23,6 +23,11 @@ module Synapse.Identity.Session
   , loginWithKey
   , logoutWithToken
 
+    -- * A person (AUTH-8: the loopback flow)
+  , loginPerson
+  , whoamiWith
+  , whoamiM
+
     -- * The session a call carries
   , ActiveSession(..)
   , sessionFor
@@ -40,6 +45,9 @@ module Synapse.Identity.Session
   , takeSessionEnded
   , notePrinted
   , printedAny
+  , noteRefused
+  , wasRefused
+  , currentCeiling
   ) where
 
 import Control.Monad (when)
@@ -57,11 +65,16 @@ import qualified Data.Vector as V
 import System.IO (stderr)
 import System.IO.Unsafe (unsafePerformIO)
 
+import Control.Monad.Except (catchError)
+
+
+import Synapse.Auth (SessionGrant(..), Whoami, isMissingAuth, parseSessionGrant, parseWhoami)
+import qualified Synapse.Auth.Loopback as Loopback
 import Synapse.Identity.Proof
 import Synapse.Identity.Store
 import qualified Synapse.Log as Log
 import Synapse.Monad
-import Synapse.Schema.Types (HubStreamItem, pattern HubData, pattern HubError)
+import Synapse.Schema.Types (HubStreamItem, pattern HubData, pattern HubError, pattern HubGuidance)
 import Synapse.Transport (invoke)
 
 -- ============================================================================
@@ -81,21 +94,45 @@ nowSecs :: IO Integer
 nowSecs = round <$> getPOSIXTime
 
 -- | Log in to the hub @backend@ at @HOST:PORT@ as @agent@, proving the key:
--- a connection opened with the proof, and @session.login { ttl_secs?,
--- scope? }@ called on it.
+-- a connection opened with the proof, and on it AUTH-5's @auth.login
+-- {flow: {session: {ttl_secs?, ceiling?}}}@ — or, on a hub with no @auth@
+-- activation (every hub before AUTH), IDENTITY-42's @session.login {ttl_secs?,
+-- scope?}@ on a second connection with a fresh proof (a proof works once).
 loginWithKey :: Log.Logger -> Text -> Int -> Text -> Seed -> Text -> [Text] -> Maybe Integer -> IO (Either Text LoginResult)
 loginWithKey logger host port backend seed agent scope ttl
   | not (validAgent agent) = pure (Left ("an agent id is 1-64 of A-Z a-z 0-9 . _ - (not '" <> agent <> "')"))
   | otherwise = do
+      viaAuth <- do
+        proof <- freshProof
+        let flow = object $
+              maybe [] (\t -> ["ttl_secs" .= t]) ttl
+              <> (if null scope then [] else ["ceiling" .= scope])
+        items <- call logger host port backend (Just proof) "auth" "login" (object ["flow" .= object ["session" .= flow]])
+        pure (items >>= grantItem "auth.login")
+      case viaAuth of
+        Left e | isMissingAuth e -> do
+          proof <- freshProof
+          let params = object $
+                maybe [] (\t -> ["ttl_secs" .= t]) ttl
+                <> (if null scope then [] else ["scope" .= scope])
+          items <- call logger host port backend (Just proof) "session" "login" params
+          pure (items >>= loginItem)
+        other -> pure other
+  where
+    freshProof = do
       nonce <- newNonce
       ts <- nowSecs
-      let proof = buildProof seed (wsAudience host port) agent nonce ts
-          params = object $
-            maybe [] (\t -> ["ttl_secs" .= t]) ttl
-            <> (if null scope then [] else ["scope" .= scope])
-      items <- call logger host port backend proof "login" params
-      pure (items >>= loginItem)
-  where
+      pure (buildProof seed (wsAudience host port) agent nonce ts)
+    grantItem what items =
+      case [g | HubData _ _ _ v <- items, Just g <- [parseSessionGrant v]] of
+        (g : _) -> Right LoginResult
+          { lrToken = sgToken g
+          , lrPrincipal = sgPrincipal g
+          , lrAgent = maybe agent id (sgAgent g)
+          , lrExpiresAt = sgExpiresAt g
+          , lrScope = sgCeiling g
+          }
+        [] -> Left (answerError items (what <> " answered no session"))
     loginItem items =
       case [o | HubData _ _ _ (Object o) <- items, KM.lookup "type" o == Just (String "login")] of
         (o : _) | Just (String tok) <- KM.lookup "token" o -> Right LoginResult
@@ -109,24 +146,104 @@ loginWithKey logger host port backend seed agent scope ttl
           }
         _ -> Left (answerError items "session.login answered no login")
 
--- | @session.logout@ on a connection carrying this token.
+-- | AUTH-8: a person signs in through the browser (the loopback flow,
+-- AUTH-1 Q3). synapse listens on 127.0.0.1 (a port the OS picks), asks
+-- @auth.login {flow: {browser: {redirect: http://127.0.0.1:PORT/cb}}}@ for
+-- @{type: login_url, url, state}@, opens the URL (and says it, for a
+-- browser elsewhere), waits up to @secs@ for @GET /cb?code=…&state=…@ with
+-- that state, and trades the code: @auth.login {flow: {code: {code,
+-- state}}}@ → the session. Every call here is anonymous.
+loginPerson :: Log.Logger -> Text -> Int -> Text -> Int -> (Text -> IO ()) -> IO (Either Text SessionGrant)
+loginPerson logger host port backend secs say =
+  Loopback.withLoopback $ \lb -> do
+    let redirect = Loopback.loopbackRedirect lb
+        browserFlow = object ["flow" .= object ["browser" .= object ["redirect" .= redirect]]]
+    first' <- call logger host port backend Nothing "auth" "login" browserFlow
+    case first' >>= loginUrl of
+      Left e
+        | isMissingAuth e -> pure (Left (addressKey host port <> " has no auth activation, so no browser sign-in"
+                                     <> " (an agent signs in with its key: _login " <> backend <> " --key NAME --as AGENT)"))
+        | otherwise -> pure (Left e)
+      Right (url, state) -> do
+        opened <- Loopback.openBrowser url
+        say $ (if opened then "opening your browser to sign in; if it does not open, visit:"
+                         else "to sign in, visit:")
+        say ("  " <> url)
+        say ("waiting for the browser on " <> redirect <> " (" <> Loopback.durationText secs <> ") \x2026")
+        back <- Loopback.awaitCallback lb state secs
+        case back of
+          Left why -> pure (Left why)
+          Right code -> do
+            let codeFlow = object ["flow" .= object ["code" .= object ["code" .= code, "state" .= state]]]
+            done <- call logger host port backend Nothing "auth" "login" codeFlow
+            pure $ done >>= \items ->
+              case [g | HubData _ _ _ v <- items, Just g <- [parseSessionGrant v]] of
+                (g : _) -> Right g
+                [] -> Left (answerError items "auth.login answered no session for the code")
+  where
+    loginUrl items =
+      case [o | HubData _ _ _ (Object o) <- items, KM.lookup "type" o `elem` [Just (String "login_url"), Just (String "url")]] of
+        (o : _) | Just (String u) <- KM.lookup "url" o, not (T.null u) ->
+          case KM.lookup "state" o of
+            Just (String st) | not (T.null st) -> Right (u, st)
+            _ -> Left "auth.login gave a sign-in URL with no state; refused (the state is what binds the browser's answer to this sign-in)"
+        _ -> Left (answerError items "auth.login answered no sign-in URL")
+
+-- | AUTH-8: who a token is — @auth.whoami@, else (a hub without the auth
+-- activation) @session.whoami@; Nothing when neither says.
+whoamiWith :: Log.Logger -> Text -> Int -> Text -> Text -> IO (Maybe Whoami)
+whoamiWith logger host port backend token = do
+  a <- call logger host port backend (Just token) "auth" "whoami" (object [])
+  case a >>= firstWhoami of
+    Right w -> pure (Just w)
+    Left _ -> do
+      b <- call logger host port backend (Just token) "session" "whoami" (object [])
+      pure (either (const Nothing) Just (b >>= firstWhoami))
+
+-- | 'whoamiWith' on the call's own connection (its credential, whatever it
+-- is): @auth.whoami@, else @session.whoami@, else Nothing. Never fails.
+whoamiM :: SynapseM (Maybe Whoami)
+whoamiM = do
+  a <- (Just <$> invoke ["auth"] "whoami" (object [])) `catchError` \_ -> pure Nothing
+  case a >>= either (const Nothing) Just . firstWhoami of
+    Just w -> pure (Just w)
+    Nothing -> do
+      b <- (Just <$> invoke ["session"] "whoami" (object [])) `catchError` \_ -> pure Nothing
+      pure (b >>= either (const Nothing) Just . firstWhoami)
+
+firstWhoami :: [HubStreamItem] -> Either Text Whoami
+firstWhoami items = case [w | HubData _ _ _ v <- items, Just w <- [parseWhoami v]] of
+  (w : _) -> Right w
+  [] -> Left (answerError items "no whoami")
+
+-- | End the session this token is: @auth.logout@ (AUTH-5), else — a hub
+-- with no auth activation — @session.logout@.
 logoutWithToken :: Log.Logger -> Text -> Int -> Text -> Text -> IO (Either Text ())
 logoutWithToken logger host port backend token = do
-  items <- call logger host port backend token "logout" (object [])
-  pure $ items >>= \is ->
-    if any isLoggedOut is then Right () else Left (answerError is "session.logout answered nothing")
+  a <- call logger host port backend (Just token) "auth" "logout" (object [])
+  case a >>= ended "auth.logout" of
+    Left e | isMissingAuth e -> do
+      items <- call logger host port backend (Just token) "session" "logout" (object [])
+      pure (items >>= ended "session.logout")
+    other -> pure other
   where
+    -- an answer with no error is a logout; one that says so, certainly
+    ended what is
+      | any isLoggedOut is = Right ()
+      | null [() | HubError{} <- is] && null (errorEvents is) && not (null [() | HubData{} <- is]) = Right ()
+      | otherwise = Left (answerError is (what <> " answered nothing"))
     isLoggedOut = \case
-      HubData _ _ _ (Object o) -> KM.lookup "type" o == Just (String "logged_out")
+      HubData _ _ _ (Object o) -> KM.lookup "type" o `elem` [Just (String "logged_out"), Just (String "logout")]
       _ -> False
+    errorEvents is = [() | HubData _ _ _ (Object o) <- is, KM.lookup "type" o == Just (String "error")]
 
--- | One @session.\<method\>@ call on a fresh connection presenting @cred@ as
--- @Authorization: Bearer@.
-call :: Log.Logger -> Text -> Int -> Text -> Text -> Text -> Value -> IO (Either Text [HubStreamItem])
-call logger host port backend cred method params = do
+-- | One @\<ns\>.\<method\>@ call on a fresh connection presenting @cred@
+-- as @Authorization: Bearer@ (none: anonymous).
+call :: Log.Logger -> Text -> Int -> Text -> Maybe Text -> Text -> Text -> Value -> IO (Either Text [HubStreamItem])
+call logger host port backend cred ns method params = do
   env0 <- initEnv host port backend logger Nothing
-  let env = withRequestContext [] [bearer cred] env0
-  r <- runSynapseM env (invoke ["session"] method params)
+  let env = withRequestContext [] (maybe [] (\c -> [bearer c]) cred) env0
+  r <- runSynapseM env (invoke [ns] method params)
   pure $ case r of
     Right items -> Right items
     Left (TransportErrorContext ctx)
@@ -145,7 +262,8 @@ bearer cred = ("Authorization", "Bearer " <> cred)
 answerError :: [HubStreamItem] -> Text -> Text
 answerError items fallback =
   case [m | HubData _ _ _ (Object o) <- items, KM.lookup "type" o == Just (String "error"), Just (String m) <- [KM.lookup "message" o]]
-       <> [e | HubError _ _ e _ <- items] of
+       <> [e | HubError _ _ e _ <- items]
+       <> [T.pack (show g) | HubGuidance _ _ g _ _ _ <- items] of
     (m : _) -> m
     [] -> fallback
 
@@ -221,7 +339,8 @@ canReattest host port = do
   s <- Map.lookup (host, port) <$> readIORef memo
   done <- elem (host, port) <$> readIORef reattested
   pure $ case s of
-    Just (Just ActiveSession{asRec = Just _}) -> not done
+    -- AUTH-8: a person's session (no key) is made again only by signing in
+    Just (Just ActiveSession{asRec = Just r}) -> not done && not (T.null (srKey r))
     _ -> False
 
 -- | The server refused the session in use at this address: log in again
@@ -242,6 +361,12 @@ reattest logger st host port = do
 reattestWith :: Log.Logger -> StoreEnv -> ActiveSession -> Text -> IO (Maybe ActiveSession)
 reattestWith logger st active why = case asRec active of
   Nothing -> pure (Just active)
+  Just rec | T.null (srKey rec) -> do
+    -- AUTH-8: a person's session: there is no key to make it again from
+    TIO.hPutStrLn stderr $ "synapse: the session for " <> srAgent rec <> " at "
+      <> addressKey (asHost active) (asPort active) <> " " <> why
+      <> "; sign in again: synapse -P " <> T.pack (show (asPort active)) <> " _login " <> srBackend rec
+    pure (Just active)
   Just rec -> do
     let host = asHost active
         port = asPort active
@@ -321,3 +446,24 @@ notePrinted = writeIORef printedRef True
 
 printedAny :: IO Bool
 printedAny = readIORef printedRef
+
+-- | AUTH-8: a refusal was shown (the call exits non-zero).
+{-# NOINLINE refusedRef #-}
+refusedRef :: IORef Bool
+refusedRef = unsafePerformIO (newIORef False)
+
+noteRefused :: IO ()
+noteRefused = writeIORef refusedRef True
+
+wasRefused :: IO Bool
+wasRefused = readIORef refusedRef
+
+-- | AUTH-8: the ceiling of the session this process carries, as asked at
+-- login (@editor\@MENGER-12@ each) — what a refusal that names none is
+-- said to be within. Empty when no stored session is carried.
+currentCeiling :: IO [Text]
+currentCeiling = do
+  m <- readIORef memo
+  pure $ case [srScope r | Just ActiveSession{asRec = Just r} <- Map.elems m] of
+    (c : _) -> c
+    [] -> []

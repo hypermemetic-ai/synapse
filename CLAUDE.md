@@ -144,6 +144,34 @@ synapse -P 4455 _logout menger [--as worker-3]
   upgrade, or "you have signed out" → log in again from the key, once, with a
   one-line notice on stderr.
 
+## Each caller its own server (AUTH-8)
+
+On a hub with the AUTH gate (AUTH-1), `_info` says the caller's `view`:
+
+- **anonymous** — `synapse menger` shows only the door ("Sign in to see what
+  you can do here.", `auth`'s login / signup / providers, and the two `_login`
+  lines); any other path shows it too and exits 77.
+- **caller** — help says `you are NAME (PRINCIPAL) · ROLE on SCOPES, within
+  CEILING` under the description (from `auth.whoami`, else `session.whoami`),
+  and each method line its `grant` and `held_on` in two aligned columns.
+- A refusal (`error_kind: forbidden`) prints `refused: needs GRANT on SCOPE`,
+  the roles with it and where you hold it (within the session's ceiling), and
+  exits 77.
+- A person signs in with `synapse -P PORT _login BACKEND` (no `--key`, no
+  `--as`): synapse listens on `127.0.0.1:<random>`, asks `auth.login {flow:
+  {browser: {redirect}}}`, opens the URL (`SYNAPSE_NO_BROWSER=1` only prints
+  it), waits 5 minutes for `/cb?code&state` with the state it was given, trades
+  the code (`auth.login {flow: {code}}`), and keeps the session as agent `me`
+  (no key: when it ends, sign in again). An agent's `_login` asks `auth.login
+  {flow: {session: {ttl_secs, ceiling}}}`, and `session.login` on a hub
+  without auth.
+
+A hub without the gate (today's menger) answers none of these fields and
+renders exactly as before. The wire types are plexus-protocol's `Plexus.Auth`
+and the new optional fields on `MethodSchema` / `PluginSchema`; the renders are
+`Synapse.Auth`; `test/AuthSpec.hs` pins them and runs the flows against
+`test/MockHub.hs` (`SYNAPSE_MOCK_HUB=today|anonymous|caller` serves it by hand).
+
 ## Notes & `_note` (SYNAPSE-11)
 
 Notes are dated, untitled thoughts kept in one place — `$SYNAPSE_NOTES_DIR`,

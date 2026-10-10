@@ -349,6 +349,9 @@ methodWith params = MethodDef
   , mdBidirResponseType = Nothing
   , mdBidirResponseSchema = Nothing
   , mdRole = MethodRoleRpc
+  , mdGrant = Nothing
+  , mdTarget = Nothing
+  , mdLongDescription = Nothing
   }
 
 -- | A reference to a type in 'listIR'

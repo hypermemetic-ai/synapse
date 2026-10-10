@@ -23,6 +23,8 @@ module Synapse.Monad
   , initEnv
   , defaultEnv
   , withRequestContext
+  , withViewKey
+  , viewQualified
 
     -- * Errors
   , SynapseError(..)
@@ -76,6 +78,7 @@ data SynapseEnv = SynapseEnv
   , seToken   :: !(Maybe Text)                -- ^ JWT sent as Cookie: access_token=<jwt>
   , seCookies :: ![(Text, Text)]              -- ^ SAFE-S04/REQ-5: extra cookies for WS upgrade
   , seHeaders :: ![(Text, Text)]              -- ^ SAFE-S04/REQ-5: extra headers for WS upgrade
+  , seViewKey :: !(Maybe Text)                -- ^ AUTH-8: the caller's view (its hash, else its kind); qualifies every cache key
   }
 
 -- | Errors that can occur during Synapse operations
@@ -157,6 +160,7 @@ initEnv host port backend logger token = do
     , seToken   = token
     , seCookies = []
     , seHeaders = []
+    , seViewKey = Nothing
     }
 
 -- | Augment a SynapseEnv with extra cookies and headers for the WS upgrade.
@@ -224,14 +228,30 @@ withFreshVisited action = do
 lookupCache :: PluginHash -> SynapseM (Maybe PluginSchema)
 lookupCache hash = do
   cacheRef <- asks seCache
+  key <- asks (\e -> viewQualified (seViewKey e) hash)
   cache <- liftIO $ readIORef cacheRef
-  pure $ HM.lookup hash cache
+  pure $ HM.lookup key cache
 
 -- | Insert a schema into the cache
 insertCache :: PluginHash -> PluginSchema -> SynapseM ()
 insertCache hash schema = do
   cacheRef <- asks seCache
-  liftIO $ modifyIORef' cacheRef (HM.insert hash schema)
+  key <- asks (\e -> viewQualified (seViewKey e) hash)
+  liftIO $ modifyIORef' cacheRef (HM.insert key schema)
+
+-- | AUTH-8: a cache key under the caller's view — @VIEW/HASH@, or the hash
+-- alone on a hub with no view (as before AUTH). Two callers' views of one
+-- hub never share an entry, even where the hub gave a schema one hash in
+-- both.
+viewQualified :: Maybe Text -> Text -> Text
+viewQualified Nothing hash = hash
+viewQualified (Just v) hash
+  | T.null v = hash
+  | otherwise = v <> "/" <> hash
+
+-- | AUTH-8: the view this env's calls see (from @_info@).
+withViewKey :: Maybe Text -> SynapseEnv -> SynapseEnv
+withViewKey v env = env { seViewKey = v }
 
 -- ============================================================================
 -- Logging and Config
