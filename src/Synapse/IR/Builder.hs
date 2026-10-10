@@ -123,11 +123,14 @@ irAlgebra (PluginF schema path childIRs) = do
       childHashes = fromMaybe Map.empty (irPluginHashes childIR)
       allHashes = Map.insert namespace hashInfo childHashes
 
-  -- REQ-5: capture per-plugin PlexusRequest schema (psRequest from wire schema)
-  let childRequests = fromMaybe Map.empty (irPluginRequests childIR)
-      allRequests = case psRequest schema of
-        Just reqV -> Map.insert namespace reqV childRequests
-        Nothing   -> childRequests
+  -- REQ-5: capture per-plugin PlexusRequest schema (psRequest from wire schema).
+  -- HEADERS-1 stub: plexus-protocol's PluginSchema does not yet expose
+  -- psRequest (cross-repo patch pending). Treat as always-Nothing so the
+  -- synapse binary builds; REQ-5 rendering becomes a no-op until the field
+  -- lands in plexus-protocol.
+  let _ = schema  -- suppress unused-binding warning when REQ-5 is stubbed
+      childRequests = fromMaybe Map.empty (irPluginRequests childIR)
+      allRequests = childRequests
 
   pure $ IR
     { irVersion = irVersion emptyIR  -- Use version from emptyIR

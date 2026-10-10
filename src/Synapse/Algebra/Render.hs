@@ -103,11 +103,9 @@ renderSchemaWith _style PluginSchema{..}
       ]
 
     -- REQ-5: render the activation's PlexusRequest schema.
-    -- Walks the JSON Schema's properties and emits a "Request requirements:"
-    -- block describing where each field comes from (cookie/header/query/derived).
-    requestDoc = case psRequest of
-      Nothing  -> emptyDoc
-      Just req -> renderRequestSchemaDoc req
+    -- HEADERS-1 stub: plexus-protocol's PluginSchema doesn't yet expose
+    -- psRequest. No-op render until the field lands in plexus-protocol.
+    requestDoc = emptyDoc
 
     renderRequestSchemaDoc :: Aeson.Value -> Doc ann
     renderRequestSchemaDoc schemaVal =
