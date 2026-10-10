@@ -4,6 +4,10 @@ module Synapse.Algebra.Render
     renderSchema
   , renderSchemaWith
   , renderSchemaFor
+  , renderListing
+  , Listing(..)
+  , summarize
+  , fitText
   , renderMethod
   , renderMethodFull
   , renderChild
@@ -27,10 +31,12 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Vector as V
 import Control.Applicative ((<|>))
-import Data.List (intersperse, sortOn)
+import Data.Char (toLower)
+import Data.List (sortOn)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 
 import Synapse.Schema.Types
-import Plexus.Schema.Recursive (DeprecationInfo(..), ParamSchema(..), hasAuthColumns)
+import Plexus.Schema.Recursive (DeprecationInfo(..), ParamSchema(..))
 
 -- | Rendering style configuration
 data RenderStyle = RenderStyle
@@ -65,26 +71,43 @@ renderSchemaWith :: RenderStyle -> PluginSchema -> Text
 renderSchemaWith style = renderSchemaFor style Nothing
 
 -- | AUTH-8: render for a caller — the header line saying who it is
--- (@you are … · editor on MENGER@) under the description, when given; and,
--- when the schema's methods carry their grants (AUTH-3) or where they are
--- held (AUTH-4), those as two aligned columns on each method's line. A
--- schema with neither renders exactly as 'renderSchemaWith' always has.
+-- (@you are … · editor on MENGER@) under the description, when given.
+-- SYNAPSE-13: the listing as 'renderListing' lays it out, reached by
+-- @synapse <namespace>@.
 renderSchemaFor :: RenderStyle -> Maybe Text -> PluginSchema -> Text
-renderSchemaFor style callerLine ps@PluginSchema{..} = T.unlines (dropTrailingBlanks body)
+renderSchemaFor style callerLine ps =
+  renderListing style (Listing ("synapse " <> psNamespace ps) callerLine) ps
+
+-- | SYNAPSE-13: what a listing needs beside the schema.
+data Listing = Listing
+  { lsInvoke :: Text        -- ^ the command line that reaches this plugin (@synapse -P 4455 menger tickets@)
+  , lsCaller :: Maybe Text  -- ^ AUTH-8: who the caller is, in a caller's view
+  }
+  deriving stock (Show, Eq)
+
+-- | SYNAPSE-13: a plugin's listing in gh's shape — the name, version and
+-- description; a usage line; then one line per activation and per method
+-- (its name and summary, the first sentence of its description), the
+-- methods in their groups (the schema's @group@, in the order they first
+-- appear; alphabetical within each; one METHODS section when there are
+-- none), and how to see a method's options. In a caller's view (AUTH-8)
+-- who the caller is sits under the description, and each method's line
+-- ends with its grant and where it is held, in two aligned columns.
+renderListing :: RenderStyle -> Listing -> PluginSchema -> Text
+renderListing style Listing{..} PluginSchema{..} = T.unlines (dropTrailingBlanks body)
   where
     width = rsWidth style
-    authCols = hasAuthColumns ps
+    authCols = isJust lsCaller || any (isJust . methodHeldOn) psMethods
 
-    -- SYNAPSE-12: one blank line between blocks, never more; the name and
-    -- version, the description under it, then each section under a header.
     body = concat
       [ [heading]
       , deprecationNotice
       , map ("  " <>) (wrap (width - 2) psDescription)
-      , maybe [] (\l -> ["  " <> l]) callerLine
-      , requestBlock
-      , section "activations" False childBlocks
-      , section "methods" True methodBlocks
+      , maybe [] (\l -> ["  " <> l]) lsCaller
+      , section "USAGE" (map ("  " <>) usage)
+      , section "ACTIVATIONS" (map childRow children)
+      , concat [ section title (concatMap methodRows ms) | (title, ms) <- methodSections ]
+      , if null footer then [] else "" : footer
       ]
 
     heading = case psDeprecation of
@@ -95,113 +118,117 @@ renderSchemaFor style callerLine ps@PluginSchema{..} = T.unlines (dropTrailingBl
       Just di -> ["  " <> formatDeprecationLine di]
       Nothing -> []
 
-    -- REQ-5: the activation's PlexusRequest schema.
-    -- HEADERS-1 stub: plexus-protocol's PluginSchema doesn't yet expose
-    -- psRequest. Nothing to render until the field lands in plexus-protocol;
-    -- the renderer it had ("Request requirements:", the auth notice) is in
-    -- this file's history before SYNAPSE-12.
-    requestBlock = []
-
-    section _ _ [] = []
-    section title spaced blocks =
-      "" : title : concat (if spaced then intersperse [""] blocks else blocks)
+    section _ [] = []
+    section title rows = "" : title : rows
 
     children = maybe [] (sortOn csNamespace) psChildren
-    methods = sortOn methodName psMethods
 
-    -- The name column: wide enough for the longest name (capped), shared by
-    -- both sections so their descriptions start in one column.
-    nameWidth = min 18 $ maximum $ 8 : map T.length (map csNamespace children ++ map decoratedName methods)
-    descCol = 2 + nameWidth + 2
+    usage = concat
+      [ [lsInvoke <> " <activation> <method> [flags]" | not (null children)]
+      , [lsInvoke <> " <method> [flags]" | not (null psMethods)]
+      ]
+
+    footer = concat
+      [ ["Run '" <> lsInvoke <> " <activation>' for its methods." | not (null children)]
+      , ["Run '" <> lsInvoke <> " <method> --help' for its options." | not (null psMethods)]
+      ]
+
+    -- The groups in the order they first appear, each alphabetical; the
+    -- ungrouped last (as OTHER), or all of them as METHODS when no method
+    -- says a group.
+    methodSections =
+      let groups = dedupe [g | Just g <- map methodGroup psMethods]
+          inGroup g = sortOn methodName [m | m <- psMethods, methodGroup m == Just g]
+          ungrouped = sortOn methodName [m | m <- psMethods, isNothing (methodGroup m)]
+      in if null groups
+           then [("METHODS", ungrouped) | not (null ungrouped)]
+           else [(T.toUpper g, inGroup g) | g <- groups]
+                  ++ [("OTHER", ungrouped) | not (null ungrouped)]
+    dedupe = foldl (\acc x -> if x `elem` acc then acc else acc ++ [x]) []
 
     decoratedName m = case methodDeprecation m of
       Just _  -> deprecationMarker <> " " <> methodName m
       Nothing -> methodName m
 
-    childBlocks = [ entry (csNamespace c) (csDescription c) | c <- children ]
+    -- The name column: wide enough for the longest name (capped), shared by
+    -- every section so the summaries start in one column.
+    nameW = min 24 $ maximum $ 8 : map T.length (map csNamespace children ++ map decoratedName psMethods)
+    descCol = 2 + nameW + 2
 
-    methodBlocks =
-      [ methodEntry m
-          ++ maybe [] (\di -> [T.replicate descCol " " <> formatDeprecationLine di]) (methodDeprecation m)
-          ++ paramLines (methodParams m)
-      | m <- methods ]
-
-    methodEntry m
-      | authCols = entryCols (decoratedName m) (methodDescription m) (grantOf m) (heldOf m)
-      | otherwise = entry (decoratedName m) (methodDescription m)
-
-    -- AUTH-8: the grant and where it is held, each its own column after
-    -- the description's (which wraps narrower to make room), on the
-    -- method's first line.
-    grantOf m = maybe "" id (methodGrant m)
+    -- AUTH-8: the grant and where it is held, after the summary.
+    grantOf m = fromMaybe "" (methodGrant m)
     heldOf m = maybe "" (T.intercalate ", ") (methodHeldOn m)
-    grantW = maximum (0 : map (T.length . grantOf) methods)
-    descW = max 20 (width - descCol - 2 - grantW - 2 - maximum (0 : map (T.length . heldOf) methods))
-    entryCols name desc grant held =
-      let (d0, drest) = case wrap descW desc of { [] -> ("", []); (x : xs) -> (x, xs) }
-          cols = T.stripEnd (T.justifyLeft grantW ' ' grant <> "  " <> held)
-          first' = T.justifyLeft descW ' ' d0 <> "  " <> cols
-      in hang descCol ("  " <> name) (first' : drest)
+    grantW = maximum (0 : map (T.length . grantOf) psMethods)
+    heldW = maximum (0 : map (T.length . heldOf) psMethods)
+    summaryW
+      | authCols = max 20 (width - descCol - 2 - grantW - 2 - heldW)
+      | otherwise = width - descCol
 
-    -- A name and its description, the description wrapped in its column;
-    -- a name too long for the column puts the description under it.
-    entry name desc =
-      hang descCol ("  " <> name) (wrap (width - descCol) desc)
+    row name summary =
+      T.stripEnd ("  " <> T.justifyLeft nameW ' ' name <> "  " <> summary)
 
-    -- Parameters, under the method's name: required first, then
-    -- optional (in [brackets]), each a flag column and a wrapped description.
-    paramLines Nothing = []
-    paramLines (Just (Object o)) = case KM.lookup "properties" o of
-      Just (Object props) ->
-        let reqList = case KM.lookup "required" o of
-              Just (Array arr) -> [t | String t <- V.toList arr]
-              _ -> []
-            sorted = sortOn (\(k, _) -> (K.toText k `notElem` reqList, K.toText k)) (KM.toList props)
-            rows = map (paramRow reqList) sorted
-            flagW = min 26 (maximum (0 : [T.length f | (f, _) <- rows]))
-            ind = 6  -- under the method's name, a step in
-            col = ind + flagW + 2
-            render (flag, desc) =
-              hang col (T.replicate ind " " <> flag) (wrap (width - col) desc)
-        in concatMap render rows
-      _ -> []
-    paramLines _ = []
+    childRow c = row (csNamespace c) (fitText (width - descCol) (summarize (csDescription c)))
 
-    paramRow :: [Text] -> (K.Key, Value) -> (Text, Text)
-    paramRow required (name, propSchema) =
-      let nameText = K.toText name
-          isReq = nameText `elem` required
-          (typ, desc) = extractTypeDesc propSchema
-      in case extractParamSourceAnnot propSchema of
-           -- REQ-8: a param with x-plexus-source is server-extracted —
-           -- clients can't supply it, so no --flag form; its name and
-           -- where it comes from instead.
-           Just annotation -> (nameText, "\x2190 " <> annotation)
-           Nothing ->
-             let flag = "--" <> T.replace "_" "-" nameText <> " <" <> typ <> ">"
-             in (if isReq then flag else "[" <> flag <> "]", desc)
+    methodRows m =
+      let s = fitText summaryW (summarize (methodDescription m))
+          line
+            | authCols = row (decoratedName m)
+                (T.justifyLeft summaryW ' ' s <> "  " <> T.justifyLeft grantW ' ' (grantOf m) <> "  " <> heldOf m)
+            | otherwise = row (decoratedName m) s
+      in line : maybe [] (\di -> [T.replicate descCol " " <> formatDeprecationLine di]) (methodDeprecation m)
 
-    -- REQ-8: format an x-plexus-source annotation as a short inline label.
-    -- Returns 'Nothing' when the property has no annotation (i.e. it's an
-    -- ordinary RPC param). Shape recognition matches REQ-6's wire vocabulary.
-    extractParamSourceAnnot :: Value -> Maybe Text
-    extractParamSourceAnnot propSchema = do
-      Object po <- Just propSchema
-      Object src <- KM.lookup "x-plexus-source" po
-      let lookupStr k = case KM.lookup k src of
-            Just (String t) -> Just t
-            _               -> Nothing
-      from <- lookupStr "from"
-      case from of
-        "auth" -> case lookupStr "resolver" of
-          Just r  -> Just ("auth: " <> r)
-          Nothing -> Just "auth"
-        "cookie"  -> Just ("cookie" <> maybe "" (" " <>) (lookupStr "key"))
-        "header"  -> Just ("header" <> maybe "" (" " <>) (lookupStr "key"))
-        "query"   -> Just ("query" <> maybe "" (" " <>) (lookupStr "key"))
-        "derived" -> Just "server-derived"
-        "rpc"     -> Nothing
-        other     -> Just other
+-- | SYNAPSE-13: a description's summary — its first sentence: up to the
+-- first @. @, @; @ or @: @ outside brackets (an @e.g.@ or @i.e.@ is not an
+-- end), without the stop.
+summarize :: Text -> Text
+summarize desc = T.strip (go (0 :: Int) "" (T.unpack (T.strip desc)))
+  where
+    go _ acc [] = T.pack (reverse acc)
+    go d acc (c : rest)
+      | c `elem` ("([{" :: String) = go (d + 1) (c : acc) rest
+      | c `elem` (")]}" :: String) = go (max 0 (d - 1)) (c : acc) rest
+      | d == 0, c `elem` (".;:" :: String), startsSpace rest, not (abbrev c acc) = T.pack (reverse acc)
+      | otherwise = go d (c : acc) rest
+    startsSpace (' ' : _) = True
+    startsSpace _ = False
+    abbrev '.' acc = map toLower (reverse (takeWhile (/= ' ') acc)) `elem` ["e.g", "i.e", "etc", "vs", "cf"]
+    abbrev _ _ = False
+
+-- | SYNAPSE-13: a line's text in at most @w@ columns: whole when it fits;
+-- else without its parentheticals; else up to the last @ — @ that fits;
+-- else cut after a comma that keeps most of it, or at a word, ending in @…@.
+fitText :: Int -> Text -> Text
+fitText w t
+  | T.length t <= w = t
+  | T.length bare <= w = bare
+  | Just c <- lastFitting 0 " \x2014 " = c
+  | Just c <- lastFitting 1 ", ", T.length c * 10 >= w * 6 = c <> "\x2026"
+  | otherwise = wordCut (T.words bare)
+  where
+    bare = tidy (dropParens t)
+    -- the longest prefix ending before @sep@ that fits (with @room@ for an …)
+    lastFitting room sep =
+      case [p | (p, _) <- T.breakOnAll sep bare, T.length p + room <= w, not (T.null (T.strip p))] of
+        [] -> Nothing
+        ps -> Just (T.stripEnd (last ps))
+    wordCut ws = go "" ws
+      where
+        go acc [] = acc
+        go acc (x : xs)
+          | T.length (join acc x) + 1 <= w = go (join acc x) xs
+          | T.null acc = T.take (max 1 (w - 1)) x <> "\x2026"
+          | otherwise = T.dropWhileEnd (`elem` (",;:" :: String)) acc <> "\x2026"
+        join acc x = if T.null acc then x else acc <> " " <> x
+    -- words rejoined, and no space left before a comma or a stop
+    tidy x = foldr (\p -> T.replace (" " <> p) p) (T.unwords (T.words x)) [",", ".", ";", ":"]
+    dropParens = T.pack . strip (0 :: Int) . T.unpack
+      where
+        strip _ [] = []
+        strip d (c : rest)
+          | c == '(' = strip (d + 1) rest
+          | c == ')' && d > 0 = strip (d - 1) rest
+          | d > 0 = strip d rest
+          | otherwise = c : strip d rest
 
 -- | Words wrapped greedily to a width (at least 20); a word longer than the
 -- width stands on its own line.

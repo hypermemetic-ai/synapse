@@ -67,7 +67,7 @@ baseMethod = MethodSchema
   , methodDeprecation    = Nothing
   , methodParamSchemas   = Nothing
   , methodRole           = MethodRoleRpc
-  , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False
+  , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False, methodGroup = Nothing, methodExamples = []
   }
 
 deprecatedMethod :: MethodSchema
@@ -311,7 +311,9 @@ main = hspec $ do
   describe "renderMethodHelp (IR-14 per-parameter deprecation in Help.hs)" $ do
     it "prepends the warning marker on the deprecated parameter's flag line" $ do
       let (_, rendered) = helpFixture
-          ls            = T.lines rendered
+          -- SYNAPSE-13: the options, not the usage line or an example's
+          -- command line, which name the flag as it is typed
+          ls            = takeWhile (not . T.isPrefixOf "Example") (dropWhile (/= "Options:") (T.lines rendered))
           pathLines     = filter (T.isInfixOf "--path") ls
       pathLines `shouldSatisfy` (not . null)
       all (T.isInfixOf deprecationMarker) pathLines `shouldBe` True

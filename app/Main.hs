@@ -53,12 +53,12 @@ import qualified Control.Exception as E
 import qualified Synapse.Log as Log
 import qualified Katip
 import Synapse.Algebra.Navigate
-import Synapse.Algebra.Render (renderSchema, renderSchemaFor, defaultStyle)
+import Synapse.Algebra.Render (Listing(..), renderListing, defaultStyle)
 import Synapse.Auth (AnonPage(..), anonymousMethods, renderAnonymousPage, renderCallerHeader, renderRefusal, SessionGrant(..))
 import Plexus.Auth (BackendInfo(..), View(..), viewText)
 import Plexus.Types (itemRefusal)
 import Control.Monad.Except (catchError, throwError)
-import Synapse.CLI.Help (renderMethodHelp)
+import Synapse.CLI.Help (MethodPage(..), renderMethodPage)
 import Synapse.CLI.Parse (parseParams, parsePathAndParams, pairFlags)
 import qualified Synapse.CLI.Parse as Parse
 import Synapse.IR.Types (IR, irMethods, MethodDef)
@@ -859,7 +859,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                         else Just <$> navigate []
                       case rootSchema of
                         _ | anonymous -> showAnonymous info (rootSchema >>= viewSchema)
-                        Just (ViewPlugin schema _) -> showPluginHelp info schema
+                        Just (ViewPlugin schema _) -> showPluginHelp info [] schema
                         _ -> pure ()
                     else do
                       -- Navigate to target
@@ -875,7 +875,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                         _ -> throwError e
                       case view of
                         -- Landed on a plugin: show help
-                        ViewPlugin schema _ -> showPluginHelp info schema
+                        ViewPlugin schema _ -> showPluginHelp info pathSegs schema
 
                         -- Landed on a method: invoke or show help
                         ViewMethod method path -> do
@@ -923,9 +923,11 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                               if helpRequested
                                 then do
                                   case Map.lookup fullPath (irMethods ir) of
-                                    Just methodDef -> liftIO $ do
-                                      TIO.putStr $ renderMethodHelp ir methodDef
-                                      backendHelpFooter
+                                    Just methodDef -> do
+                                      page <- pageFor info pathSegs method
+                                      liftIO $ do
+                                        TIO.putStr $ renderMethodPage page ir methodDef
+                                        backendHelpFooter
                                     Nothing ->
                                       liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
                                 else do
@@ -974,9 +976,11 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                                       then do
                                         -- Render help from IR
                                         case Map.lookup fullPath (irMethods ir) of
-                                          Just methodDef -> liftIO $ do
-                                            TIO.putStr $ renderMethodHelp ir methodDef
-                                            backendHelpFooter
+                                          Just methodDef -> do
+                                            page <- pageFor info pathSegs method
+                                            liftIO $ do
+                                              TIO.putStr $ renderMethodPage page ir methodDef
+                                              backendHelpFooter
                                           Nothing ->
                                             -- Fallback: method not in IR, use basic info
                                             liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
@@ -997,25 +1001,48 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
     -- A plugin's help: as SYNAPSE-12 laid it out; in a caller's view (AUTH-4)
     -- with who the caller is under the description, and each method's
     -- grant and where it is held when the schema says them.
-    showPluginHelp :: Maybe BackendInfo -> PluginSchema -> SynapseM ()
-    showPluginHelp info schema = case info >>= infoView of
-      Just Caller -> do
-        who <- Session.whoamiM
-        liftIO $ do
-          TIO.putStr $ renderSchemaFor defaultStyle (renderCallerHeader <$> who) schema
-          backendHelpFooter
-      _ -> liftIO $ do
-        TIO.putStr $ renderSchema schema
-        backendHelpFooter
+    --
+    -- SYNAPSE-13: in gh's shape — a usage line, one line per method in its
+    -- group, and how to see a method's options.
+    showPluginHelp :: Maybe BackendInfo -> [Text] -> PluginSchema -> SynapseM ()
+    showPluginHelp info segs schema = do
+      backend <- asks seBackend
+      let invoke = T.unwords ([invokeProgram, backend] ++ segs)
+      who <- case info >>= infoView of
+        Just Caller -> Session.whoamiM
+        _ -> pure Nothing
+      let caller = case info >>= infoView of
+            Just Caller -> Just (maybe "you are signed in" renderCallerHeader who)
+            _ -> Nothing
+      liftIO $ do
+        TIO.putStr $ renderListing defaultStyle (Listing invoke caller) schema
+        synapseHelpLine
+
+    -- SYNAPSE-13: synapse and the global options that reach this backend,
+    -- as a command line shown in help (@synapse -P 4455@).
+    invokeProgram :: Text
+    invokeProgram = "synapse"
+      <> (if soHost /= defaultHost then " -H " <> soHost else "")
+      <> (if soPort /= defaultPort then " -P " <> T.pack (show soPort) else "")
+
+    -- SYNAPSE-13: what a method's page needs beside the IR — how it is
+    -- reached, its schema (examples, values, grant) and the caller's view.
+    pageFor :: Maybe BackendInfo -> [Text] -> MethodSchema -> SynapseM MethodPage
+    pageFor info segs method = do
+      backend <- asks seBackend
+      pure MethodPage
+        { mpProgram = invokeProgram
+        , mpTarget = T.unwords (backend : segs)
+        , mpSchema = Just method
+        , mpCaller = (info >>= infoView) == Just Caller
+        }
 
     -- AUTH-8: the page an anonymous caller sees: the door, and how to sign in.
     showAnonymous :: Maybe BackendInfo -> Maybe PluginSchema -> SynapseM ()
     showAnonymous info root = do
       backend <- asks seBackend
       authSchema <- (Just <$> fetchSchemaAt ["auth"]) `catchError` \_ -> pure Nothing
-      let invokePrefix = "synapse"
-            <> (if soHost /= defaultHost then " -H " <> soHost else "")
-            <> (if soPort /= defaultPort then " -P " <> T.pack (show soPort) else "")
+      let invokePrefix = invokeProgram
           page = AnonPage
             { apBackend = backend
             , apVersion = psVersion <$> root
@@ -1155,10 +1182,14 @@ readMaybe s = case reads s of
 -- | SYNAPSE-12: the one line under a backend's help that points at
 -- synapse's own (dim on a terminal).
 backendHelpFooter :: IO ()
-backendHelpFooter = do
+backendHelpFooter = TIO.putStrLn "" >> synapseHelpLine
+
+-- | SYNAPSE-13: the pointer to synapse's own help, dimmed on a terminal —
+-- under a listing's own "Run '…'" lines, with no blank between.
+synapseHelpLine :: IO ()
+synapseHelpLine = do
   tty <- hIsTerminalDevice stdout
-  let line = "synapse --help for synapse's own options"
-  TIO.putStrLn ""
+  let line = "Run 'synapse --help' for synapse's own options."
   TIO.putStrLn (if tty then "\ESC[2m" <> line <> "\ESC[0m" else line)
 
 -- | ASCII splash logo
