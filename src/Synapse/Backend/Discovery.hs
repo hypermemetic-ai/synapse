@@ -48,6 +48,7 @@ module Synapse.Backend.Discovery
     -- * Backend Discovery
   , getBackendAt
   , getBackendAtWith
+  , probeBackendAtWith
 
     -- * Health Checks
   , pingBackend
@@ -243,7 +244,14 @@ discoverBackendName = discoverBackendNameWith []
 
 -- | 'discoverBackendName' with upgrade headers.
 discoverBackendNameWith :: WS.Headers -> Text -> Int -> IO (Maybe Text)
-discoverBackendNameWith headers host port = do
+discoverBackendNameWith headers host port =
+  either (const Nothing) Just <$> probeBackendAtWith headers host port
+
+-- | IDENTITY-43: the _info probe, saying why when it fails — so a caller
+-- can tell the upgrade's 401 (its session ended) from a backend that is
+-- down.
+probeBackendAtWith :: WS.Headers -> Text -> Int -> IO (Either Text Text)
+probeBackendAtWith headers host port = do
   let cfg = SubstrateConfig
         { substrateHost    = T.unpack host
         , substratePort    = port
@@ -256,24 +264,24 @@ discoverBackendNameWith headers host port = do
         pure (Left $ ConnectionTimeout host port)
       rpcCall = do
         ST.rpcCallWith cfg "_info" Aeson.Null
-          `catch` \(_e :: SomeException) ->
-            pure (Left $ NetworkError "Connection failed")
+          `catch` \(e :: SomeException) ->
+            pure (Left $ NetworkError ("Connection failed: " <> T.pack (show e)))
 
   -- Race the RPC call against a 2 second timeout
   raceResult <- race timeout rpcCall
 
   case raceResult of
     Left _err ->
-      pure Nothing
-    Right (Left _err) ->
-      pure Nothing
+      pure (Left "the _info probe timed out")
+    Right (Left err) ->
+      pure (Left (T.pack (show err)))
     Right (Right items) -> do
       -- Extract the backend name from subscription response
       case [Aeson.fromJSON content | StreamData _ _ _ content <- items] of
         (Aeson.Success (Aeson.Object obj):_) | Just (Aeson.String name) <- KM.lookup "backend" obj ->
-          pure (Just name)
+          pure (Right name)
         _ ->
-          pure Nothing
+          pure (Left "the _info probe answered no backend name")
 
 -- | Query the registry for all backends
 queryRegistry :: Text -> Int -> Text -> IO [Backend]
