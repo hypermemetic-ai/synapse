@@ -66,6 +66,10 @@ library
     Synapse.Self.Protocol.TestRunner
     Synapse.Note
     Synapse.Note.Command
+    Synapse.Identity.Proof
+    Synapse.Identity.Store
+    Synapse.Identity.Session
+    Synapse.Identity.Command
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
@@ -99,7 +103,10 @@ library
     katip >= 0.8 && < 0.9,
     base64-bytestring >= 1.2 && < 1.3,
     optparse-applicative >= 0.18 && < 0.19,
-    unix >= 2.7 && < 2.9
+    unix >= 2.7 && < 2.9,
+    -- IDENTITY-43: Ed25519 keys and their randomness
+    crypton >= 1.0 && < 1.2,
+    ram >= 0.20 && < 0.23
   hs-source-dirs:   src
   default-language: GHC2021
   default-extensions:
@@ -253,6 +260,25 @@ test-suite req8-render-test
     aeson >= 2.2 && < 2.3,
     aeson-qq >= 0.8 && < 0.9,
     text >= 2.0 && < 2.2
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -threaded
+
+test-suite render-test
+  -- SYNAPSE-12: a backend's help laid out (blank lines, columns, wrapping,
+  -- required before optional, types as the schema says them).
+  type:             exitcode-stdio-1.0
+  main-is:          RenderSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    aeson-qq >= 0.8 && < 0.9,
+    text >= 2.0 && < 2.2,
+    hspec >= 2.10 && < 2.12
   hs-source-dirs:   test
   default-language: GHC2021
   default-extensions:
@@ -432,6 +458,31 @@ test-suite note-test
     hspec >= 2.10 && < 2.12,
     time >= 1.12 && < 1.15,
     temporary >= 1.3 && < 1.4
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -threaded
+
+test-suite identity-test
+  -- IDENTITY-43: the canonical message, the fixed proof vector the Rust
+  -- side cross-checks, and the key and session stores' order (env, a
+  -- mocked keychain, files in a directory of the test's own).
+  type:             exitcode-stdio-1.0
+  main-is:          IdentitySpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-synapse,
+    text >= 2.0 && < 2.2,
+    bytestring >= 0.11 && < 0.13,
+    base64-bytestring >= 1.2 && < 1.3,
+    aeson >= 2.2 && < 2.3,
+    containers >= 0.6 && < 0.8,
+    directory >= 1.3 && < 1.4,
+    filepath >= 1.4 && < 1.6,
+    hspec >= 2.10 && < 2.12,
+    temporary >= 1.3 && < 1.4,
+    unix >= 2.7 && < 2.9
   hs-source-dirs:   test
   default-language: GHC2021
   default-extensions:

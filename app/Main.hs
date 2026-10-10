@@ -35,7 +35,7 @@ import qualified Paths_plexus_synapse as Meta
 import System.Directory (getHomeDirectory)
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath ((</>))
-import System.IO (hPutStrLn, stderr, hFlush, stdout)
+import System.IO (hPutStrLn, stderr, hFlush, stdout, hIsTerminalDevice)
 
 
 import Synapse.Schema.Types
@@ -72,7 +72,15 @@ import System.FilePath ((</>))
 import qualified Synapse.Self.Commands as Self
 import qualified Synapse.Self.Command as SelfCmd
 import qualified Synapse.Note.Command as NoteCmd
-import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscovery, pingBackends, getBackendAt, getBackendAtWith, registerWithRegistry)
+import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscovery, pingBackends, getBackendAt, getBackendAtWith, probeBackendAtWith, registerWithRegistry)
+import Control.Applicative ((<|>))
+import System.Environment (lookupEnv)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.Time.Format (formatTime, defaultTimeLocale)
+import qualified Synapse.Identity.Command as IdCmd
+import qualified Synapse.Identity.Proof as Proof
+import qualified Synapse.Identity.Session as Session
+import qualified Synapse.Identity.Store as Store
 import System.Exit (ExitCode(..), exitWith)
 
 -- ============================================================================
@@ -103,6 +111,7 @@ data SynapseOpts = SynapseOpts
   , soCookies       :: [(Text, Text)]  -- ^ SAFE-S04/REQ-5: extra --cookie KEY=VALUE entries
   , soHeaders       :: [(Text, Text)]  -- ^ SAFE-S04/REQ-5: extra --header KEY=VALUE entries
   , soNoDeprecationWarnings :: Bool  -- ^ Suppress invocation-time deprecation warnings (IR-15)
+  , soAs            :: Maybe Text    -- ^ IDENTITY-43: which stored agent session to carry
   }
   deriving Show
 
@@ -200,10 +209,60 @@ resolveToken opts _backend =
 --
 -- (No signature: the result is the websockets package's header list, which
 -- this executable does not depend on by name.)
-probeHeaders opts = do
+probeHeaders opts host port = do
   mToken <- resolveToken opts ""
   (cookies, headers) <- collectRequestContext opts
-  pure (mergeUpgradeHeaders mToken cookies headers)
+  sess <- sessionHeaders opts host port (isJust mToken || hasCredential cookies headers)
+  pure (mergeUpgradeHeaders mToken cookies (headers ++ sess))
+
+-- | Does this cookie/header set already carry a credential (an
+-- access_token cookie or an Authorization header)? Then no stored session
+-- is added to it.
+hasCredential :: [(Text, Text)] -> [(Text, Text)] -> Bool
+hasCredential cookies headers =
+  any ((== "access_token") . T.toLower . fst) cookies
+    || any ((== "authorization") . T.toLower . fst) headers
+
+-- | IDENTITY-43: the agent asked for — @--as@, else @SYNAPSE_AS@.
+askedAgent :: SynapseOpts -> IO (Maybe Text)
+askedAgent opts = do
+  env <- lookupEnv "SYNAPSE_AS"
+  pure (soAs opts <|> (T.pack <$> mfilter' (not . null) env))
+  where mfilter' f m = m >>= \x -> if f x then Just x else Nothing
+
+-- | IDENTITY-43: the stored session's @Authorization: Bearer@ for a call to
+-- HOST:PORT — none when the call already carries a credential (-t,
+-- --token-file, an access_token cookie, an Authorization header).
+sessionHeaders :: SynapseOpts -> Text -> Int -> Bool -> IO [(Text, Text)]
+sessionHeaders opts host port explicit
+  | explicit = pure []
+  | otherwise = do
+      st <- Store.systemStoreEnv
+      asked <- askedAgent opts
+      logger <- makeLoggerFromOpts opts
+      maybe [] (\s -> [Session.bearer (Session.asToken s)]) <$> Session.sessionFor logger st asked host port
+
+-- | IDENTITY-43: the _info probe, logging in again from the key once when
+-- the upgrade is refused (401) while a stored session is carried.
+probeWithSession :: SynapseOpts -> Text -> Int -> IO (Maybe Text)
+probeWithSession opts host port = do
+  probe <- probeHeaders opts host port
+  r <- probeBackendAtWith probe host port
+  case r of
+    Right name -> pure (Just name)
+    Left why
+      | Session.isUpgradeRefused why -> do
+          can <- Session.canReattest host port
+          if not can then pure Nothing else do
+            st <- Store.systemStoreEnv
+            logger <- makeLoggerFromOpts opts
+            new <- Session.reattest logger st host port
+            case new of
+              Nothing -> pure Nothing
+              Just _ -> do
+                probe' <- probeHeaders opts host port
+                getBackendAtWith probe' host port
+      | otherwise -> pure Nothing
 
 -- ============================================================================
 -- Env Construction (SELF-2 read path)
@@ -269,12 +328,17 @@ buildEnv host port backend logger opts = do
       (mergedCookies, mergedHeaders) =
         Self.merge resolvedDefaults cliCookies cliHeaders
 
+  -- IDENTITY-43: no credential given or stored for this backend — carry
+  -- the agent's stored session, if there is one.
+  sess <- sessionHeaders opts host port
+            (hasCredential (Map.toList mergedCookies) (Map.toList mergedHeaders))
+
   -- 'seToken = Nothing' here: any access_token cookie already sits in the
   -- merged cookie map. Transport's mergeUpgradeHeaders joins them into a
   -- single Cookie header exactly as before.
   env0 <- initEnv host port backend logger Nothing
   pure $ withRequestContext (Map.toList mergedCookies)
-                             (Map.toList mergedHeaders)
+                             (Map.toList mergedHeaders ++ sess)
                              env0
 
 -- ============================================================================
@@ -292,6 +356,12 @@ main = do
   -- can be written with no backend running; only an upgrade asks one.
   when (argBackend args == Just "_note") $ runNote opts (argPath args)
 
+  -- IDENTITY-43: keys are local; _login / _logout dial the backend
+  -- themselves (a proof opens exactly one connection — no probe first).
+  when (argBackend args == Just "_key") $ runKey (argPath args)
+  when (argBackend args == Just "_login") $ runLogin opts (argPath args)
+  when (argBackend args == Just "_logout") $ runLogout opts (argPath args)
+
   -- Initialize logger (default: ErrorS, only show errors)
   logger <- makeLoggerFromOpts opts
 
@@ -308,8 +378,9 @@ main = do
   -- IDENTITY-16: the probe carries what the command line supplied (-t,
   -- --token-file, --cookie, --header and their env forms), so a backend that
   -- refuses anonymous upgrades still answers it.
-  probe <- probeHeaders opts
-  maybeBackend <- getBackendAtWith probe (soHost opts) (soPort opts)
+  -- IDENTITY-43: and the agent's stored session, made again from its key
+  -- if the upgrade refuses it.
+  maybeBackend <- probeWithSession opts (soHost opts) (soPort opts)
 
   Log.logDebug logger Log.SubsystemDiscovery $
     "Backend check complete: " <> T.pack (show maybeBackend)
@@ -400,6 +471,95 @@ runNote opts rest = do
   code <- NoteCmd.runNoteCommand (createTicketVia opts) cmd
   exitWith code
 
+-- | IDENTITY-43: @synapse _key new|show|list@ — local.
+runKey :: [Text] -> IO ()
+runKey rest = do
+  cmd <- handleParseResult (execParserPure defaultPrefs IdCmd.keyCommandInfo (map T.unpack rest))
+  st <- Store.systemStoreEnv
+  IdCmd.runKeyCommand st cmd >>= exitWith
+
+-- | IDENTITY-43: where @_login@ / @_logout@ dial — the connection point
+-- named with @-P@, else what the registry says of the backend, else the
+-- connection point.
+loginAddress :: SynapseOpts -> Text -> IO (Text, Int)
+loginAddress opts backendName
+  | soPort opts /= defaultPort = pure (soHost opts, soPort opts)
+  | otherwise = do
+      registered <- getBackendInfo (registryDiscovery (soHost opts) (soPort opts)) backendName
+      pure $ maybe (soHost opts, soPort opts) (\b -> (backendHost b, backendPort b)) registered
+
+dieWith :: Text -> IO a
+dieWith msg = TIO.hPutStrLn stderr ("synapse: " <> msg) >> exitFailure
+
+-- | IDENTITY-43: @synapse -P PORT _login BACKEND --key NAME --as AGENT
+-- [--scope role\@SCOPE …] [--ttl SECS]@.
+runLogin :: SynapseOpts -> [Text] -> IO ()
+runLogin opts rest = do
+  lo <- handleParseResult (execParserPure defaultPrefs IdCmd.loginInfo (map T.unpack rest))
+  asked <- askedAgent opts
+  agent <- maybe (dieWith "name the agent to log in as: --as AGENT (or SYNAPSE_AS)") pure (IdCmd.loAs lo <|> asked)
+  st <- Store.systemStoreEnv
+  seed <- Store.lookupKey st (IdCmd.loKey lo) >>= \case
+    Left e -> dieWith e
+    Right Nothing -> dieWith ("no key " <> IdCmd.loKey lo <> " (synapse _key new " <> IdCmd.loKey lo <> ")")
+    Right (Just (s, _)) -> pure s
+  (host, port) <- loginAddress opts (IdCmd.loBackend lo)
+  logger <- makeLoggerFromOpts opts
+  r <- Session.loginWithKey logger host port (IdCmd.loBackend lo) seed agent (IdCmd.loScope lo) (IdCmd.loTtl lo)
+  lr <- either (\e -> dieWith ("login to " <> IdCmd.loBackend lo <> " at " <> Store.addressKey host port <> " failed: " <> e)) pure r
+  let rec = Store.SessionRec
+        { Store.srToken = Session.lrToken lr
+        , Store.srPrincipal = if T.null (Session.lrPrincipal lr) then Proof.principalOf seed else Session.lrPrincipal lr
+        , Store.srAgent = Session.lrAgent lr
+        , Store.srExpiresAt = Session.lrExpiresAt lr
+        , Store.srKey = IdCmd.loKey lo
+        , Store.srScope = IdCmd.loScope lo
+        , Store.srTtl = IdCmd.loTtl lo
+        , Store.srBackend = IdCmd.loBackend lo
+        }
+  src <- Store.writeSession st host port rec
+  Store.writeDefaultAgent st host port (Store.srAgent rec)
+  let until' = case Store.srExpiresAt rec of
+        Just t -> T.pack (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC" (posixSecondsToUTCTime (fromIntegral t)))
+        Nothing -> "(the server named no end)"
+      scope = if null (Session.lrScope lr) then "the key's own grants" else T.intercalate ", " (Session.lrScope lr)
+      kept = case src of
+        Store.SessionFromKeychain -> "keychain"
+        Store.SessionFromFile p -> T.pack p
+        Store.SessionFromEnv -> "PLEXUS_SESSION"
+  TIO.putStrLn $ "signed in to " <> IdCmd.loBackend lo <> " at " <> Store.addressKey host port <> " as " <> Store.srAgent rec
+  mapM_ (\(k, v) -> TIO.putStrLn ("  " <> T.justifyLeft 10 ' ' k <> v))
+    [ ("principal", Store.srPrincipal rec)
+    , ("scope", scope)
+    , ("until", until')
+    , ("kept in", kept)
+    ]
+  exitSuccess
+
+-- | IDENTITY-43: @synapse -P PORT _logout BACKEND [--as AGENT]@.
+runLogout :: SynapseOpts -> [Text] -> IO ()
+runLogout opts rest = do
+  lo <- handleParseResult (execParserPure defaultPrefs IdCmd.logoutInfo (map T.unpack rest))
+  st <- Store.systemStoreEnv
+  (host, port) <- loginAddress opts (IdCmd.lgBackend lo)
+  asked <- askedAgent opts
+  dflt <- Store.readDefaultAgent st host port
+  agent <- maybe (dieWith ("no agent is signed in to " <> Store.addressKey host port <> " (name one: --as AGENT)")) pure
+             (IdCmd.lgAs lo <|> asked <|> dflt)
+  found <- Store.lookupSession st host port agent
+  rec <- case found of
+    Just (Right r, src) | src /= Store.SessionFromEnv -> pure r
+    _ -> dieWith ("no stored session for " <> agent <> " at " <> Store.addressKey host port)
+  logger <- makeLoggerFromOpts opts
+  r <- Session.logoutWithToken logger host port (IdCmd.lgBackend lo) (Store.srToken rec)
+  Store.removeSession st host port agent
+  Store.clearDefaultAgent st host port agent
+  case r of
+    Right () -> TIO.putStrLn ("signed out " <> agent <> " at " <> Store.addressKey host port)
+    Left e -> TIO.putStrLn ("forgot " <> agent <> "'s session at " <> Store.addressKey host port
+                             <> " (the server said: " <> e <> ")")
+  exitSuccess
+
 -- | SYNAPSE-11: an upgrade's ticket — @tickets.create@ on the backend named,
 -- reached as any synapse call reaches it: through the registry at the
 -- connection point (@-H@/@-P@), or the connection point itself when that
@@ -460,8 +620,7 @@ runWithDiscovery discovery backendName args = do
       -- Verify the resolved backend actually identifies as the requested name.
       -- This catches cases where -P points to a different backend than expected,
       -- or the registry has stale entries.
-      probe <- probeHeaders opts
-      actualName <- getBackendAtWith probe (backendHost backend) (backendPort backend)
+      actualName <- probeWithSession opts (backendHost backend) (backendPort backend)
       case actualName of
         Just name | name /= backendName -> do
           hPutStrLn stderr $ "Backend mismatch: requested '" <> T.unpack backendName
@@ -484,8 +643,7 @@ runWithDiscovery discovery backendName args = do
     Nothing -> do
       -- Backend not found in registry - check if this was a direct connection attempt
       -- where the protocol handshake failed
-      probe <- probeHeaders opts
-      maybeDirectBackend <- getBackendAtWith probe (soHost opts) (soPort opts)
+      maybeDirectBackend <- probeWithSession opts (soHost opts) (soPort opts)
       logger <- makeLoggerFromOpts opts
       env <- buildEnv (soHost opts) (soPort opts) backendName logger opts
       case maybeDirectBackend of
@@ -521,7 +679,25 @@ run backend host port args = do
   rendererCfg <- defaultRendererConfig
   Log.logDebug logger Log.SubsystemCLI "Running dispatch..."
   result <- runSynapseM env (dispatch args rendererCfg)
-  case result of
+  -- IDENTITY-43: the server refused the stored session (the upgrade's 401,
+  -- or the in-band "you have signed out" held back before anything was
+  -- shown): log in again from the key, and run the call once more.
+  ended <- Session.takeSessionEnded
+  let refused = case result of
+        Left (TransportErrorContext ctx) -> Session.isUpgradeRefused (tcMessage ctx)
+        Left (NavError (FetchError m _)) -> Session.isUpgradeRefused m
+        _ -> False
+  result' <- if not (isJust ended || refused) then pure result else do
+    st <- Store.systemStoreEnv
+    new <- Session.reattest logger st host port
+    case new of
+      Just _ -> do
+        env' <- buildEnv host port backend logger opts
+        runSynapseM env' (dispatch args rendererCfg)
+      Nothing -> do
+        mapM_ (\m -> hPutStrLn stderr ("Error: " <> T.unpack m)) ended
+        pure result
+  case result' of
     Left err -> do
       hPutStrLn stderr $ renderError err
       exitFailure
@@ -600,20 +776,22 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                   -- Mode 5: Normal navigation
                   if null pathSegs
                     then do
+                      -- SYNAPSE-12: a backend named, its help is the
+                      -- backend's alone — no banner, options or meta-commands.
                       rootSchema <- navigate []
                       case rootSchema of
                         ViewPlugin schema _ -> liftIO $ do
-                          TIO.putStr cliHeader
-                          TIO.putStr "\n\n"
                           TIO.putStr $ renderSchema schema
+                          backendHelpFooter
                         _ -> pure ()
                     else do
                       -- Navigate to target
                       view <- navigate pathSegs
                       case view of
                         -- Landed on a plugin: show help
-                        ViewPlugin schema _ ->
-                          liftIO $ TIO.putStr $ renderSchema schema
+                        ViewPlugin schema _ -> liftIO $ do
+                          TIO.putStr $ renderSchema schema
+                          backendHelpFooter
 
                         -- Landed on a method: invoke or show help
                         ViewMethod method path -> do
@@ -661,8 +839,9 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                               if helpRequested
                                 then do
                                   case Map.lookup fullPath (irMethods ir) of
-                                    Just methodDef ->
-                                      liftIO $ TIO.putStr $ renderMethodHelp ir methodDef
+                                    Just methodDef -> liftIO $ do
+                                      TIO.putStr $ renderMethodHelp ir methodDef
+                                      backendHelpFooter
                                     Nothing ->
                                       liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
                                 else do
@@ -711,8 +890,9 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                                       then do
                                         -- Render help from IR
                                         case Map.lookup fullPath (irMethods ir) of
-                                          Just methodDef ->
-                                            liftIO $ TIO.putStr $ renderMethodHelp ir methodDef
+                                          Just methodDef -> liftIO $ do
+                                            TIO.putStr $ renderMethodHelp ir methodDef
+                                            backendHelpFooter
                                           Nothing ->
                                             -- Fallback: method not in IR, use basic info
                                             liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
@@ -746,13 +926,33 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
               TIO.hPutStrLn stderr $ "[synapse] Unknown --bidir-mode: " <> modeStr <> ", using auto-detect"
               detectBidirMode
           Nothing -> detectBidirMode
+      -- IDENTITY-43: while the stored session could still be made again,
+      -- a "you have signed out" answered before anything else is held back
+      -- for 'run' to log in again and retry.
+      host <- asks seHost
+      port <- asks sePort
+      armed <- liftIO $ Session.canReattest host port
+      let printer item = do
+            shown <- Session.printedAny
+            if armed && not shown && Session.isSessionEndedItem item
+              then Session.markSessionEnded (endedMessage item)
+              else do
+                case item of
+                  HubData{} -> Session.notePrinted
+                  _ -> pure ()
+                printResult soJson soRaw rendererCfg' item
       -- Use bidirectional streaming handler
       invokeStreamingWithBidir
         namespacePath
         methodName'
         params
-        (printResult soJson soRaw rendererCfg')
+        printer
         (handleBidirRequest bidirMode Nothing)
+
+    endedMessage item = case item of
+      HubData _ _ _ (Object o) | Just (String m) <- KM.lookup "message" o -> m
+      HubError _ _ e _ -> e
+      _ -> "your session has ended"
 
     -- Extract default values from JSON Schema properties
     -- Schema format: {"properties": {"key": {"default": value, ...}, ...}, ...}
@@ -827,6 +1027,15 @@ readMaybe s = case reads s of
   [(x, "")] -> Just x
   _ -> Nothing
 
+-- | SYNAPSE-12: the one line under a backend's help that points at
+-- synapse's own (dim on a terminal).
+backendHelpFooter :: IO ()
+backendHelpFooter = do
+  tty <- hIsTerminalDevice stdout
+  let line = "synapse --help for synapse's own options"
+  TIO.putStrLn ""
+  TIO.putStrLn (if tty then "\ESC[2m" <> line <> "\ESC[0m" else line)
+
 -- | ASCII splash logo
 splash :: Text
 splash = T.unlines
@@ -857,6 +1066,16 @@ cliHeader = splash <> T.pack (fst $ renderFailure failure "synapse") <> selfHelp
       , "        synapse _note add \"the palette should remember its query\""
       , "        synapse _note list"
       , "        synapse -P 4455 _note upgrade 20261010-1503 --epic MENGER"
+      , ""
+      , "  synapse _key new|show|list [NAME]"
+      , "      Ed25519 keys an agent proves who it is with (keychain, else"
+      , "      ~/.plexus/keys/NAME.key; PLEXUS_KEY and $CREDENTIALS_DIRECTORY read first)"
+      , ""
+      , "  synapse -P PORT _login BACKEND --key NAME --as AGENT [--scope ROLE@SCOPE] [--ttl SECS]"
+      , "  synapse -P PORT _logout BACKEND [--as AGENT]"
+      , "      Log in from a key; later calls to that backend carry the session by"
+      , "      themselves (--as AGENT / SYNAPSE_AS picks one; else the last logged in),"
+      , "      and log in again from the key when it ends"
       , ""
       , "  synapse _self template"
       , "      Manage Mustache templates (CRUD operations)"
@@ -1199,6 +1418,9 @@ optsParser = do
   soNoDeprecationWarnings <- switch
     ( long "no-deprecation-warnings"
    <> help "Suppress invocation-time deprecation warnings on stderr (IR-15)" )
+  soAs <- optional $ T.pack <$> strOption
+    ( long "as" <> metavar "AGENT"
+   <> help "Carry this agent's stored session (see _login; else SYNAPSE_AS, else the backend's default agent)" )
   pure SynapseOpts{..}
 
 -- | Parse a KEY=VALUE pair (used by --cookie/--header). Treats the first '='

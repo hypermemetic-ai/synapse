@@ -56,7 +56,7 @@ module Synapse.CLI.Help
   , defaultHelpStyle
   ) where
 
-import Data.List (intersperse)
+import Data.List (intersperse, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe, maybeToList)
@@ -100,9 +100,7 @@ renderMethodHelp = renderMethodHelpWith defaultHelpStyle
 -- | Render method help with custom style
 renderMethodHelpWith :: HelpStyle -> IR -> MethodDef -> Text
 renderMethodHelpWith style ir method = T.unlines $
-  [ header
-  , ""
-  ] ++ descSection ++ paramSection
+  [ header ] ++ descSection ++ [""] ++ paramSection
   where
     header = mdFullPath method <> streamingIndicator
 
@@ -110,15 +108,18 @@ renderMethodHelpWith style ir method = T.unlines $
       | mdStreaming method = " [streaming]"
       | otherwise = ""
 
+    -- SYNAPSE-12: the description wrapped under the name, as a backend's
+    -- own listing has it
     descSection = case mdDescription method of
-      Just desc -> [desc, ""]
+      Just desc -> map ("  " <>) (wrapWords 78 desc)
       Nothing -> []
 
+    -- required first, then optional; each block opens with its blank line
     paramSection
       | null (mdParams method) = ["(no parameters)"]
       | otherwise =
-          ["Parameters:"] ++
-          concatMap (renderParamBlock style ir) (mdParams method)
+          ["parameters"] ++
+          drop 1 (concatMap (renderParamBlock style ir) (sortOn (not . pdRequired) (mdParams method)))
 
 -- | Render a parameter as a block (may be multi-line for complex types).
 --
@@ -143,9 +144,9 @@ renderParamBlock style ir param =
       reqText = if pdRequired param then "(required)" else "(optional)"
       headerLine = indent' <> flagName <> " <" <> typeStr <> ">  " <> reqText
 
-      -- Description line
+      -- Description, wrapped in its column
       descLines = case pdDescription param of
-        Just desc -> [indent2 <> desc]
+        Just desc -> map (indent2 <>) (wrapWords (80 - T.length indent2) desc)
         Nothing -> []
 
       -- Deprecation detail line (IR-14).  Indented one level beyond the
@@ -172,6 +173,18 @@ renderParamBlock style ir param =
         else []
 
   in [""] ++ [headerLine] ++ descLines ++ deprecationLines ++ listLines ++ expansionLines
+
+-- | Words wrapped greedily to a width (at least 20).
+wrapWords :: Int -> Text -> [Text]
+wrapWords w0 = go . T.words
+  where
+    w = max 20 w0
+    go [] = []
+    go (x : xs) = line x xs
+    line acc [] = [acc]
+    line acc (y : ys)
+      | T.length acc + 1 + T.length y <= w = line (acc <> " " <> y) ys
+      | otherwise = acc : line y ys
 
 -- ============================================================================
 -- Parameter Help

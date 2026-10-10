@@ -113,6 +113,37 @@ synapse _self <backend> clear --yes
 
 Related tickets: `plans/SELF/SELF-1..8.md` (all Complete).
 
+## Keys, login & sessions (IDENTITY-43)
+
+An agent proves who it is with an Ed25519 key and then carries a session by
+itself. The wire and the stores are IDENTITY-40's contract
+(`Synapse.Identity.Proof`, `Synapse.Identity.Store`); the fixed proof vector
+is pinned in `test/IdentitySpec.hs`.
+
+```bash
+synapse _key new agent-7 [--store auto|file|keychain]   # prints key:<hex>; never overwrites
+synapse _key show agent-7 ; synapse _key list
+synapse -P 4455 _login menger --key agent-7 --as worker-3 [--scope editor@MENGER-12] [--ttl SECS]
+synapse -P 4455 menger tickets health                   # carries worker-3's session (the default agent)
+synapse -P 4455 --as worker-9 menger session whoami     # or SYNAPSE_AS=worker-9
+synapse -P 4455 _logout menger [--as worker-3]
+```
+
+- Key `NAME`: `PLEXUS_KEY` (base64 seed) → keychain (`secret-tool`
+  `service=plexus-key name=NAME`; macOS `security -s plexus-key -a NAME`) →
+  `$CREDENTIALS_DIRECTORY/NAME.key` → `~/.plexus/keys/NAME.key` (0600).
+- Session (`HOST:PORT`, agent): `PLEXUS_SESSION` → keychain
+  (`service=plexus-session backend=HOST:PORT agent=AGENT`) →
+  `~/.plexus/sessions/HOST_PORT/AGENT.json` (0600, with the key name and scope
+  to log in again from); `…/default` names the backend's default agent.
+- Writes go to the keychain when it answers (2 s limit; none without a
+  session bus, or with `PLEXUS_KEYCHAIN=off`), else the file.
+- A call carries `Authorization: Bearer <token>` on the probe and the upgrade
+  unless it already has a credential (`-t`, `--token-file`, an `access_token`
+  cookie, an `Authorization` header). An expired session, a 401 at the
+  upgrade, or "you have signed out" → log in again from the key, once, with a
+  one-line notice on stderr.
+
 ## Notes & `_note` (SYNAPSE-11)
 
 Notes are dated, untitled thoughts kept in one place — `$SYNAPSE_NOTES_DIR`,

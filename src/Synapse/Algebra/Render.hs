@@ -25,9 +25,8 @@ import qualified Data.Aeson as Aeson
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Vector as V
+import Control.Applicative ((<|>))
 import Data.List (intersperse, sortOn)
-import Prettyprinter
-import Prettyprinter.Render.Text (renderStrict)
 
 import Synapse.Schema.Types
 import Plexus.Schema.Recursive (DeprecationInfo(..), ParamSchema(..))
@@ -38,6 +37,7 @@ data RenderStyle = RenderStyle
   , rsShowHash  :: !Bool  -- ^ Show plugin/method hashes
   , rsShowTypes :: !Bool  -- ^ Show parameter types
   , rsCompact   :: !Bool  -- ^ Compact single-line format
+  , rsWidth     :: !Int   -- ^ Columns to wrap descriptions at (SYNAPSE-12)
   }
   deriving stock (Show, Eq)
 
@@ -48,6 +48,7 @@ defaultStyle = RenderStyle
   , rsShowHash  = False
   , rsShowTypes = True
   , rsCompact   = False
+  , rsWidth     = 80
   }
 
 -- | Compact style: single-line descriptions
@@ -60,195 +61,97 @@ renderSchema = renderSchemaWith defaultStyle
 
 -- | Render with custom style
 renderSchemaWith :: RenderStyle -> PluginSchema -> Text
-renderSchemaWith _style PluginSchema{..}
-  | null psMethods && maybe True null psChildren = deprecationBanner <> headerText
-  | otherwise = renderStrict $ layoutPretty layoutOpts doc
+renderSchemaWith style PluginSchema{..} = T.unlines (dropTrailingBlanks body)
   where
-    layoutOpts = LayoutOptions (AvailablePerLine 80 1.0)
+    width = rsWidth style
 
-    -- Activation-level deprecation banner (plain-text, rendered ahead
-    -- of the compact header variant used for trivial schemas).
-    deprecationBanner = case psDeprecation of
-      Just di -> deprecationMarker <> " " <> formatDeprecationLine di <> "\n"
-      Nothing -> ""
-
-    headerText = psNamespace <> " v" <> psVersion <> "\n" <> psDescription <> "\n"
-
-    -- Name line; decorated with the warning marker when the activation
-    -- carries Just DeprecationInfo.
-    namespaceHeading = case psDeprecation of
-      Just _  -> pretty (deprecationMarker <> " " <> psNamespace)
-                   <+> pretty ("v" <> psVersion)
-      Nothing -> pretty psNamespace <+> pretty ("v" <> psVersion)
-
-    -- Full deprecation notice rendered immediately below the heading
-    -- when relevant, before the description block.
-    deprecationNoticeDoc = case psDeprecation of
-      Just di -> vsep
-        [ emptyDoc
-        , indent 2 $ pretty (formatDeprecationLine di)
-        ]
-      Nothing -> emptyDoc
-
-    doc :: Doc ann
-    doc = vsep
-      [ namespaceHeading
-      , deprecationNoticeDoc
-      , emptyDoc
-      , indent 2 $ align $ fillSep $ map pretty $ T.words psDescription
-      , emptyDoc
-      , requestDoc      -- REQ-5: render psRequest schema (auth requirements + request fields)
-      , childrenDoc
-      , methodsDoc
+    -- SYNAPSE-12: one blank line between blocks, never more; the name and
+    -- version, the description under it, then each section under a header.
+    body = concat
+      [ [heading]
+      , deprecationNotice
+      , map ("  " <>) (wrap (width - 2) psDescription)
+      , requestBlock
+      , section "activations" False childBlocks
+      , section "methods" True methodBlocks
       ]
 
-    -- REQ-5: render the activation's PlexusRequest schema.
-    -- Walks the JSON Schema's properties and emits a "Request requirements:"
-    -- block describing where each field comes from (cookie/header/query/derived).
-    requestDoc = case psRequest of
-      Nothing  -> emptyDoc
-      Just req -> renderRequestSchemaDoc req
+    heading = case psDeprecation of
+      Just _  -> deprecationMarker <> " " <> psNamespace <> " v" <> psVersion
+      Nothing -> psNamespace <> " v" <> psVersion
 
-    renderRequestSchemaDoc :: Aeson.Value -> Doc ann
-    renderRequestSchemaDoc schemaVal =
-      let mProps = case schemaVal of
-            Aeson.Object o -> KM.lookup "properties" o
-            _              -> Nothing
-          mReq = case schemaVal of
-            Aeson.Object o -> KM.lookup "required" o
-            _              -> Nothing
-          requiredNames = case mReq of
-            Just (Aeson.Array v) -> [n | Aeson.String n <- V.toList v]
-            _                    -> []
-          propPairs = case mProps of
-            Just (Aeson.Object o) -> KM.toList o
-            _                     -> []
-          hasCookieAuth = any
-            (\(k, v) -> case v of
-              Aeson.Object pv ->
-                let from = KM.lookup "x-plexus-source" pv >>= \src -> case src of
-                      Aeson.Object sv -> KM.lookup "from" sv
-                      _               -> Nothing
-                    key = KM.lookup "x-plexus-source" pv >>= \src -> case src of
-                      Aeson.Object sv -> KM.lookup "key" sv
-                      _               -> Nothing
-                in from == Just (Aeson.String "cookie")
-                   && key == Just (Aeson.String "access_token")
-                   && K.toText k `elem` requiredNames
-              _ -> False)
-            propPairs
-          authNotice =
-            if hasCookieAuth
-              then [ pretty ("Authentication required" :: Text)
-                       <+> pretty ("(use --token <jwt>, --cookie access_token=<jwt>, or SYNAPSE_TOKEN)" :: Text)
-                   , emptyDoc ]
-              else []
-          fieldDocs = if null propPairs
-                        then []
-                        else [ pretty ("Request requirements:" :: Text)
-                             , emptyDoc
-                             , indent 2 $ vsep $ map (renderRequestFieldDoc requiredNames) propPairs
-                             , emptyDoc ]
-      in vsep (authNotice ++ fieldDocs)
+    deprecationNotice = case psDeprecation of
+      Just di -> ["  " <> formatDeprecationLine di]
+      Nothing -> []
 
-    renderRequestFieldDoc :: [Text] -> (K.Key, Aeson.Value) -> Doc ann
-    renderRequestFieldDoc requiredNames (k, v) =
-      let name = K.toText k
-          isReq = name `elem` requiredNames
-          (label, sourceKeyText, isDerived) = case v of
-            Aeson.Object pv ->
-              let src = KM.lookup "x-plexus-source" pv
-                  fromVal = src >>= \s -> case s of
-                    Aeson.Object so -> KM.lookup "from" so
-                    _               -> Nothing
-                  keyVal = src >>= \s -> case s of
-                    Aeson.Object so -> KM.lookup "key" so
-                    _               -> Nothing
-                  fromTxt = case fromVal of
-                    Just (Aeson.String t) -> t
-                    _                     -> "unknown"
-                  keyTxt = case keyVal of
-                    Just (Aeson.String t) -> " (" <> t <> ")"
-                    _                     -> ""
-                  lbl = case fromTxt of
-                    "cookie"  -> "Cookie"
-                    "header"  -> "Header"
-                    "query"   -> "QueryParam"
-                    "derived" -> "Server-derived"
-                    _         -> "Unknown"
-              in (lbl, keyTxt, fromTxt == "derived")
-            _ -> ("Unknown", "", False)
-          desc = case v of
-            Aeson.Object pv -> case KM.lookup "description" pv of
-              Just (Aeson.String t) -> " — " <> t
-              _                     -> ""
-            _ -> ""
-          reqMark = if isReq && not isDerived then " required" else " optional"
-      in pretty (label <> " " <> name <> sourceKeyText <> reqMark <> desc)
+    -- REQ-5: the activation's PlexusRequest schema.
+    -- HEADERS-1 stub: plexus-protocol's PluginSchema doesn't yet expose
+    -- psRequest. Nothing to render until the field lands in plexus-protocol;
+    -- the renderer it had ("Request requirements:", the auth notice) is in
+    -- this file's history before SYNAPSE-12.
+    requestBlock = []
 
-    childrenDoc = case psChildren of
-      Nothing -> emptyDoc
-      Just [] -> emptyDoc
-      Just children -> vsep
-        [ pretty ("activations" :: Text)
-        , emptyDoc
-        , indent 2 $ vsep $ map renderChildDoc (sortOn csNamespace children)
-        , emptyDoc
-        ]
+    section _ _ [] = []
+    section title spaced blocks =
+      "" : title : concat (if spaced then intersperse [""] blocks else blocks)
 
-    methodsDoc
-      | null psMethods = emptyDoc
-      | otherwise = vsep
-        [ pretty ("methods" :: Text)
-        , emptyDoc
-        , indent 2 $ vsep $ intersperse emptyDoc $ map renderMethodDoc (sortOn methodName psMethods)
-        ]
+    children = maybe [] (sortOn csNamespace) psChildren
+    methods = sortOn methodName psMethods
 
-    renderChildDoc child = fillBreak 12 (pretty $ csNamespace child)
-      <+> align (fillSep $ map pretty $ T.words $ csDescription child)
+    -- The name column: wide enough for the longest name (capped), shared by
+    -- both sections so their descriptions start in one column.
+    nameWidth = min 18 $ maximum $ 8 : map T.length (map csNamespace children ++ map decoratedName methods)
+    descCol = 2 + nameWidth + 2
 
-    renderMethodDoc method =
-      let nameText = case methodDeprecation method of
-            Just _  -> deprecationMarker <> " " <> methodName method
-            Nothing -> methodName method
-          nameLine = fillBreak 12 (pretty nameText)
-                       <+> align (fillSep $ map pretty $ T.words $ methodDescription method)
-          depLines = case methodDeprecation method of
-            Just di -> [indent 12 $ pretty (formatDeprecationLine di)]
-            Nothing -> []
-      in vsep $ [nameLine] ++ depLines ++ paramsDocs (methodParams method)
+    decoratedName m = case methodDeprecation m of
+      Just _  -> deprecationMarker <> " " <> methodName m
+      Nothing -> methodName m
 
-    paramsDocs Nothing = []
-    paramsDocs (Just (Object o)) = case KM.lookup "properties" o of
+    childBlocks = [ entry (csNamespace c) (csDescription c) | c <- children ]
+
+    methodBlocks =
+      [ entry (decoratedName m) (methodDescription m)
+          ++ maybe [] (\di -> [T.replicate descCol " " <> formatDeprecationLine di]) (methodDeprecation m)
+          ++ paramLines (methodParams m)
+      | m <- methods ]
+
+    -- A name and its description, the description wrapped in its column;
+    -- a name too long for the column puts the description under it.
+    entry name desc =
+      hang descCol ("  " <> name) (wrap (width - descCol) desc)
+
+    -- Parameters, under the method's name: required first, then
+    -- optional (in [brackets]), each a flag column and a wrapped description.
+    paramLines Nothing = []
+    paramLines (Just (Object o)) = case KM.lookup "properties" o of
       Just (Object props) ->
         let reqList = case KM.lookup "required" o of
-              Just (Array arr) -> [t | String t <- foldr (:) [] arr]
+              Just (Array arr) -> [t | String t <- V.toList arr]
               _ -> []
-            propList = KM.toList props
-            sorted = sortOn (\(k, _) -> (K.toText k `notElem` reqList, K.toText k)) propList
-        in [indent 12 $ vsep $ map (renderParamDoc reqList) sorted]
+            sorted = sortOn (\(k, _) -> (K.toText k `notElem` reqList, K.toText k)) (KM.toList props)
+            rows = map (paramRow reqList) sorted
+            flagW = min 26 (maximum (0 : [T.length f | (f, _) <- rows]))
+            ind = 6  -- under the method's name, a step in
+            col = ind + flagW + 2
+            render (flag, desc) =
+              hang col (T.replicate ind " " <> flag) (wrap (width - col) desc)
+        in concatMap render rows
       _ -> []
-    paramsDocs _ = []
+    paramLines _ = []
 
-    renderParamDoc :: [Text] -> (K.Key, Value) -> Doc ann
-    renderParamDoc required (name, propSchema) =
+    paramRow :: [Text] -> (K.Key, Value) -> (Text, Text)
+    paramRow required (name, propSchema) =
       let nameText = K.toText name
           isReq = nameText `elem` required
           (typ, desc) = extractTypeDesc propSchema
-          srcAnnot = extractParamSourceAnnot propSchema
-          -- REQ-8: when a param has x-plexus-source, it's server-extracted —
-          -- don't emit a --flag form (clients can't supply it). Show its name
-          -- + source annotation inline instead.
-      in case srcAnnot of
-           Just annotation ->
-             fillBreak 20 (pretty nameText)
-               <+> align (pretty ("← " :: Text) <> pretty annotation)
+      in case extractParamSourceAnnot propSchema of
+           -- REQ-8: a param with x-plexus-source is server-extracted —
+           -- clients can't supply it, so no --flag form; its name and
+           -- where it comes from instead.
+           Just annotation -> (nameText, "\x2190 " <> annotation)
            Nothing ->
-             let flag = "--" <> T.replace "_" "-" nameText
-                 typStr = " <" <> typ <> ">" <> if isReq then "" else "?"
-                 descWords = if T.null desc then [] else map pretty (T.words desc)
-             in fillBreak 20 (pretty flag <> pretty typStr)
-                <+> align (fillSep descWords)
+             let flag = "--" <> T.replace "_" "-" nameText <> " <" <> typ <> ">"
+             in (if isReq then flag else "[" <> flag <> "]", desc)
 
     -- REQ-8: format an x-plexus-source annotation as a short inline label.
     -- Returns 'Nothing' when the property has no annotation (i.e. it's an
@@ -271,6 +174,30 @@ renderSchemaWith _style PluginSchema{..}
         "derived" -> Just "server-derived"
         "rpc"     -> Nothing
         other     -> Just other
+
+-- | Words wrapped greedily to a width (at least 20); a word longer than the
+-- width stands on its own line.
+wrap :: Int -> Text -> [Text]
+wrap w0 txt = go (T.words txt)
+  where
+    w = max 20 w0
+    go [] = []
+    go (x : xs) = line x xs
+    line acc [] = [acc]
+    line acc (y : ys)
+      | T.length acc + 1 + T.length y <= w = line (acc <> " " <> y) ys
+      | otherwise = acc : line y ys
+
+-- | A lead and lines that start in column @col@: the first beside the lead
+-- when it fits (two spaces between), else all of them under it.
+hang :: Int -> Text -> [Text] -> [Text]
+hang col lead ds = case ds of
+  (d : rest) | T.length lead <= col - 2 -> (T.justifyLeft col ' ' lead <> d) : map (pad <>) rest
+  _ -> lead : map (pad <>) ds
+  where pad = T.replicate col " "
+
+dropTrailingBlanks :: [Text] -> [Text]
+dropTrailingBlanks = reverse . dropWhile (T.null . T.strip) . reverse
 
 -- | Render a method (short form)
 renderMethod :: MethodSchema -> Text
@@ -376,13 +303,39 @@ renderParamFull paramSchemas required (name, propSchema) =
   in "  " <> decoratedName <> " <" <> typ <> ">" <> reqText
      <> "\n      " <> desc <> depLine
 
--- | Extract type and description from property schema
+-- | Extract type and description from property schema.
+--
+-- SYNAPSE-12: the type a flag takes, as the schema says it — a nullable
+-- type is its non-null part (@["string", "null"]@ → @string@), an array
+-- its element's (@string[]@), a @$ref@ the type it names, a union its
+-- alternatives (@a|b@); @any@ only when the schema says nothing.
 extractTypeDesc :: Value -> (Text, Text)
-extractTypeDesc (Object po) =
-  ( case KM.lookup "type" po of { Just (String t) -> t; _ -> "any" }
+extractTypeDesc v@(Object po) =
+  ( schemaTypeName v
   , case KM.lookup "description" po of { Just (String d) -> d; _ -> "" }
   )
 extractTypeDesc _ = ("any", "")
+
+schemaTypeName :: Value -> Text
+schemaTypeName (Object po)
+  | Just (String ref) <- KM.lookup "$ref" po = last (T.splitOn "/" ref)
+  | Just (String "array") <- KM.lookup "type" po = itemsName <> "[]"
+  | Just (String t) <- KM.lookup "type" po = t
+  | Just (Array ts) <- KM.lookup "type" po =
+      case [t | String t <- V.toList ts, t /= "null"] of
+        ["array"] -> itemsName <> "[]"
+        [] -> "any"
+        ts' -> T.intercalate "|" ts'
+  | Just (Array alts) <- KM.lookup "anyOf" po <|> KM.lookup "oneOf" po =
+      case filter (/= "null") (map schemaTypeName (V.toList alts)) of
+        [] -> "any"
+        ns -> T.intercalate "|" (dedupe ns)
+  | Just (Array _) <- KM.lookup "enum" po = "string"
+  | otherwise = "any"
+  where
+    itemsName = maybe "any" schemaTypeName (KM.lookup "items" po)
+    dedupe = foldr (\x acc -> if x `elem` acc then acc else x : acc) []
+schemaTypeName _ = "any"
 
 -- | Pad text to a minimum width
 padRight :: Int -> Text -> Text
