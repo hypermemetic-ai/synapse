@@ -63,8 +63,10 @@ module Synapse.IR.Types
 import Control.Applicative ((<|>))
 import Data.Aeson
 import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.KeyMap as KM
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Generics (Generic)
@@ -132,9 +134,22 @@ data IR = IR
   , irPlugins      :: Map Text [Text]              -- ^ Plugin -> method names mapping
   , irPluginHashes :: Maybe (Map Text PluginHashInfo)  -- ^ V2: Hash information per plugin
   , irPluginRequests :: Maybe (Map Text Aeson.Value)   -- ^ REQ-5: per-plugin PlexusRequest JSON Schema (Nothing = no request struct)
+  , irPluginRoles  :: Maybe (Map Text (Map Text [Text]))
+    -- ^ AUTH-9: per-plugin default roles (AUTH-3's @PluginSchema.roles@),
+    --   plugin namespace → role → the grants it lists. Omitted from the JSON
+    --   when 'Nothing', so an IR from a pre-AUTH schema is unchanged.
   }
   deriving stock (Show, Eq, Generic)
-  deriving anyclass (ToJSON, FromJSON)
+  deriving anyclass (FromJSON)
+
+-- | Generic, except that @irPluginRoles@ is left out when 'Nothing' (AUTH-9):
+--   an IR built from a schema without roles serializes exactly as before.
+instance ToJSON IR where
+  toJSON ir = case genericToJSON defaultOptions ir of
+    Object o -> Object $ case irPluginRoles ir of
+      Nothing -> KM.delete "irPluginRoles" o
+      Just _ -> o
+    v -> v
 
 -- | Empty IR for folding
 emptyIR :: IR
@@ -148,6 +163,7 @@ emptyIR = IR
   , irPlugins = Map.empty
   , irPluginHashes = Nothing
   , irPluginRequests = Nothing
+  , irPluginRoles = Nothing
   }
 
 -- | Merge two IRs (for combining results from tree walk)
@@ -166,6 +182,11 @@ mergeIR a b = IR
       (Nothing, Just hb) -> Just hb
       (Nothing, Nothing) -> Nothing
   , irPluginRequests = case (irPluginRequests a, irPluginRequests b) of
+      (Just ra, Just rb) -> Just (Map.union ra rb)
+      (Just ra, Nothing) -> Just ra
+      (Nothing, Just rb) -> Just rb
+      (Nothing, Nothing) -> Nothing
+  , irPluginRoles = case (irPluginRoles a, irPluginRoles b) of
       (Just ra, Just rb) -> Just (Map.union ra rb)
       (Just ra, Nothing) -> Just ra
       (Nothing, Just rb) -> Just rb
@@ -281,6 +302,14 @@ data MethodDef = MethodDef
     --
     -- Consumed by hub-codegen (Rust field @md_role@, JSON key @mdRole@)
     -- to emit typed-handle clients for @DynamicChild@ methods.
+  , mdGrant       :: Maybe Text
+    -- ^ AUTH-9: the method's grant (AUTH-3's @MethodSchema.grant@),
+    --   @<activation>.<method>@, e.g. @tickets.set_status@.
+  , mdTarget      :: Maybe Text
+    -- ^ AUTH-9: the param that locates what a call acts on (@MethodSchema.target@).
+  , mdLongDescription :: Maybe Text
+    -- ^ AUTH-9: the doc comment beside the short description
+    --   (@MethodSchema.long_description@).
   }
   deriving stock (Show, Eq, Generic)
 
@@ -292,7 +321,7 @@ data MethodDef = MethodDef
 --   names used verbatim as JSON keys; @Maybe@ fields omitted when
 --   @Nothing@ to match aeson's legacy behaviour).
 instance ToJSON MethodDef where
-  toJSON MethodDef{..} = object
+  toJSON MethodDef{..} = object $
     [ "mdName"                .= mdName
     , "mdFullPath"            .= mdFullPath
     , "mdNamespace"           .= mdNamespace
@@ -304,6 +333,12 @@ instance ToJSON MethodDef where
     , "mdBidirResponseType"   .= mdBidirResponseType
     , "mdBidirResponseSchema" .= mdBidirResponseSchema
     , "mdRole"                .= mdRole
+    ] <> catMaybes
+    -- AUTH-9: present only when the schema says them, so a pre-AUTH
+    -- schema's IR is unchanged.
+    [ ("mdGrant" .=) <$> mdGrant
+    , ("mdTarget" .=) <$> mdTarget
+    , ("mdLongDescription" .=) <$> mdLongDescription
     ]
 
 instance FromJSON MethodDef where
@@ -319,6 +354,9 @@ instance FromJSON MethodDef where
     <*> o .:? "mdBidirResponseType"
     <*> o .:? "mdBidirResponseSchema"
     <*> o .:? "mdRole" .!= MethodRoleRpc
+    <*> o .:? "mdGrant"
+    <*> o .:? "mdTarget"
+    <*> o .:? "mdLongDescription"
 
 -- | A parameter definition
 data ParamDef = ParamDef

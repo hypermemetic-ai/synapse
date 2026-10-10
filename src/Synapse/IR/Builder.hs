@@ -142,6 +142,10 @@ irAlgebra (PluginF schema path childIRs) = do
     , irPlugins = Map.insert namespace pluginMethods (irPlugins childIR)
     , irPluginHashes = Just allHashes  -- V2: Store hash info per plugin
     , irPluginRequests = if Map.null allRequests then Nothing else Just allRequests
+      -- AUTH-9: this plugin's default roles, beside its children's.
+    , irPluginRoles = case (psRoles schema, irPluginRoles childIR) of
+        (Nothing, childRoles) -> childRoles
+        (Just roles, childRoles) -> Just (Map.insert namespace roles (fromMaybe Map.empty childRoles))
     }
 
 irAlgebra (MethodF method namespace path) = do
@@ -158,6 +162,7 @@ irAlgebra (MethodF method namespace path) = do
     , irPlugins = Map.singleton namespace [methodName method]
     , irPluginHashes = Nothing  -- Methods don't have plugin-level hashes
     , irPluginRequests = Nothing  -- Methods don't carry request schemas
+    , irPluginRoles = Nothing  -- Methods don't carry roles
     }
 
 -- ============================================================================
@@ -400,6 +405,11 @@ extractMethodDef namespace pathPrefix method =
           -- tags. plexus-protocol defaults this to MethodRoleRpc when
           -- the upstream schema omits the field, so pre-IR servers
           -- continue to work with no change in behaviour.
+        , mdGrant = methodGrant method
+        , mdTarget = methodTarget method
+        , mdLongDescription = methodLongDescription method
+          -- AUTH-9: what the method requires and its doc comment, lifted
+          -- for hub-codegen; Nothing from a pre-AUTH schema.
         }
   in (allTypes, mdef)
 

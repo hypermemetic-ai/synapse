@@ -496,6 +496,7 @@ test-suite ir12-method-role-test
   main-is:          IR12MethodRoleSpec.hs
   build-depends:
     base >= 4.17 && < 5,
+    containers >= 0.6 && < 0.8,
     plexus-protocol,
     plexus-synapse,
     aeson >= 2.2 && < 2.3,
