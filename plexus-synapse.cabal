@@ -266,6 +266,25 @@ test-suite req8-render-test
     OverloadedStrings
   ghc-options:      -threaded
 
+test-suite render-test
+  -- SYNAPSE-12: a backend's help laid out (blank lines, columns, wrapping,
+  -- required before optional, types as the schema says them).
+  type:             exitcode-stdio-1.0
+  main-is:          RenderSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    aeson-qq >= 0.8 && < 0.9,
+    text >= 2.0 && < 2.2,
+    hspec >= 2.10 && < 2.12
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -threaded
+
 test-suite typeref-json
   type:             exitcode-stdio-1.0
   main-is:          TypeRefJson.hs

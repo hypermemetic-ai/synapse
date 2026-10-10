@@ -35,7 +35,7 @@ import qualified Paths_plexus_synapse as Meta
 import System.Directory (getHomeDirectory)
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath ((</>))
-import System.IO (hPutStrLn, stderr, hFlush, stdout)
+import System.IO (hPutStrLn, stderr, hFlush, stdout, hIsTerminalDevice)
 
 
 import Synapse.Schema.Types
@@ -776,20 +776,22 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                   -- Mode 5: Normal navigation
                   if null pathSegs
                     then do
+                      -- SYNAPSE-12: a backend named, its help is the
+                      -- backend's alone — no banner, options or meta-commands.
                       rootSchema <- navigate []
                       case rootSchema of
                         ViewPlugin schema _ -> liftIO $ do
-                          TIO.putStr cliHeader
-                          TIO.putStr "\n\n"
                           TIO.putStr $ renderSchema schema
+                          backendHelpFooter
                         _ -> pure ()
                     else do
                       -- Navigate to target
                       view <- navigate pathSegs
                       case view of
                         -- Landed on a plugin: show help
-                        ViewPlugin schema _ ->
-                          liftIO $ TIO.putStr $ renderSchema schema
+                        ViewPlugin schema _ -> liftIO $ do
+                          TIO.putStr $ renderSchema schema
+                          backendHelpFooter
 
                         -- Landed on a method: invoke or show help
                         ViewMethod method path -> do
@@ -837,8 +839,9 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                               if helpRequested
                                 then do
                                   case Map.lookup fullPath (irMethods ir) of
-                                    Just methodDef ->
-                                      liftIO $ TIO.putStr $ renderMethodHelp ir methodDef
+                                    Just methodDef -> liftIO $ do
+                                      TIO.putStr $ renderMethodHelp ir methodDef
+                                      backendHelpFooter
                                     Nothing ->
                                       liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
                                 else do
@@ -887,8 +890,9 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
                                       then do
                                         -- Render help from IR
                                         case Map.lookup fullPath (irMethods ir) of
-                                          Just methodDef ->
-                                            liftIO $ TIO.putStr $ renderMethodHelp ir methodDef
+                                          Just methodDef -> liftIO $ do
+                                            TIO.putStr $ renderMethodHelp ir methodDef
+                                            backendHelpFooter
                                           Nothing ->
                                             -- Fallback: method not in IR, use basic info
                                             liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
@@ -1022,6 +1026,15 @@ readMaybe :: Read a => String -> Maybe a
 readMaybe s = case reads s of
   [(x, "")] -> Just x
   _ -> Nothing
+
+-- | SYNAPSE-12: the one line under a backend's help that points at
+-- synapse's own (dim on a terminal).
+backendHelpFooter :: IO ()
+backendHelpFooter = do
+  tty <- hIsTerminalDevice stdout
+  let line = "synapse --help for synapse's own options"
+  TIO.putStrLn ""
+  TIO.putStrLn (if tty then "\ESC[2m" <> line <> "\ESC[0m" else line)
 
 -- | ASCII splash logo
 splash :: Text
