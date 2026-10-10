@@ -261,6 +261,7 @@ test-suite req8-render-test
     plexus-synapse,
     aeson >= 2.2 && < 2.3,
     aeson-qq >= 0.8 && < 0.9,
+    containers >= 0.6 && < 0.8,
     text >= 2.0 && < 2.2
   hs-source-dirs:   test
   default-language: GHC2021
@@ -271,6 +272,9 @@ test-suite req8-render-test
 test-suite render-test
   -- SYNAPSE-12: a backend's help laid out (blank lines, columns, wrapping,
   -- required before optional, types as the schema says them).
+  -- SYNAPSE-13: in the gh / cargo shape — listings of one-line summaries in
+  -- their groups; a method's page with its usage line, aligned options,
+  -- values and examples; an older hub's schema still rendered.
   type:             exitcode-stdio-1.0
   main-is:          RenderSpec.hs
   build-depends:
@@ -279,6 +283,7 @@ test-suite render-test
     plexus-synapse,
     aeson >= 2.2 && < 2.3,
     aeson-qq >= 0.8 && < 0.9,
+    containers >= 0.6 && < 0.8,
     text >= 2.0 && < 2.2,
     hspec >= 2.10 && < 2.12
   hs-source-dirs:   test

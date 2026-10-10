@@ -172,6 +172,28 @@ and the new optional fields on `MethodSchema` / `PluginSchema`; the renders are
 `Synapse.Auth`; `test/AuthSpec.hs` pins them and runs the flows against
 `test/MockHub.hs` (`SYNAPSE_MOCK_HUB=today|anonymous|caller` serves it by hand).
 
+## Help (SYNAPSE-12, SYNAPSE-13)
+
+Once a backend is named, help is the backend's alone. A **listing**
+(`synapse -P 4455 menger`, `… menger tickets`) is gh's shape: a usage line,
+then one line per activation and per method — its name and summary (the
+first sentence of its description, fitted to the line) and no flags — the
+methods in their schema `group`s (in the order they first appear,
+alphabetical within; one METHODS section when none is given; the ungrouped
+as OTHER), then `Run '… <method> --help' for its options.` In a caller's view
+(AUTH-8) the `you are …` header stays and each line ends with its grant and
+where it is held. A **method's page** (`… tickets set_status --help`) is
+cargo's: the description; the long description; `Usage: … --id <ID>
+--status <STATUS> [OPTIONS]`; `Options:` aligned, required first, optional in
+[brackets], each with its type, description and `[values: …]` (a property's
+`x-plexus-values`, else a string enum's literals); `Example:` — the schema's
+`examples` as command lines under their notes (a list inside an object goes
+whole as `-p '{…}'`, SYNAPSE-9), else one synthesised from the required
+options; and, in a caller's view, `Requires: GRANT on the scope of --TARGET
+(you hold it on …)`. A hub that sends none of the new fields renders the same
+shape without them. `Synapse.Algebra.Render.renderListing` and
+`Synapse.CLI.Help.renderMethodPage`; `test/RenderSpec.hs` pins both.
+
 ## Notes & `_note` (SYNAPSE-11)
 
 Notes are dated, untitled thoughts kept in one place — `$SYNAPSE_NOTES_DIR`,

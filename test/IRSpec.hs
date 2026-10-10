@@ -106,8 +106,9 @@ irSpec ir = do
       forM_ (Map.elems $ irMethods ir) $ \method -> do
         let helpText = renderMethodHelp ir method
         T.length helpText `shouldSatisfy` (> 0)
-        -- Help should contain method name
-        helpText `shouldSatisfy` T.isInfixOf (mdFullPath method)
+        -- Help should contain method name (SYNAPSE-13: in its usage line,
+        -- as it is typed: synapse <namespace> <method>)
+        helpText `shouldSatisfy` T.isInfixOf (mdName method)
 
     it "all type refs resolve" $
       forM_ (Map.elems $ irMethods ir) $ \method -> do

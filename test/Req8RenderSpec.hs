@@ -2,7 +2,10 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 -- | REQ-8 acceptance: synapse renderer shows per-param x-plexus-source
--- annotations inline when rendering a plugin's methods.
+-- annotations inline when rendering a method's help.
+--
+-- SYNAPSE-13: a listing no longer shows parameters (one line per method),
+-- so the annotations are pinned on the method's page, built from the IR.
 module Main where
 
 import Data.Aeson (Value)
@@ -15,7 +18,10 @@ import System.Exit (exitFailure, exitSuccess)
 import qualified Plexus.Schema.Recursive
 import Plexus.Schema.Recursive
   ( PluginSchema(..), MethodSchema(..) )
-import Synapse.Algebra.Render (renderSchema)
+import qualified Data.Map.Strict as Map
+import Synapse.CLI.Help (renderMethodHelp)
+import Synapse.IR.Builder (extractMethodDef)
+import Synapse.IR.Types (IR(..), MethodDef(..), emptyIR)
 
 -- ─── Fixture ──────────────────────────────────────────────────
 
@@ -34,7 +40,6 @@ fixture = PluginSchema
   , psChildren        = Nothing
   , psDeprecation     = Nothing
   , psRoles = Nothing, psView = Nothing
-  , psRequest         = Nothing
   }
   where
     method1 = MethodSchema
@@ -50,7 +55,7 @@ fixture = PluginSchema
       , methodDeprecation   = Nothing
       , methodParamSchemas  = Nothing
       , methodRole          = defaultRole
-      , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False
+      , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False, methodGroup = Nothing, methodExamples = []
       }
 
 -- | Stub role — renderSchema doesn't branch on role for this test.
@@ -91,7 +96,9 @@ main = do
         putStrLn $ "  [FAIL] " <> name <> ": " <> reason
         IORef.modifyIORef' failures (+ 1)
 
-  let out = renderSchema fixture
+  let (types, md) = extractMethodDef "svc" "svc" (head (psMethods fixture))
+      ir = emptyIR { irMethods = Map.singleton (mdFullPath md) md, irTypes = types }
+      out = renderMethodHelp ir md
 
   putStrLn "=== REQ-8: per-param source annotations in renderer ==="
   putStrLn "(rendered output)"
