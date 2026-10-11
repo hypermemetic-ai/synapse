@@ -383,42 +383,6 @@ Invocation flags override the defaults store per key. CLI flags apply only to th
 
 The pre-SELF convention was `~/.plexus/tokens/<backend>` holding a raw JWT. On the first `loadDefaults` call for a backend that has a legacy file but no `defaults.json`, synapse auto-migrates: the JWT becomes `cookies.access_token = literal:<jwt>` in the new file, and the legacy file is deleted. An INFO log line names both paths and suggests upgrading to keychain storage.
 
-## Notes: `_note`
-
-A note is a thought written down before it is a ticket: dated, never
-titled, kept in one place — `$SYNAPSE_NOTES_DIR`, else `~/.plexus/notes`,
-whatever directory or backend synapse is run from. Each note is one
-markdown file, `<id>.md`, whose frontmatter holds only its `date` (UTC) and
-whose id is the moment it was taken (`20261010-150312`; `-2`, `-3` for more
-in the same second). Writing, listing and reading notes is local: no
-backend need be running.
-
-```bash
-synapse _note add "the palette should remember its last query"
-echo "watch drops events when the laptop sleeps" | synapse _note add
-synapse _note list                 # waiting notes, newest first (--all: upgraded too; --json)
-synapse _note show 20261010-1503   # an id, or the start of exactly one
-synapse _note path                 # where notes live
-```
-
-A note becomes a ticket with `upgrade`: `tickets.create` on the backend
-(`--backend`, default `menger`), reached as any synapse call is — so its
-port goes before `_note`:
-
-```bash
-synapse -P 4455 _note upgrade 20261010-1503 --epic MENGER --parent MENGER-2
-# upgraded 20261010-150312 → MENGER-41  (menger tickets.create)
-```
-
-The ticket's title is `--title`, else the note's first line with words
-(markdown marks dropped, at most 80 characters, cut at a word); its body is
-the note's text and a line saying when it was noted; `--kind` and
-`--parent` are passed only when given. The note is kept, its frontmatter
-now naming the `ticket`, the `backend` and when it was `upgraded`, and
-`list` no longer shows it (`list --all` does, with `→ MENGER-41`). A note
-already upgraded is refused; a backend's refusal is printed and leaves the
-note as it was.
-
 ## Output Rendering
 
 Synapse renders streaming responses through a Mustache template pipeline:

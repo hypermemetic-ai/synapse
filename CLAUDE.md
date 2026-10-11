@@ -194,19 +194,6 @@ options; and, in a caller's view, `Requires: GRANT on the scope of --TARGET
 shape without them. `Synapse.Algebra.Render.renderListing` and
 `Synapse.CLI.Help.renderMethodPage`; `test/RenderSpec.hs` pins both.
 
-## Notes & `_note` (SYNAPSE-11)
-
-Notes are dated, untitled thoughts kept in one place — `$SYNAPSE_NOTES_DIR`,
-else `~/.plexus/notes`, one markdown file per note — that can be upgraded to
-tickets. Local except `upgrade` (`Synapse.Note`, `Synapse.Note.Command`).
-
-```bash
-synapse _note add "a thought"           # or pipe it in
-synapse _note list [--all] [--json]
-synapse _note show <id-or-prefix>
-synapse -P 4455 _note upgrade <id> --epic MENGER [--title T] [--kind K] [--parent P]
-```
-
 ## Low-Level Plexus RPC
 
 For debugging or when synapse isn't available, use `websocat` directly.
@@ -269,9 +256,6 @@ synapse/
 │   │   └── Builder.hs          # Schema -> IR transformation
 │   ├── Backend/
 │   │   └── Discovery.hs        # Backend discovery via registry
-│   ├── Note.hs                  # SYNAPSE-11: notes on disk, and the ticket one becomes
-│   ├── Note/
-│   │   └── Command.hs           # synapse _note add · list · show · upgrade · path
 │   └── Self/
 │       ├── Commands.hs          # _self meta-command dispatcher
 │       ├── Template.hs          # Template CRUD operations

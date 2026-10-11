@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            3.14.4
+version:            3.14.5
 synopsis:           Schema-driven CLI for Plexus RPC servers
 license:            MIT
 author:
@@ -64,8 +64,6 @@ library
     Synapse.Self.Protocol.StreamTracker
     Synapse.Self.Protocol.Reporter
     Synapse.Self.Protocol.TestRunner
-    Synapse.Note
-    Synapse.Note.Command
     Synapse.Identity.Proof
     Synapse.Identity.Store
     Synapse.Identity.Session
@@ -444,27 +442,6 @@ test-suite self-test
     temporary >= 1.3 && < 1.4,
     base64-bytestring >= 1.2 && < 1.3,
     unix >= 2.7 && < 2.9
-  hs-source-dirs:   test
-  default-language: GHC2021
-  default-extensions:
-    OverloadedStrings
-  ghc-options:      -threaded
-
-test-suite note-test
-  -- SYNAPSE-11: notes — the file, ids, order, lookup, the ticket a note
-  -- becomes, and every way an upgrade goes (the backend a stub).
-  type:             exitcode-stdio-1.0
-  main-is:          NoteSpec.hs
-  build-depends:
-    base >= 4.17 && < 5,
-    plexus-synapse,
-    text >= 2.0 && < 2.2,
-    aeson >= 2.2 && < 2.3,
-    directory >= 1.3 && < 1.4,
-    filepath >= 1.4 && < 1.6,
-    hspec >= 2.10 && < 2.12,
-    time >= 1.12 && < 1.15,
-    temporary >= 1.3 && < 1.4
   hs-source-dirs:   test
   default-language: GHC2021
   default-extensions:
