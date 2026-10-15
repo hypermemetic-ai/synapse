@@ -82,7 +82,8 @@ Arguments are derived from JSON Schema. The CLI accepts simple values:
 - Strings: `--name "my-cone"`
 - UUIDs: `--id "550e8400-e29b-41d4-a716-446655440000"` or just `--id my-cone`
 - Booleans: `--ephemeral` (bare = true), `--ephemeral true`, `--ephemeral=false`
-- Values that begin with dashes (a markdown body with frontmatter): `--body "$(cat body.md)"` or `--body="$(cat body.md)"`; a flag that takes a value takes the next argument whatever it begins with (see README "Flag values")
+- A value from a file or stdin (SYNAPSE-10, 3.14.6): `--body @body.md`, `--body -`, `-p @params.json`; `@@text` is a literal `@text`. The shell caps one argument at 128 KB, so `--body "$(cat body.md)"` fails past that; `@file` never does (see README "Flag values")
+- Values that begin with dashes (a markdown body with frontmatter): `--body @body.md`, `--body "$(cat body.md)"` or `--body="$(cat body.md)"`; a flag that takes a value takes the next argument whatever it begins with (see README "Flag values")
 - Lists of scalars: `--tags a,b,c` or `--tags a --tags b`; an element containing a comma is double-quoted, with the quotes protected from the shell: `--tags '"a,b",c'` (see README "Lists")
 - Raw JSON override: `-p '{"custom": "params"}'`
 

@@ -248,7 +248,10 @@ renderMethodPage MethodPage{..} ir md = T.unlines (dropTrailing body)
       [] -> [MethodExample (synthesiseExample ir md (fmap methodParams mpSchema >>= id)) Nothing]
       es -> es
     exampleBlock =
-      ["", if length examples == 1 then "Example:" else "Examples:"]
+      -- SYNAPSE-10: where a value may come from, on every method page
+      [ ""
+      , "A value may be read from a file (--flag @FILE) or stdin (--flag -); @@text sends a literal @text."
+      , "", if length examples == 1 then "Example:" else "Examples:"]
         ++ concat (zipWith exampleLines [0 :: Int ..] examples)
     exampleLines i ex =
       [ "" | i > 0 ]
