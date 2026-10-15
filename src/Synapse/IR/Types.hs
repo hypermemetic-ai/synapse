@@ -380,6 +380,10 @@ data ParamDef = ParamDef
     --   renderer, hub-codegen JSDoc) read this to identify where each param
     --   is sourced from. @Nothing@ means the schema lacked the extension —
     --   treat as RPC-sourced.
+  , pdValues      :: Maybe [Text]
+    -- ^ SYNAPSE-17: the values the parameter takes, as its schema hints them
+    --   (@x-plexus-values@). Omitted from the JSON when 'Nothing', so an IR
+    --   from a schema without the hint serializes exactly as before.
   }
   deriving stock (Show, Eq, Generic)
 
@@ -387,7 +391,7 @@ data ParamDef = ParamDef
 --   deserializing IR JSON that predates IR-14.
 --   All other fields preserve the derivation defaults.
 instance ToJSON ParamDef where
-  toJSON ParamDef{..} = object
+  toJSON ParamDef{..} = object $
     [ "pdName"        .= pdName
     , "pdType"        .= pdType
     , "pdDescription" .= pdDescription
@@ -396,6 +400,7 @@ instance ToJSON ParamDef where
     , "pdDeprecation" .= pdDeprecation
     , "pdSource"      .= pdSource
     ]
+    ++ maybe [] (\vs -> ["pdValues" .= vs]) pdValues
 
 instance FromJSON ParamDef where
   parseJSON = withObject "ParamDef" $ \o -> ParamDef
@@ -406,6 +411,7 @@ instance FromJSON ParamDef where
     <*> o .:? "pdDefault"
     <*> o .:? "pdDeprecation"
     <*> o .:? "pdSource"
+    <*> o .:? "pdValues"
 
 -- ============================================================================
 -- Type References

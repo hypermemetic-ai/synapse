@@ -1,0 +1,12 @@
+5 matches for 'comit' (as 'commit') in menger
+
+METHODS
+  tickets link_commits      Link commits to a ticket, or to many
+  tickets unlink_commits    Unlink commits from a ticket
+
+PARAMETERS
+  deployments record        [--commits <string[]>]    Every commit in previous..revision…
+  tickets link_commits      --commits <string[]>      Commit references, in link order
+  tickets unlink_commits    --commits <string[]>      Commit references to remove…
+
+Run 'synapse -P 4455 menger tickets link_commits --help' for its options.

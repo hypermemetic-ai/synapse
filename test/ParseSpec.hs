@@ -333,6 +333,7 @@ listParam name ty = ParamDef
   , pdDefault = Nothing
   , pdDeprecation = Nothing
   , pdSource = Nothing
+  , pdValues = Nothing
   }
 
 -- | A method with the given parameters

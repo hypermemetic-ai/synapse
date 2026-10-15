@@ -40,7 +40,7 @@ import Synapse.Algebra.Walk (walkSchemaPar)
 import Synapse.Monad
 import Synapse.IR.Types hiding (QualifiedName(..), qualifiedNameFull)
 import Synapse.IR.Types (QualifiedName(..), qualifiedNameFull, synapseVersion)
-import Plexus.Schema.Recursive (DeprecationInfo, ParamSchema(..))
+import Plexus.Schema.Recursive (DeprecationInfo, ParamSchema(..), paramValues)
 
 -- ============================================================================
 -- Building IR
@@ -508,6 +508,7 @@ extractParamsFromObject namespace o paramSchemas =
             , pdDefault = extractDefault v
             , pdDeprecation = lookupDeprecation (K.toText k)
             , pdSource = extractSource v
+            , pdValues = paramValues v
             }
         | (k, v) <- props
         ]

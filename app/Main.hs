@@ -29,6 +29,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Encoding as TE
 import Options.Applicative
+import qualified Options.Applicative.Help.Pretty as Pretty
 import System.Environment (getEnvironment)
 import Data.Version (showVersion)
 import qualified Paths_plexus_synapse as Meta
@@ -85,6 +86,8 @@ import qualified Synapse.Identity.Proof as Proof
 import qualified Synapse.Identity.Session as Session
 import qualified Synapse.Identity.Store as Store
 import System.Exit (ExitCode(..), exitWith)
+import qualified Synapse.Find as Find
+import Synapse.IR.Cache (newIRCache, defaultCacheConfig)
 
 -- ============================================================================
 -- Types
@@ -123,6 +126,7 @@ data Args = Args
   { argOpts    :: SynapseOpts   -- ^ Synapse-level options
   , argBackend :: Maybe Text    -- ^ Backend name (first positional)
   , argPath    :: [Text]        -- ^ Path segments and --key value params (raw)
+  , argFind    :: Maybe Find.FindOpts  -- ^ SYNAPSE-17: a search (_find), not a call
   }
   deriving Show
 
@@ -418,6 +422,12 @@ main = do
     Just backend
       -- Handle --help/-h if it somehow ends up as the backend
       | backend `elem` ["--help", "-h"] -> TIO.putStr cliHeader
+      -- SYNAPSE-17: _find BACKEND [activation…] WORDS… — a search over the
+      -- backend's schema, reached as a call to that backend is
+      | backend == "_find" -> do
+          fo <- parseBuiltin "_find" Find.findInfo (argPath args)
+          runWithDiscovery discovery (Find.foBackend fo)
+            args { argBackend = Just (Find.foBackend fo), argPath = [], argFind = Just fo }
       -- Handle _self meta-commands
       | backend == "_self" ->
           -- SELF-4 verbs (synapse _self <backend> <verb>) dispatch through
@@ -461,6 +471,17 @@ runSelfV4 rest = do
   case code of
     ExitSuccess   -> pure ()
     ExitFailure _ -> exitWith code
+
+-- | A builtin's options, its usage said as @synapse NAME …@.
+parseBuiltin :: String -> ParserInfo a -> [Text] -> IO a
+parseBuiltin name pinfo rest =
+  case execParserPure defaultPrefs pinfo (map T.unpack rest) of
+    Failure f -> do
+      let (msg, code) = renderFailure f ("synapse " <> name)
+      case code of
+        ExitSuccess -> putStrLn msg >> exitSuccess
+        _ -> hPutStrLn stderr msg >> exitWith code
+    r -> handleParseResult r
 
 -- | IDENTITY-43: @synapse _key new|show|list@ — local.
 runKey :: [Text] -> IO ()
@@ -731,9 +752,10 @@ withView host port env = do
 
 -- | Dispatch based on navigation result
 dispatch :: Args -> RendererConfig -> SynapseM ()
-dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
+dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererCfg = do
   -- Check for _self commands first (before anything else)
   case argBackend of
+    _ | Just fo <- argFind -> runFind fo
     Just "_self" -> do
       -- _self meta-command: parse subcommand and rest from argPath
       let (pathSegs, rawParams, _, _) = parsePathAndParams argPath
@@ -990,6 +1012,29 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath} rendererCfg = do
         , mpCaller = (info >>= infoView) == Just Caller
         }
 
+    -- SYNAPSE-17: search the backend's methods and parameters (the
+    -- caller's view of its schema, from the IR cache when its hash is
+    -- current) and answer in help's shape; -j: one JSON object per hit.
+    runFind :: Find.FindOpts -> SynapseM ()
+    runFind fo = do
+      backend <- asks seBackend
+      cache <- liftIO $ if soNoCache then pure Nothing else
+        (Just <$> (newIRCache . defaultCacheConfig =<< getHomeDirectory))
+          `E.catch` \(_ :: E.SomeException) -> pure Nothing
+      ir <- Find.loadCatalog cache
+      tty <- liftIO $ hIsTerminalDevice stdout
+      noColor <- liftIO $ lookupEnv "NO_COLOR"
+      let ans = Find.answer invokeProgram backend (tty && maybe True null noColor) fo ir
+      liftIO $ if not (Find.anMatched ans)
+        then do
+          if soJson
+            then TIO.hPutStrLn stderr ("No match for '" <> T.unwords (Find.foTerms fo) <> "' in " <> Find.anScope ans <> ".")
+            else TIO.putStr (Find.anText ans)
+          exitWith (ExitFailure 1)
+        else if soJson
+          then mapM_ (LBS.putStrLn . encode) (Find.anJson ans)
+          else TIO.putStr (Find.anText ans)
+
     -- AUTH-8: the page an anonymous caller sees: the door, and how to sign in.
     showAnonymous :: Maybe BackendInfo -> Maybe PluginSchema -> SynapseM ()
     showAnonymous info root = do
@@ -1160,12 +1205,16 @@ splash = T.unlines
 
 -- | Get CLI help text from optparse-applicative
 cliHeader :: Text
-cliHeader = splash <> T.pack (fst $ renderFailure failure "synapse") <> selfHelp
+cliHeader = splash <> T.pack (fst $ renderFailure failure "synapse") <> "\n"
   where
     failure = parserFailure defaultPrefs argsInfo (ShowHelpText Nothing) mempty
-    selfHelp = T.unlines
+
+-- | The meta-commands, under synapse's own options: in @synapse --help@ and
+-- on the page bare @synapse@ shows.
+metaCommands :: [Text]
+metaCommands =
       [ ""
-      , "Meta-commands (local, no RPC):"
+      , "Meta-commands:"
       , ""
       , "  synapse _key new|show|list [NAME]"
       , "      Ed25519 keys an agent proves who it is with (keychain, else"
@@ -1178,6 +1227,11 @@ cliHeader = splash <> T.pack (fst $ renderFailure failure "synapse") <> selfHelp
       , "      'me'); an agent logs in from a key. Later calls to that backend carry the"
       , "      session by themselves (--as AGENT / SYNAPSE_AS picks one; else the last"
       , "      logged in), and an agent's logs in again from the key when it ends"
+      , ""
+      , "  synapse -P PORT _find BACKEND [ACTIVATION...] WORDS... [--limit N] [--methods|--params]"
+      , "      Search the backend's methods and parameters: names and descriptions,"
+      , "      typos and abbreviations too (setpar finds set_parent), best first, in"
+      , "      help's shape (METHODS, PARAMETERS, MENTIONED IN); -j one JSON object per hit"
       , ""
       , "  synapse _self template"
       , "      Manage Mustache templates (CRUD operations)"
@@ -1447,13 +1501,14 @@ argsInfo = info (argsParser <**> versionOption <**> helper)
  <> header "synapse - Algebraic CLI for Hub"
  <> progDesc "synapse [OPTIONS] <backend> <path...> [--param value ...]"
  <> noIntersperse  -- Stop option parsing at first positional arg
+ <> footerDoc (Just (Pretty.vsep (map (Pretty.pretty . T.unpack) (drop 1 metaCommands))))
   )
   where
     versionOption = infoOption (showVersion Meta.version)
       ( long "version" <> short 'V' <> help "Show version" )
 
 argsParser :: Parser Args
-argsParser = Args <$> optsParser <*> backendParser <*> restParser
+argsParser = Args <$> optsParser <*> backendParser <*> restParser <*> pure Nothing
   where
     backendParser = optional $ T.pack <$> argument str
       ( metavar "BACKEND"

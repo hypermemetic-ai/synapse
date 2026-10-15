@@ -51,8 +51,8 @@ main = do
   serve <- lookupEnv "SYNAPSE_MOCK_HUB"
   case serve of
     Just "today" -> serveMockHub todaysHub
-    Just "anonymous" -> serveMockHub (Scenario AnonymousView True False mockState)
-    Just "caller" -> serveMockHub (Scenario CallerView True False mockState)
+    Just "anonymous" -> serveMockHub (Scenario AnonymousView True False mockState False)
+    Just "caller" -> serveMockHub (Scenario CallerView True False mockState False)
     _ -> do
       setEnv "SYNAPSE_NO_BROWSER" "1"
       hspec spec
@@ -315,7 +315,7 @@ spec = do
 
   describe "against a hub (MockHub)" $ do
     it "a person signs in through the browser: login_url, the loopback, the code, a session" $
-      withMockHub (Scenario AnonymousView True False mockState) $ \port -> do
+      withMockHub (Scenario AnonymousView True False mockState False) $ \port -> do
         lg <- logger
         r <- Session.loginPerson lg "127.0.0.1" port "menger" 10 (const (pure ()))
         fmap (\g -> (sgToken g, sgName g, sgPrincipal g)) r
@@ -323,7 +323,7 @@ spec = do
         fmap (fmap renderCallerHeader . sgWhoami) r
           `shouldBe` Right (Just "you are Ada Lovelace (oidc:workos/user_01M4\x2026) \x00B7 admin on *")
     it "a browser that comes back with another state signs no one in" $
-      withMockHub (Scenario AnonymousView True False "s_forged") $ \port -> do
+      withMockHub (Scenario AnonymousView True False "s_forged" False) $ \port -> do
         lg <- logger
         r <- Session.loginPerson lg "127.0.0.1" port "menger" 10 (const (pure ()))
         either ("state" `T.isInfixOf`) (const False) r `shouldBe` True
@@ -333,7 +333,7 @@ spec = do
         r <- Session.loginPerson lg "127.0.0.1" port "menger" 10 (const (pure ()))
         either ("no auth activation" `T.isInfixOf`) (const False) r `shouldBe` True
     it "an agent asks auth.login for a session where the hub has auth" $
-      withMockHub (Scenario CallerView True False mockState) $ \port -> do
+      withMockHub (Scenario CallerView True False mockState False) $ \port -> do
         lg <- logger
         seed <- generateSeed
         r <- Session.loginWithKey lg "127.0.0.1" port "menger" seed "worker-1" ["editor@MENGER-12"] (Just 3600)
@@ -345,7 +345,7 @@ spec = do
         r <- Session.loginWithKey lg "127.0.0.1" port "menger" seed "worker-1" ["editor@MENGER-12"] Nothing
         fmap (\l -> (Session.lrToken l, Session.lrScope l)) r `shouldBe` Right ("mgs_agent_session", ["editor@MENGER-12"])
     it "whoami: auth.whoami where there is one, nothing where neither answers" $ do
-      withMockHub (Scenario CallerView True False mockState) $ \port -> do
+      withMockHub (Scenario CallerView True False mockState False) $ \port -> do
         lg <- logger
         Session.whoamiWith lg "127.0.0.1" port "menger" "mgs_x" `shouldReturn` Just worker
       withMockHub todaysHub $ \port -> do

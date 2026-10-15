@@ -1,0 +1,8 @@
+1 match for 'queue urgency' in menger
+
+PARAMETERS
+  tickets queue    --urgency <string>    whenever | today | now | blocking
+                                         [values: whenever, today, now,
+                                         blocking]
+
+Run 'synapse -P 4455 menger tickets queue --help' for its options.

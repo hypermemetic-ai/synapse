@@ -50,6 +50,11 @@ module Synapse.CLI.Help
   , renderExample
   , synthesiseExample
   , shellQuote
+  , flagLabel
+  , flagType
+  , paramValuesOf
+  , serverSourced
+  , wrapWords
 
     -- * Parameter Help
   , renderParamHelp
@@ -195,25 +200,10 @@ renderMethodPage MethodPage{..} ir md = T.unlines (dropTrailing body)
 
     flagCol = 2 + min 28 (maximum (0 : map (T.length . flagText) callerParams ++ map (T.length . pdName) serverParams)) + 2
 
-    flagText p =
-      let f = flagDecorated p <> " <" <> shortType (pdType p) <> ">"
-      in if pdRequired p then f else "[" <> f <> "]"
-    flagDecorated p = case pdDeprecation p of
-      Just _ -> deprecationMarker <> " " <> flagOf p
-      Nothing -> flagOf p
+    flagText = flagLabel ir
 
     optionRows p = hangAt flagCol ("  " <> flagText p) (descOf p ++ extras p)
     serverRows p = hangAt flagCol ("  " <> pdName p) ["\x2190 " <> sourceLabel p]
-
-    -- A type as a flag takes it: an optional one as its inner type (the
-    -- brackets say it is optional), a named one by its own name.
-    shortType = \case
-      RefOptional inner -> shortType inner
-      RefArray inner -> shortType inner <> "[]"
-      t@(RefNamed qn) ->
-        let full = renderTypeRef ir t
-        in if full == qualifiedNameFull qn then qnLocalName qn else full
-      t -> renderTypeRef ir t
 
     descW = max 20 (width - flagCol)
     descOf p = maybe [] (wrapWords descW) (pdDescription p)
@@ -235,7 +225,7 @@ renderMethodPage MethodPage{..} ir md = T.unlines (dropTrailing body)
       _ -> Nothing
 
     -- The schema's hint (x-plexus-values), else the type's own literals.
-    valuesOf p = schemaValues (pdName p) <|> stringEnumValues ir (pdType p)
+    valuesOf p = pdValues p <|> schemaValues (pdName p) <|> stringEnumValues ir (pdType p)
     schemaValues name = do
       ms <- mpSchema
       Object o <- methodParams ms
@@ -288,6 +278,34 @@ hangAt col lead ds = case ds of
 
 flagOf :: ParamDef -> Text
 flagOf p = "--" <> kebab (pdName p)
+
+-- | SYNAPSE-13: a parameter as an option line shows it — its flag and the
+-- type it takes, in [brackets] when optional, ⚠ before a deprecated one
+-- (@--id <string>@, @[--snoozed <boolean>]@). SYNAPSE-17's search shows a
+-- parameter the same way.
+flagLabel :: IR -> ParamDef -> Text
+flagLabel ir p =
+  let decorated = case pdDeprecation p of
+        Just _ -> deprecationMarker <> " " <> flagOf p
+        Nothing -> flagOf p
+      f = decorated <> " <" <> flagType ir (pdType p) <> ">"
+  in if pdRequired p then f else "[" <> f <> "]"
+
+-- | A type as a flag takes it: an optional one as its inner type (the
+-- brackets say it is optional), a named one by its own name.
+flagType :: IR -> TypeRef -> Text
+flagType ir = \case
+  RefOptional inner -> flagType ir inner
+  RefArray inner -> flagType ir inner <> "[]"
+  t@(RefNamed qn) ->
+    let full = renderTypeRef ir t
+    in if full == qualifiedNameFull qn then qnLocalName qn else full
+  t -> renderTypeRef ir t
+
+-- | The values a parameter takes: its schema's hint (@x-plexus-values@),
+-- else its type's literals when it is a string enum.
+paramValuesOf :: IR -> ParamDef -> Maybe [Text]
+paramValuesOf ir p = pdValues p <|> stringEnumValues ir (pdType p)
 
 kebab :: Text -> Text
 kebab = T.replace "_" "-"

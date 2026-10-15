@@ -20,6 +20,8 @@ module MockHub
   , serveMockHub
   , mockCode
   , mockState
+  , catalogHub
+  , schemaCalls
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -36,7 +38,9 @@ import qualified Data.Text.Encoding as TE
 import qualified Network.Socket as N
 import qualified Network.Socket.ByteString as NB
 import qualified Network.WebSockets as WS
+import qualified Data.Vector as V
 import System.IO (hFlush, stdout)
+import System.IO.Unsafe (unsafePerformIO)
 
 data ViewMode = NoView | AnonymousView | CallerView
   deriving (Eq, Show)
@@ -46,10 +50,22 @@ data Scenario = Scenario
   , scAuth          :: Bool   -- ^ has the auth activation (auth.login, auth.whoami, …)
   , scSessionLogin  :: Bool   -- ^ has IDENTITY-42's session.login (today's menger)
   , scBrowserState  :: Text   -- ^ the state the browser comes back with (mockState: the right one)
+  , scCatalog       :: Bool   -- ^ SYNAPSE-17: serve menger's tickets and deployments as they were (test/fixtures)
   } deriving (Eq, Show)
 
 todaysHub :: Scenario
-todaysHub = Scenario NoView False True mockState
+todaysHub = Scenario NoView False True mockState False
+
+-- | SYNAPSE-17: a hub with a catalog to search — menger's tickets (17 of
+-- its methods) and deployments (3), as its schema had them on 2026-10-15;
+-- in a caller's view, tickets.delete (admin only) is not in it.
+catalogHub :: ViewMode -> Scenario
+catalogHub v = Scenario v False False mockState True
+
+-- | How many schema calls the mock hubs have answered (this process).
+{-# NOINLINE schemaCalls #-}
+schemaCalls :: IORef Int
+schemaCalls = unsafePerformIO (newIORef 0)
 
 mockCode, mockState :: Text
 mockCode = "c_19ab"
@@ -142,8 +158,16 @@ infoFor sc = case scView sc of
 
 callMethod :: Scenario -> Bool -> Text -> Object
            -> (Text -> Value -> IO ()) -> (Text -> [(K.Key, Value)] -> IO ()) -> IO ()
-callMethod sc _signedIn inner args dat err = case inner of
+callMethod sc _signedIn inner args dat err = do
+ if ".schema" `T.isSuffixOf` inner then atomicModifyIORef' schemaCalls (\n -> (n + 1, ())) else pure ()
+ case inner of
   "menger.schema" -> dat "menger.schema" (rootSchema sc)
+  "tickets.schema" | scCatalog sc -> do
+      Just (Object o) <- decodeFileStrict "test/fixtures/find-tickets.json"
+      dat "tickets.schema" (Object (catalogView sc o))
+  "deployments.schema" | scCatalog sc -> do
+      Just v <- decodeFileStrict "test/fixtures/find-deployments.json"
+      dat "deployments.schema" (v :: Value)
   "auth.schema" | scAuth sc -> dat "auth.schema" authSchema
   "tickets.schema" | scView sc /= AnonymousView -> dat "tickets.schema" (ticketsSchema sc)
   "auth.whoami" | scAuth sc -> dat "auth.whoami" (object
@@ -212,10 +236,13 @@ rootSchema :: Scenario -> Value
 rootSchema sc = object $
   [ "namespace" .= ("menger" :: Text), "version" .= ("1.0.0" :: Text)
   , "description" .= ("Central routing and introspection" :: Text)
-  , "hash" .= (case scView sc of { AnonymousView -> "v-anon-3c1f"; _ -> "r0" } :: Text)
+  , "hash" .= (case scView sc of { AnonymousView -> "v-anon-3c1f"; CallerView | scCatalog sc -> "rc-v9a77"; _ | scCatalog sc -> "rc0"; _ -> "r0" } :: Text)
   , "children" .= children ]
   where
     children = case scView sc of
+      _ | scCatalog sc ->
+        [ object ["namespace" .= ("tickets" :: Text), "description" .= ("Plans as data" :: Text), "hash" .= ("t0" :: Text)]
+        , object ["namespace" .= ("deployments" :: Text), "description" .= ("Deployments" :: Text), "hash" .= ("d0" :: Text)] ]
       AnonymousView -> [object ["namespace" .= ("auth" :: Text), "methods" .= [
         object ["name" .= ("providers" :: Text), "public" .= True],
         object ["name" .= ("login" :: Text), "public" .= True],
@@ -248,6 +275,16 @@ ticketsSchema sc = object $
       , "params" .= object ["type" .= ("object" :: Text), "required" .= (["id"] :: [Text]),
           "properties" .= object ["id" .= object ["type" .= ("string" :: Text), "description" .= ("Ticket id, e.g. MNG-2" :: Text)]]] ]
       <> (if caller then [ "grant" .= ("tickets." <> n), "held_on" .= (held :: [Text]) ] <> maybe [] (\t -> ["target" .= (t :: Text)]) target else [])
+
+-- | The tickets schema as the caller's view shows it: without what only an
+-- admin holds (tickets.delete).
+catalogView :: Scenario -> Object -> Object
+catalogView sc o
+  | scView sc /= CallerView = o
+  | otherwise = KM.insert "view" (String "caller") (maybe o (\ms -> KM.insert "methods" (dropDelete ms) o) (KM.lookup "methods" o))
+  where
+    dropDelete (Array ms) = Array (V.filter (\case { Object m -> KM.lookup "name" m /= Just (String "delete"); _ -> True }) ms)
+    dropDelete v = v
 
 str :: Text -> Object -> Text
 str k o = case KM.lookup (K.fromText k) o of

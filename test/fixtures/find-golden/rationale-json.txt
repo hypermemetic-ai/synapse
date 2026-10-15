@@ -1,0 +1,2 @@
+{"description":"Why (optional)","group":"parameters","kind":"param","matched":"rationale","param":"rationale","path":"tickets.answer","required":false,"score":1,"type":"string"}
+{"description":"Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket","group":"mentioned","kind":"method","matched":"rationale","path":"tickets.inputs","score":0.3}

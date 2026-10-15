@@ -8,6 +8,7 @@ module Synapse.Algebra.Render
   , Listing(..)
   , summarize
   , fitText
+  , quoteMask
   , renderMethod
   , renderMethodFull
   , renderChild
@@ -31,7 +32,7 @@ import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Vector as V
 import Control.Applicative ((<|>))
-import Data.Char (toLower)
+import Data.Char (isAlphaNum, toLower)
 import Data.List (sortOn)
 import Data.Maybe (fromMaybe, isJust, isNothing)
 
@@ -178,57 +179,112 @@ renderListing style Listing{..} PluginSchema{..} = T.unlines (dropTrailingBlanks
       in line : maybe [] (\di -> [T.replicate descCol " " <> formatDeprecationLine di]) (methodDeprecation m)
 
 -- | SYNAPSE-13: a description's summary — its first sentence: up to the
--- first @. @, @; @ or @: @ outside brackets (an @e.g.@ or @i.e.@ is not an
--- end), without the stop.
+-- first @. @, @; @ or @: @ outside brackets and quotes (an @e.g.@ or
+-- @i.e.@ is not an end), without the stop.
 summarize :: Text -> Text
-summarize desc = T.strip (go (0 :: Int) "" (T.unpack (T.strip desc)))
+summarize desc = T.strip (go (0 :: Int) "" (zip str (quoteMask str)))
   where
+    str = T.unpack (T.strip desc)
     go _ acc [] = T.pack (reverse acc)
-    go d acc (c : rest)
+    go d acc ((c, q) : rest)
+      | q = go d (c : acc) rest
       | c `elem` ("([{" :: String) = go (d + 1) (c : acc) rest
       | c `elem` (")]}" :: String) = go (max 0 (d - 1)) (c : acc) rest
       | d == 0, c `elem` (".;:" :: String), startsSpace rest, not (abbrev c acc) = T.pack (reverse acc)
       | otherwise = go d (c : acc) rest
-    startsSpace (' ' : _) = True
+    startsSpace ((' ', _) : _) = True
     startsSpace _ = False
     abbrev '.' acc = map toLower (reverse (takeWhile (/= ' ') acc)) `elem` ["e.g", "i.e", "etc", "vs", "cf"]
     abbrev _ _ = False
 
+-- | Which characters are inside a quoted span — @'…'@ or @`…`@, the quotes
+-- included. A @'@ opens a quote after a non-letter and before a non-space
+-- (so @ticket's@ is an apostrophe), and closes before a non-letter; a quote
+-- never closed is no quote.
+quoteMask :: String -> [Bool]
+quoteMask str = case openAt of
+  Just j -> take j marks ++ map (const False) (drop j marks)
+  Nothing -> marks
+  where
+    (marks, openAt) = go Nothing Nothing (0 :: Int) str
+    alnum = maybe False isAlphaNum
+    go open _ _ [] = ([], fmap snd open)
+    go open prev i (c : rest) =
+      let next = case rest of { (x : _) -> Just x; [] -> Nothing }
+          (m, open') = case open of
+            Nothing
+              | c == '`' -> (True, Just ('`', i))
+              | c == '\'', not (alnum prev), maybe False (/= ' ') next -> (True, Just ('\'', i))
+              | otherwise -> (False, Nothing)
+            Just (q, _)
+              | c == q, q == '`' || not (alnum next) -> (True, Nothing)
+              | otherwise -> (True, open)
+          (ms, o) = go open' (Just c) (i + 1) rest
+      in (m : ms, o)
+
 -- | SYNAPSE-13: a line's text in at most @w@ columns: whole when it fits;
 -- else without its parentheticals; else up to the last @ — @ that fits;
 -- else cut after a comma that keeps most of it, or at a word, ending in @…@.
+-- SYNAPSE-17: a quoted span (@'…'@, @`…`@) is never cut or changed inside:
+-- its brackets stay, and a cut ends before it (or keeps it whole when it
+-- leads the line).
 fitText :: Int -> Text -> Text
 fitText w t
   | T.length t <= w = t
   | T.length bare <= w = bare
   | Just c <- lastFitting 0 " \x2014 " = c
   | Just c <- lastFitting 1 ", ", T.length c * 10 >= w * 6 = c <> "\x2026"
-  | otherwise = wordCut (T.words bare)
+  | otherwise = wordCut atoms
   where
-    bare = tidy (dropParens t)
-    -- the longest prefix ending before @sep@ that fits (with @room@ for an …)
+    chars = T.unpack t
+    (bareCs, bareMask) = unzip (tidy (dropParens (zip chars (quoteMask chars))))
+    bare = T.pack bareCs
+    -- the longest prefix ending before @sep@ (outside a quote) that fits
+    -- (with @room@ for an …)
     lastFitting room sep =
-      case [p | (p, _) <- T.breakOnAll sep bare, T.length p + room <= w, not (T.null (T.strip p))] of
+      case [ p | (p, _) <- T.breakOnAll sep bare, T.length p + room <= w
+               , not (T.null (T.strip p)), not (quotedAt (T.length p)) ] of
         [] -> Nothing
         ps -> Just (T.stripEnd (last ps))
+    quotedAt i = i < length bareMask && bareMask !! i
+    -- words, a quoted span with its spaces one of them
+    atoms = map (T.pack . map fst) (splitAtoms (zip bareCs bareMask))
+    splitAtoms cs = case dropWhile (\(c, q) -> c == ' ' && not q) cs of
+      [] -> []
+      cs' -> let (a, rest) = break (\(c, q) -> c == ' ' && not q) cs' in a : splitAtoms rest
+    quotedAtom x = T.any (`elem` ("'`" :: String)) x
     wordCut ws = go "" ws
       where
         go acc [] = acc
         go acc (x : xs)
           | T.length (join acc x) + 1 <= w = go (join acc x) xs
-          | T.null acc = T.take (max 1 (w - 1)) x <> "\x2026"
+          | T.null acc = if quotedAtom x then x else T.take (max 1 (w - 1)) x <> "\x2026"
           | otherwise = T.dropWhileEnd (`elem` (",;:" :: String)) acc <> "\x2026"
         join acc x = if T.null acc then x else acc <> " " <> x
-    -- words rejoined, and no space left before a comma or a stop
-    tidy x = foldr (\p -> T.replace (" " <> p) p) (T.unwords (T.words x)) [",", ".", ";", ":"]
-    dropParens = T.pack . strip (0 :: Int) . T.unpack
+    -- whitespace runs outside quotes made one space, none left before a
+    -- comma or a stop, none at the ends
+    tidy = trimEnds . noSpaceBefore . collapse
+      where
+        collapse [] = []
+        collapse ((c, False) : rest)
+          | isSpaceC c = (' ', False) : collapse (dropWhile (\(x, q) -> isSpaceC x && not q) rest)
+        collapse (x : rest) = x : collapse rest
+        noSpaceBefore ((' ', False) : x@(c, False) : rest)
+          | c `elem` (",.;:" :: String) = noSpaceBefore (x : rest)
+        noSpaceBefore (x : rest) = x : noSpaceBefore rest
+        noSpaceBefore [] = []
+        trimEnds = reverse . dropWhile blank . reverse . dropWhile blank
+        blank (c, q) = isSpaceC c && not q
+        isSpaceC x = x == ' ' || x == '\n' || x == '\t'
+    -- parentheticals outside quotes dropped (a quote inside one goes with it)
+    dropParens = strip (0 :: Int)
       where
         strip _ [] = []
-        strip d (c : rest)
-          | c == '(' = strip (d + 1) rest
-          | c == ')' && d > 0 = strip (d - 1) rest
+        strip d (x@(c, q) : rest)
+          | not q, c == '(' = strip (d + 1) rest
+          | not q, c == ')', d > 0 = strip (d - 1) rest
           | d > 0 = strip d rest
-          | otherwise = c : strip d rest
+          | otherwise = x : strip d rest
 
 -- | Words wrapped greedily to a width (at least 20); a word longer than the
 -- width stands on its own line.

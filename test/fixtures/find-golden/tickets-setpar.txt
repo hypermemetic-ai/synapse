@@ -1,0 +1,6 @@
+1 match for 'setpar' (as 'set_parent') in menger tickets
+
+METHODS
+  tickets set_parent    Set a ticket's parent — the ticket it is an output of
+
+Run 'synapse -P 4455 menger tickets set_parent --help' for its options.

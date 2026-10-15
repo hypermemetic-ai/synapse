@@ -1,0 +1,9 @@
+2 matches for 'watch filter' in menger
+
+PARAMETERS
+  tickets watch     [--filter <string>]    A filter, e.g.…
+
+MENTIONED IN
+  tickets inputs    Every input with its kind, question, options … watch …
+
+Run 'synapse -P 4455 menger tickets watch --help' for its options.
