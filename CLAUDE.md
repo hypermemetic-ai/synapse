@@ -194,6 +194,15 @@ options; and, in a caller's view, `Requires: GRANT on the scope of --TARGET
 shape without them. `Synapse.Algebra.Render.renderListing` and
 `Synapse.CLI.Help.renderMethodPage`; `test/RenderSpec.hs` pins both.
 
+**Search** (SYNAPSE-17): `synapse -P 4455 _find menger <words…>` — every
+method and parameter whose name or description matches all the words (typos,
+prefixes, `setpar` → `set_parent`), best first, grouped METHODS · PARAMETERS ·
+MENTIONED IN in the listing's shape; `… _find menger tickets <words>` narrows,
+`--limit N`, `--methods` / `--params`, `-j` one JSON object per hit. The IR is
+cached on disk under the root schema's hash and the caller's view (one schema
+call when nothing changed). `Synapse.Find`; `test/FindSpec.hs` pins the matcher
+and the pages against `test/MockHub.hs`'s catalog (`test/fixtures/`).
+
 ## Low-Level Plexus RPC
 
 For debugging or when synapse isn't available, use `websocat` directly.

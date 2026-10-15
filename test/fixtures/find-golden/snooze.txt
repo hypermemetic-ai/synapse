@@ -1,0 +1,9 @@
+2 matches for 'snooze' in menger
+
+METHODS
+  tickets snooze    Snooze a queued ticket for some minutes (1 to a week)
+
+PARAMETERS
+  tickets queued    [--snoozed <boolean>]    Include the snoozed ones
+
+Run 'synapse -P 4455 menger tickets snooze --help' for its options.

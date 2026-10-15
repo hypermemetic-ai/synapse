@@ -1,0 +1,231 @@
+{
+  "namespace": "deployments",
+  "version": "0.6.0",
+  "description": "Deployments: every deploy to any environment — record, list, environments, for_ticket, running, watch",
+  "hash": "d0",
+  "methods": [
+    {
+      "name": "record",
+      "description": "Record a deployment (DEPLOY-10's record): the tickets its commits carry run in the environment; yields deployed { deployment, carried, unlinked, entered, left, duplicate }",
+      "long_description": "Records one deployment — DEPLOY-10's record, its fields as the\nparameters (`deploy/record --send` passes the record whole as the\nparams object). `project` is a shortcode the store holds, any case;\n`environment` a name (kept lower case); `state` one of `started`,\n`succeeded`, `failed`, `rolled_back`; `revision` the commit now\nrunning (for `failed`, the one tried; for `rolled_back`, the one\nreturned to — `previous` the one taken out); `commits` the range it\ncarries, when the CI can list them; `tickets` ids it names itself.\nThe tickets whose linked commits are among `commits` and `revision`,\nplus `tickets`, run in the environment from `at` once it succeeds; a\nrollback, or a later deploy to an older revision, takes out what only\nthe undone deploys carried; `started` and `failed` count for nothing.\nA deployment never changes a status. Yields exactly one event:\n`deployed` — the deployment as kept, the tickets it carried, its\ncommits no ticket links, and the tickets that `entered` and `left`\nthe environment; `duplicate: true` and nothing written when the same\nrecord (project, environment, state, revision, and `source.run`,\nelse `at`) is kept already — or an in-band `error` naming every\nproblem, with nothing kept.",
+      "group": "write",
+      "hash": "33294ed0f9caba58",
+      "grant": "deployments.record",
+      "target": "project",
+      "params": {
+        "$defs": {
+          "DeploySource": {
+            "description": "Where to read the run that made a deployment.",
+            "properties": {
+              "run": {
+                "default": null,
+                "description": "Its run, as the CI names it — what a retry of the same record repeats.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "system": {
+                "default": null,
+                "description": "The CI: `menger-pipeline`, `github-actions`, …",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "default": null,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          }
+        },
+        "properties": {
+          "at": {
+            "default": null,
+            "description": "When: RFC 3339 or unix seconds (optional; default now)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commits": {
+            "default": null,
+            "description": "Every commit in previous..revision, when the CI can list them (optional)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "environment": {
+            "description": "Its name: test, staging, prod, pr-412 …",
+            "type": "string"
+          },
+          "previous": {
+            "default": null,
+            "description": "The commit that ran before (rolled_back: the one taken out) (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "Whose environment: a shortcode, any case (menger is MENGER)",
+            "type": "string"
+          },
+          "release": {
+            "default": null,
+            "description": "The artifact's name (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "description": "The commit now running (rolled_back: the one returned to; failed: the one tried); repo@sha outside the project's repository",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DeploySource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Where to read the run: { system, run, url } (optional; run makes a retry one deployment)"
+          },
+          "state": {
+            "description": "started | succeeded | failed | rolled_back",
+            "type": "string",
+            "x-plexus-values": [
+              "started",
+              "succeeded",
+              "failed",
+              "rolled_back"
+            ]
+          },
+          "tickets": {
+            "default": null,
+            "description": "Ticket ids the CI names itself, added to what the commits give (optional)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project",
+          "environment",
+          "state",
+          "revision"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list",
+      "description": "List deployments newest first, by project, environment, state and ticket; each with the tickets it carried",
+      "long_description": "The deployments matching every filter given, newest first — one\n`deployment` event each (with the tickets it carried, its unlinked\ncommits, and `live`: whether it still counts in its environment) —\nthen exactly one `page { next }`. `after` starts strictly after\n(older than) that deployment; `limit` caps the page. From the cache.",
+      "group": "read",
+      "hash": "111b46f6d7ddca9f",
+      "grant": "deployments.list",
+      "params": {
+        "properties": {
+          "after": {
+            "default": null,
+            "description": "Cursor: start strictly after (older than) this deployment id (optional)",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "environment": {
+            "default": null,
+            "description": "Only to this environment (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "At most this many; the page event carries the next cursor (optional)",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "project": {
+            "default": null,
+            "description": "Only this project's (a shortcode) (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "default": null,
+            "description": "Only in this state: started | succeeded | failed | rolled_back (optional)",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-plexus-values": [
+              "started",
+              "succeeded",
+              "failed",
+              "rolled_back"
+            ]
+          },
+          "ticket": {
+            "default": null,
+            "description": "Only those that carried this ticket (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "environments",
+      "description": "Each environment: what it runs, since when, its last deployment, how many tickets run there",
+      "long_description": "Every environment — of `project` when given — one `environment`\nevent each, by project and then in display order (test → staging →\nprod): what it runs, since when, its last deployment, and how many\ntickets run there.",
+      "group": "read",
+      "hash": "b185690e89122c86",
+      "grant": "deployments.environments",
+      "params": {
+        "properties": {
+          "project": {
+            "default": null,
+            "description": "Only this project's (a shortcode) (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    }
+  ]
+}

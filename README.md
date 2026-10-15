@@ -205,6 +205,53 @@ chat - Conversational interaction with a cone
 $ synapse --schema substrate cone
 ```
 
+### Help and search: `_find`
+
+A listing (`synapse -P 4455 menger`, `… menger tickets`) is one line per
+activation and method; a method's page (`… tickets set_status --help`) is its
+usage, aligned options and examples (SYNAPSE-12, SYNAPSE-13). When you don't
+know the name, search for it (SYNAPSE-17):
+
+```bash
+$ synapse -P 4455 _find menger comit
+5 matches for 'comit' (as 'commit') in menger
+
+METHODS
+  tickets link_commits      Link commits to a ticket, or to many
+  tickets unlink_commits    Unlink commits from a ticket
+
+PARAMETERS
+  deployments record        [--commits <string[]>]    Every commit in previous..revision…
+  tickets link_commits      --commits <string[]>      Commit references, in link order
+  tickets unlink_commits    --commits <string[]>      Commit references to remove…
+
+Run 'synapse -P 4455 menger tickets link_commits --help' for its options.
+```
+
+`synapse [OPTIONS] _find <backend> [activation…] <words…> [--limit N] [--methods | --params]`
+
+- Every method and parameter whose name or description matches **all** the
+  words, best first: an exact name, then a name's prefix (or a `snake_case`
+  segment's), then an abbreviation (`setpar` → `set_parent`, prefixes of its
+  segments in order) or a typo (one edit for 4–7 letters, two beyond), then a
+  word of a description. Ties: the shorter path, then alphabetical.
+- Grouped `METHODS` · `PARAMETERS` · `MENTIONED IN` (found only in a
+  description; left out for a method already listed above). A parameter line is
+  its method, its flag as the method's page shows it (`[brackets]` when
+  optional) and its description, with `[values: …]` under it.
+- The header says what a typo or an abbreviation was taken as; on a terminal
+  the matched characters are bold (piped, or with `NO_COLOR`, plain text).
+- Activation names before the words narrow it: `_find menger tickets setpar`.
+  `--limit N` (default 20; the footer says how many more), `--methods` /
+  `--params` for one group. Nothing found: the three nearest names, exit 1.
+- `-j` (before `_find`): one JSON object per hit — `kind` (method | param),
+  `path`, `param`, `type`, `required`, `description`, `values`, `group`,
+  `score`, `matched`.
+- Under login it searches the caller's view of the schema: a method the caller
+  can't see is never a hit. The IR is kept in `~/.cache/synapse/ir` under the
+  root schema's hash (and the caller's view), so a search costs one schema call
+  while nothing has changed; `--no-cache` walks the backend again.
+
 ## Parameters
 
 Synapse parses flags into typed JSON using the schema's IR:

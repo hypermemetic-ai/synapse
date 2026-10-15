@@ -1,0 +1,943 @@
+{
+  "namespace": "tickets",
+  "version": "0.6.0",
+  "description": "Plans as data — create, query, and watch the work DAG",
+  "hash": "t0",
+  "methods": [
+    {
+      "name": "get",
+      "description": "Get one ticket by id, or by path address SHORTCODE/path (e.g. PLEXUS/_MENGER/board)",
+      "long_description": "Yields exactly one event: `Ticket` if found, `NotFound` otherwise.\nWAVE-10: `id` may be a path address, `<SHORTCODE>/<path>` — the\nshortcode case-insensitive, the path exact — naming the one ticket of\nthat shortcode that holds the path; `NotFound` carries the address.",
+      "group": "read",
+      "hash": "ef8a1097c55b7485",
+      "grant": "tickets.get",
+      "params": {
+        "properties": {
+          "id": {
+            "description": "Ticket id, e.g. MNG-2 — or a path address, e.g. PLEXUS/_MENGER/board",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "list",
+      "description": "List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at",
+      "long_description": "Yields one row event per match, ordered by (epic, seq), then\nexactly one `page` event saying where the walk stands. The\n`parent` filter (AGS-19) yields exactly that ticket's children —\nsince SCALE-4 the one way to read them (a row carries only their\n`child_count`), and a page of them costs the page.\n\nMNG-9 adds the page: `after` is the exclusive cursor (a ticket id\n— the order is total and unique, so an id is a position), `limit`\ncaps the page, and `summary` swaps the `ticket` rows for `summary`\nrows that carry every field but the body. ACCESS-29: a page is 1,000\nrows unless `limit` says, and never past 10,000 ([`crate::limits`]).\nAn `after` naming no ticket\nis one in-band `error` and nothing else. SCALE-14: the rows come\nfrom the cache and the bodies from the database, read a page at a\ntime as the rows go out — the same events, never every body at\nonce.\n\nFILTER-4: `filter` (the language's text, FILTER-10) narrows the\nmatches further — ANDed with `epic`, `status` and `parent`, which are\nsugar beside it — answered from the cells, never by testing a\nticket; and `at` starts the page at a position among the matches\n(0-based) instead of after a cursor. Given either, the page event\ncarries `first`, the page's first row's position among the matches;\n`at` past the end is an empty page with `first = at` and `next:\nnull`; `at` with `after` is an in-band `error`, and so is a filter\nthe language does not take (every bad chunk named) or one that\nasks `under` or `text` (each named, with where it lives). Given\nneither, every event is what it was.\n\nFILTER-24: with a filter, `keep` (a ticket id: the nav's open ticket)\nis listed and counted as a match whatever the filter says of it — at\nits place, in `first` and `remaining` — when it is inside `epic`,\n`status` and `parent` and inside the caller's reach; otherwise, and\nwithout a filter, it changes nothing.",
+      "group": "read",
+      "hash": "3f3b16af61f63c53",
+      "grant": "tickets.list",
+      "params": {
+        "properties": {
+          "after": {
+            "default": null,
+            "description": "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "default": null,
+            "description": "Start at this position among the matches, 0-based, instead of after a cursor (optional; not with after); the page event carries first",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "epic": {
+            "default": null,
+            "description": "Epic prefix filter (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filter": {
+            "default": null,
+            "description": "A filter, e.g. 'ready and kind build and in SCALE' (FILTER-3's language; optional): ANDed with epic, status and parent; the page event then carries first",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keep": {
+            "default": null,
+            "description": "With a filter: this ticket id is listed and counted as a match whatever the filter says of it, e.g. the open ticket (optional; one inside epic, status and parent)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "At most this many tickets (default 1000, at most 10000); the page event carries the next cursor (optional)",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "parent": {
+            "default": null,
+            "description": "Only this ticket's children, e.g. PERF-3 (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "default": null,
+            "description": "Status filter: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled | Doc (optional)",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-plexus-values": [
+              "Pending",
+              "Ready",
+              "Coding",
+              "In Review",
+              "Blocked",
+              "Complete",
+              "Idea",
+              "Epic",
+              "Superseded",
+              "Canceled",
+              "Doc"
+            ]
+          },
+          "summary": {
+            "default": null,
+            "description": "Yield summary rows (every field but the body) instead of full tickets (optional)",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tz": {
+            "default": null,
+            "description": "The time zone a history filter's days are read in (today, yesterday, this week, a date): an IANA name, e.g. Europe/Berlin, UTC, or an offset, e.g. +02:00 (optional; default UTC)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "set_status",
+      "description": "Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children)",
+      "long_description": "Yields exactly one event: `StatusChanged`, `NotFound`, or `Error`.\nSDLC-7: the vocabulary is nine — the worker states `Coding` and\n`In Review` included — and the write is free: any status to any\nother, nothing gated (SDLC-4 owns transitions). SDLC-11: a doc has no\nlifecycle — `set_status` on one is an in-band `Error`, whatever the\nstatus — and `Doc` is a doc's own: setting it on any other kind is an\nin-band `Error` too. Neither writes anything.\n\nMENGER-13: the change is a transition — the caller's (`anonymous`\nwith login off), from `source` (`api` unless the call says `app` or\n`pipeline`), with its `message` — kept in the log and said on `watch`\nright after the `StatusChanged`. Into `Canceled`, the ticket's open\ninputs are withdrawn and every descendant still open work is\ncanceled in the same write, each a transition of `system`'s naming\nthe cause. Out of `Canceled`, its withdrawn inputs come back; with\n`restore_children`, so do the descendants its cancel canceled (and\nnothing has moved since), to the statuses they had.",
+      "group": "write",
+      "hash": "980645d2bd72bd64",
+      "grant": "tickets.set_status",
+      "target": "id",
+      "params": {
+        "properties": {
+          "id": {
+            "description": "Ticket id, e.g. MNG-2",
+            "type": "string"
+          },
+          "message": {
+            "default": null,
+            "description": "Why, kept in the transition (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "restore_children": {
+            "default": null,
+            "description": "Leaving Canceled: also put back, to the statuses they had, the descendants its cancel canceled and nothing has moved since (optional, default false; history's history_end names them)",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "source": {
+            "default": null,
+            "description": "Where the change comes from: app | api | pipeline (optional, default api) — kept in the transition",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-plexus-values": [
+              "app",
+              "api",
+              "pipeline"
+            ]
+          },
+          "status": {
+            "description": "New status: Pending | Ready | Coding | In Review | Blocked | Complete | Idea | Epic | Superseded | Canceled (case-insensitive; `active` is Coding; never Doc, a doc's own)",
+            "type": "string",
+            "x-plexus-values": [
+              "Pending",
+              "Ready",
+              "Coding",
+              "In Review",
+              "Blocked",
+              "Complete",
+              "Idea",
+              "Epic",
+              "Superseded",
+              "Canceled"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "set_parent",
+      "description": "Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one",
+      "long_description": "MNG-12: files an existing ticket as an output of `parent` — the\nverb AGS-19 left out. Adopts a ticket born parentless, or moves\none. Yields exactly one event: `ParentChanged` (the child, with the\nparent it had before), `NotFound` if `id` names no ticket, or an\nin-band `Error` when the parent does not exist or the chain would\nmake the ticket its own ancestor. `watch` also carries the parents'\nside: `ChildrenChanged` for the new parent and `ChildRemoved` for\nthe old one — each the parent's id and new `child_count` (SCALE-4).",
+      "group": "write",
+      "hash": "269aa40c2b5275ae",
+      "grant": "tickets.set_parent",
+      "target": "id",
+      "params": {
+        "properties": {
+          "id": {
+            "description": "Ticket id to file, e.g. AGS-2",
+            "type": "string"
+          },
+          "parent": {
+            "description": "Id of the ticket to file it under; any epic, must exist",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "parent"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "link_commits",
+      "description": "Link commits to a ticket, or to many (ids; one write, all or none) — the commits that finished it; yields commits_linked { ticket, added } per ticket",
+      "long_description": "SDLC-9: records which commits finished a ticket. Each entry is a\ncommit reference — a hexadecimal object name of 7 to 64 characters\n(stored lowercase), optionally prefixed by a repository and `@`\n(`77df9a0`, `plexus-macros@4f7114a`) — compared as text: the server\nhas no repository, so link the form you want kept. Every entry not\nalready on the ticket is appended, in the order given. Yields\nexactly one event: `CommitsLinked { ticket, added }` — `added` is\nwhat was newly linked, empty when nothing was (every entry already\nlinked, or none given), which writes and broadcasts nothing —\n`NotFound` if `id` names no ticket, or an in-band `Error` naming\nevery entry that is not a reference, or for a link past 256 commits\non the ticket; an error writes nothing. Moves `updated_unix` and\nnothing else — not the status. `watch` carries every\n`CommitsLinked` that added something. ACT-2: `ids` instead of `id`\nlinks them to each, in one write, all or none, one `CommitsLinked`\nper ticket (`cells_stream`).",
+      "group": "write",
+      "hash": "0cd064bcaab07858",
+      "grant": "tickets.link_commits",
+      "target": "id",
+      "params": {
+        "properties": {
+          "commits": {
+            "description": "Commit references, in link order: a hex object name of 7-64 characters, optionally repo@ before it — e.g. [\"77df9a0\", \"plexus-macros@4f7114a\"]",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "default": null,
+            "description": "Ticket id, e.g. MNG-10 (or ids)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ids": {
+            "default": null,
+            "description": "Ticket ids, instead of id: every one gets the commits, in one write, all or none",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "commits"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "unlink_commits",
+      "description": "Unlink commits from a ticket; yields commits_unlinked { ticket, removed }",
+      "long_description": "SDLC-9: the inverse of `link_commits` — every entry the ticket\ncarries comes off. The same references, compared the same way, all\nor nothing. Yields exactly one event: `CommitsUnlinked { ticket,\nremoved }` — `removed` empty when none of them was linked, which\nwrites and broadcasts nothing — `NotFound`, or an in-band `Error`\nnaming every entry that is not a reference. `watch` carries every\n`CommitsUnlinked` that removed something.",
+      "group": "write",
+      "hash": "1d1addd80858535d",
+      "grant": "tickets.unlink_commits",
+      "target": "id",
+      "params": {
+        "properties": {
+          "commits": {
+            "description": "Commit references to remove, as linked (the hash is compared lowercase)",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "Ticket id, e.g. MNG-10",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "commits"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delete",
+      "description": "Delete tickets for good (admin): refused while children, blockers, a shortcode, a component, a theme or a live input point at one, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones }",
+      "long_description": "ACT-5: tickets gone for good — refused while something points at\nthem unless told what moves; a tombstone kept, the body 30 days. The\nrules, the write and the events are [`crate::store::Deleted`]'s\nmodule's. Admin only. Yields `Deleted { ids, tombstones }`, or one\n`Error` naming every refused ticket and why.",
+      "group": "write",
+      "hash": "d34af40fc4539c0e",
+      "grant": "tickets.delete",
+      "target": "ids",
+      "params": {
+        "properties": {
+          "children": {
+            "default": null,
+            "description": "reparent (they move to its parent) | delete (they go too) — required when one has children",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-plexus-values": [
+              "reparent",
+              "delete"
+            ]
+          },
+          "filter": {
+            "default": null,
+            "description": "Instead of ids: the tickets this filter admits at the write (FILTER-3's language)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ids": {
+            "default": null,
+            "description": "Ticket ids, e.g. [\"MENGER-40\"] (or filter)",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "max": {
+            "default": null,
+            "description": "With a filter: the most tickets it may delete (default 500)",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "message": {
+            "default": null,
+            "description": "Why — kept in the tombstone (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tz": {
+            "default": null,
+            "description": "The time zone a history filter's days are read in (optional; default UTC)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unblock": {
+            "default": null,
+            "description": "Drop the blocks of the tickets that wait on one (optional; default false: refused)",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "ready_set",
+      "description": "Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter",
+      "long_description": "The DAG query: which tickets can start now? Yields one row event\nper member of the ready set — status `Ready` and every\n`blocked_by` entry `Complete` or `Superseded`; never a doc (SDLC-11),\nwhose status is `Doc` for good — ordered by\n(epic, seq), then one `page` event. A dangling blocker keeps its\nticket out (use `blockers` to see which ids dangle). The epic\nfilter applies to membership; blockers resolve globally.\n`after` / `limit` / `summary` page it exactly as `list` (MNG-9).\n\nFILTER-15: `filter` (the language's text, FILTER-10) narrows it to\nthe ready set ∧ the filter — a filtered page of `ready and (filter)`\nfrom the cells (`ready` is the ready set's rule), paged and counted\nas without it, the page event without `first`. A filter not taken,\nor one that asks `under` or `text`, is one in-band `error`; one that\nnarrows nothing (empty, a display part alone) is no filter.",
+      "group": "read",
+      "hash": "bfff3c3f68dde2ae",
+      "grant": "tickets.ready_set",
+      "params": {
+        "properties": {
+          "after": {
+            "default": null,
+            "description": "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "epic": {
+            "default": null,
+            "description": "Only tickets in this epic (optional; blockers still resolve globally)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filter": {
+            "default": null,
+            "description": "A filter, e.g. 'kind build and in SCALE' (FILTER-3's language; optional): the ready set and the filter",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "At most this many tickets; the page event carries the next cursor (optional)",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "summary": {
+            "default": null,
+            "description": "Yield summary rows (every field but the body) instead of full tickets (optional)",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tz": {
+            "default": null,
+            "description": "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "find",
+      "description": "Find tickets whose id or title contains the query (case-insensitive), optionally under a filter; summary rows, paged with after + limit",
+      "long_description": "SCALE-6: the jump palette's question, answered where the rows are\n— so a client that does not hold every row (SCALE-7) can still\nfind one. Yields one `summary` row per ticket whose id or title\ncontains `query`, case-insensitively with ASCII folding (AGS-18's\nrule, the palette's own), in (epic, seq) order — at most `limit`,\ndefault 50, what the palette shows — then exactly one `page`\nevent: `remaining` plus the rows is the palette's total. `query`\nis trimmed; empty or blank matches every ticket, so the palette\nopens on the head of the store. `after` pages it exactly as\n`list` (MNG-9) — a position, not a match — and one naming no\nticket is one in-band `error`. Ids and titles only: a jump aid,\nnot search over bodies.\n\nFILTER-15: `filter` (the language's text, FILTER-10) keeps the text\nmatches the filter admits, in the same order, paged and counted as\nwithout it — the needle tested only on the candidates the filter's\ncells admit, never on the rest of the store. A filter not taken, or\none that asks `under` or `text`, is one in-band `error`; one that\nnarrows nothing (empty, a display part alone) is no filter.",
+      "group": "read",
+      "hash": "271baa34dab2b4d2",
+      "grant": "tickets.find",
+      "params": {
+        "properties": {
+          "after": {
+            "default": null,
+            "description": "Cursor: start strictly after this ticket id, e.g. MNG-9 (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filter": {
+            "default": null,
+            "description": "A filter, e.g. 'not category done' (FILTER-3's language; optional): only the matches it admits",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "At most this many tickets (default 50); the page event carries the next cursor (optional)",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "query": {
+            "description": "Substring of the ticket id or title, case-insensitive (ASCII), trimmed; empty matches every ticket",
+            "type": "string"
+          },
+          "tz": {
+            "default": null,
+            "description": "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "member",
+      "description": "Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids",
+      "long_description": "FILTER-15: which of some tickets a filter admits — what a page that\nshows tickets it did not list (a ticket page, its blockers, its\nunlocks) asks of the global filter. Yields one `Member { id, matched\n}` per id, in the order given — `id` as given, `matched` whether the\nfilter admits the ticket it names; an id (or `SHORTCODE/path`\naddress) that names no ticket is `matched: false` — and nothing\nafter them: the stream's own `done` ends it. Each id is one lookup in\nthe filter's admitted cells, never a test of the ticket. At most\n1,000 ids: more, a filter not taken, or one that asks `under` or\n`text`, is one in-band `error` and nothing else.",
+      "group": "read",
+      "hash": "7c16bc91930dab59",
+      "grant": "tickets.member",
+      "params": {
+        "properties": {
+          "filter": {
+            "description": "A filter, e.g. 'status Ready' (FILTER-3's language; empty: every ticket)",
+            "type": "string"
+          },
+          "ids": {
+            "description": "Ticket ids (or SHORTCODE/path addresses), e.g. [\"FILTER-4\", \"FILTER-5\"]; at most 1000",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tz": {
+            "default": null,
+            "description": "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ids",
+          "filter"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "inputs",
+      "description": "Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket",
+      "long_description": "INPUT-3: the inputs store. Yields one `Input` per input of `ticket`\n(every ticket's, without one) whose ticket is in the shortcode `epic`\nand which is in `state` — its ticket, id, kind (`choice`, `multi`,\n`text`), question, options (`{ value, label, recommended }`, the\nbody's order), recommendation, state (`open`, `answered`, `closed`,\n`removed`), current answer (`{ value, rationale, source, at_unix }`,\n`null` with none) and whole history, oldest first — in the store's\norder of tickets, each ticket's inputs in its body's order and the\nremoved after. Nothing trails them; the stream's own `done` is the\nwhole answer. `NotFound` when `ticket` names no ticket; an unknown\n`state` is an in-band `Error`. From the cache; `watch` keeps a\nclient's copy current with `InputChanged`.\n\nFILTER-15: `filter` (the language's text, FILTER-10) keeps the inputs\nwhose ticket the filter admits — each such ticket one lookup in the\nfilter's admitted cells; every other parameter as without it. A\nfilter not taken, or one that asks `under` or `text`, is one in-band\n`error`; one that narrows nothing (empty, a display part alone) is no\nfilter.",
+      "group": "inputs",
+      "hash": "2db8c992c4f56e3c",
+      "grant": "tickets.inputs",
+      "params": {
+        "properties": {
+          "epic": {
+            "default": null,
+            "description": "Only inputs of tickets in this shortcode (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filter": {
+            "default": null,
+            "description": "A filter on the input's ticket, e.g. 'kind build' (FILTER-3's language; optional): only inputs of tickets it admits",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "default": null,
+            "description": "Only inputs in this state: open | answered | closed | removed | withdrawn (optional; withdrawn: its ticket is canceled)",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-plexus-values": [
+              "open",
+              "answered",
+              "closed",
+              "removed",
+              "withdrawn"
+            ]
+          },
+          "ticket": {
+            "default": null,
+            "description": "Only this ticket's inputs, e.g. INPUT-9 (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tz": {
+            "default": null,
+            "description": "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "answer",
+      "description": "Answer an input: record a value (checked against its kind and options) with a rationale, a source and the time; yields input_changed",
+      "long_description": "INPUT-3: answers an input — records `value` against `ticket`'s input\n`input`, with its `rationale`, its `source` (`app`: a viewer's click,\nwhich the host says; `api`, the default: anything else) and the\ntime. The value is typed by the input's kind and checked against the\noptions its body declares: `{\"type\": \"choice\", \"option\": …}` names\none, `{\"type\": \"multi\", \"options\": […]}` a set (kept in the body's\norder, each once; empty: none ticked), `{\"type\": \"text\", \"text\": …}`\na reply, not blank. Every answer is a history entry — a changed one,\nand the same one again. Yields exactly one event: `InputChanged` (the\ninput as it is now, its answer and history included), `NotFound` for\na ticket that is none, or an in-band `Error` — the ticket declares no\nsuch input, the value does not answer it, it is closed, or it was\nremoved from its body — and nothing is written. Never touches the\nbody. `watch` carries the `InputChanged`.",
+      "group": "inputs",
+      "hash": "70bf02c12a0e82ba",
+      "grant": "tickets.answer",
+      "target": "ticket",
+      "params": {
+        "$defs": {
+          "InputValue": {
+            "description": "INPUT-3: an answer's value, typed by its input's kind — internally\ntagged, as [`Placement`] is: `{\"type\": \"choice\", \"option\": \"archive\"}`\n(one option's `value`), `{\"type\": \"multi\", \"options\": [\"a\", \"b\"]}` (a set\nof them — stored in the order the body declares them, each once; it may\nbe empty: none ticked), `{\"type\": \"text\", \"text\": \"…\"}` (a reply, not\nblank). Through synapse, a param's fields are dotted flags:\n`--value.type choice --value.option archive`.",
+            "oneOf": [
+              {
+                "properties": {
+                  "option": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "choice",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "option"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "options": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "const": "multi",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "options"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "const": "text",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "properties": {
+          "input": {
+            "description": "The input's id in that ticket's body, e.g. landing",
+            "type": "string"
+          },
+          "rationale": {
+            "default": null,
+            "description": "Why (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "default": null,
+            "description": "app (a viewer's click, said by the host) | api (default)",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-plexus-values": [
+              "api",
+              "app"
+            ]
+          },
+          "ticket": {
+            "description": "Ticket id, e.g. INPUT-9",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/$defs/InputValue",
+            "description": "Typed by the input's kind: {\"type\": \"choice\", \"option\": \"archive\"} | {\"type\": \"multi\", \"options\": [\"a\", \"b\"]} | {\"type\": \"text\", \"text\": \"a reply\"}; through synapse, --value.type choice --value.option archive"
+          }
+        },
+        "required": [
+          "ticket",
+          "input",
+          "value"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "counts",
+      "description": "Each shortcode's number of tickets matching a filter, in shortcode order — the filtered extents (every ticket without one)",
+      "long_description": "FILTER-4: the filtered `extents`. Yields one `Count { epic, held }`\nper shortcode that holds a match of `filter`, in shortcode order,\nand nothing after them — the stream's own `done` ends it, as for\n`extents`. Without a filter, each shortcode's tickets. A sum over\nthe kept counts of the cells the filter admits: no ticket is tested,\nand the cost is the shortcodes and the cells, never the tickets.\nWith the counts, a client turns a position among the matches into a\n(shortcode, rank) by prefix sums, and asks `list { filter, at }`. A\nfilter not taken, or one that asks `under` or `text`, is one in-band\n`error` and nothing else. FILTER-24: `keep` (a ticket id inside the\ncaller's reach) is counted as a match whatever the filter says of it —\nonce — as `list { filter, keep }` pages it.",
+      "group": "overview",
+      "hash": "4e0222cf48261138",
+      "grant": "tickets.counts",
+      "params": {
+        "properties": {
+          "filter": {
+            "default": null,
+            "description": "A filter, e.g. 'ready and kind build' (FILTER-3's language; optional: every ticket)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keep": {
+            "default": null,
+            "description": "This ticket id is counted as a match whatever the filter says of it, e.g. the open ticket (optional)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tz": {
+            "default": null,
+            "description": "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "facets",
+      "description": "Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value",
+      "long_description": "FILTER-4: the counts behind every menu (Linear's facets). For each\nfield — `status`, `category`, `kind`, `severity`, `blocked`, `ready`,\n`has commits`, `menger doc` (FILTER-21), `in`, in that order — the\ntickets matching `base` and `filter` with `filter`'s own groups for\nthat field set aside (a group is a field's own when every predicate\nin it names that field; `base`'s are never set aside), counted by\nvalue: one `Facet { field, value, held }` per value with `held` above\n0 — `field` as the language spells it, `value` canonical (`Coding`,\n`build`, `none`, `yes`/`no` for the four flags, the shortcode for\n`in`), statuses in the store's order of statuses, shortcodes in\nshortcode order — then the stream's done. A sum over kept cell\ncounts, never a ticket. A filter not taken, or one that asks `under`\nor `text`, is one in-band `error` and nothing else.",
+      "group": "overview",
+      "hash": "dc0a74d52ced9e24",
+      "grant": "tickets.facets",
+      "params": {
+        "properties": {
+          "base": {
+            "default": null,
+            "description": "A filter that always applies, e.g. the global one (optional): never set aside",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filter": {
+            "default": null,
+            "description": "The filter whose menus are counted (optional): its own groups for a field are set aside for that field's counts",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tz": {
+            "default": null,
+            "description": "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "queue",
+      "description": "Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why; queued again it is raised, never lowered; yields queued { entry, ticket, action }",
+      "long_description": "MENGER-39: puts a ticket in front of the owner — at an urgency, for a\nreason; `blocking` names the input that answers it. Queued again: the\nurgency raised, never lowered. Yields one `queued`, or an `error`.",
+      "group": "write",
+      "hash": "19fe1ca8b68a2e4d",
+      "grant": "tickets.queue",
+      "target": "id",
+      "params": {
+        "properties": {
+          "id": {
+            "description": "Ticket id, e.g. MENGER-39",
+            "type": "string"
+          },
+          "input": {
+            "default": null,
+            "description": "The input on the ticket whose answer is asked (required for blocking); closing it unqueues the ticket",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why the owner should look (required)",
+            "type": "string"
+          },
+          "source": {
+            "default": null,
+            "description": "app | api | pipeline (optional, default api)",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-plexus-values": [
+              "app",
+              "api",
+              "pipeline"
+            ]
+          },
+          "urgency": {
+            "description": "whenever | today | now | blocking",
+            "type": "string",
+            "x-plexus-values": [
+              "whenever",
+              "today",
+              "now",
+              "blocking"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "urgency",
+          "reason"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "snooze",
+      "description": "Snooze a queued ticket for some minutes (1 to a week): off the alerting surfaces, still queued; yields snoozed { entry, ticket }",
+      "long_description": "MENGER-39: a queued ticket off the alerting surfaces for a while; it\nstays queued. Yields one `snoozed`, or an `error`.",
+      "group": "write",
+      "hash": "22f75c93bd2e9dab",
+      "grant": "tickets.snooze",
+      "target": "id",
+      "params": {
+        "properties": {
+          "id": {
+            "description": "Ticket id, e.g. MENGER-39",
+            "type": "string"
+          },
+          "minutes": {
+            "description": "How long, in minutes",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "default": null,
+            "description": "app | api | pipeline (optional, default api)",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-plexus-values": [
+              "app",
+              "api",
+              "pipeline"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "minutes"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "queued",
+      "description": "The owner's queue, most urgent first, then oldest: a queue_row { entry, ticket } each, then queue_end { count, snoozed, now_unix }",
+      "long_description": "MENGER-39: the owner's queue, most urgent first, then the oldest.",
+      "group": "read",
+      "hash": "726837cfe201d2e5",
+      "grant": "tickets.queued",
+      "params": {
+        "properties": {
+          "snoozed": {
+            "default": null,
+            "description": "Include the snoozed ones (optional; default true — each marked by its snoozed_until_unix)",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    },
+    {
+      "name": "watch",
+      "description": "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events",
+      "long_description": "The reactive primitive: an open-ended stream of every mutation, as\n`Created` / `StatusChanged` / `UnlocksChanged` / `ChildrenChanged`\nevents. Runs until the client disconnects. Every event carries the\nfull affected ticket, so a client that listed once and then only\nwatches can compute the ready set — and the parent tree — itself.\n\nSCALE-5: the stream is fed from the store's bounded broadcast, and\na consumer that falls more than it holds behind loses the oldest\nchanges. That used to be silent — the stream went on as if whole and\nthe client's copy was stale with nothing to say so. Now the gap is\none `Lagged { missed }` where the lost changes were, then the oldest\nchange still held, in order, no change twice. Delivered past the\n`epic` filter: whether a lost change was in the epic is exactly what\ncannot be known. Raising the capacity instead would move the cliff\nand keep the silence.\n\nMNG-10: a mutation that moves a roll-up is followed, after its\nticket events, by one `GroupChanged` per group whose row moved,\ninnermost first — the whole group, so applying it is one upsert.\nThe `epic` filter applies to a group by the group's own shortcode.\nAGS-23: a group's row includes its root's (`root_row`), so a status\nchange of a shortcode's root moves its group whether or not it\ncrosses `Complete`.\n\nMNG-16: an `amend` that changed something is one `Amended`, and\nmoves no group — AGS-23: but a new title on a shortcode's root, which\nis followed by its group's `GroupChanged`.\n\nSDLC-9: so is a `link_commits` or `unlink_commits` that changed\nsomething — one `CommitsLinked` or `CommitsUnlinked`, the whole\nticket, no group.\n\nSDLC-13: a `set_kind` that changed something is one `KindChanged`\n— the whole ticket — then what it moved, as a status change's: a\n`GroupChanged` per row (a root's whenever its kind or status\nchanged; every row a re-rooted shortcode moved), the\n`PlacementsChanged`, and with a filter the `Entered` / `Left`.\n\nSCALE-4: a parent's side of a birth or a move is the exception to\n\"the full ticket\": `ChildrenChanged` / `ChildRemoved` carry the\nparent's id, the child, and the parent's new `child_count` — the\nchild's own `Created` / `ParentChanged` already says where it\nhangs. The `epic` filter applies to them by the parent's shortcode.\n\nCOMP-3: a `create` or `amend` that moved the component registry ends\nwith one `ComponentChanged` per component it registered or moved\n(source, owner, references — the whole component), in name order,\nthen one `ComponentRemoved` per component it took out — after every\nother event of the write. A component is in no shortcode, so both\npass any `epic` filter.\n\nINPUT-3: an input a write moved is one `InputChanged` — the whole\ninput — after every other event of the write, the component events\nincluded: an `answer`, `clear_answer`, `close_input` or\n`reopen_input`; or a `create` or `amend` whose body declared,\nre-declared or removed inputs (in the body's order, the removed\nafter). The `epic` filter applies to it by its ticket's shortcode.\n\nFILTER-4: with a `filter`, the same stream plus, as each write's\nlast events, one `Entered { id, epic, seq }` or `Left { id, epic,\nseq }` per ticket the write moved into or out of the filter — a\nbirth, a status change, every ticket its blocker crossing moved, a\nfirst commit or a last — in the store's order; a write that moves\nmore than 256 sends instead one `Recount { epic, held }` per\nshortcode it moved, the filter's count there as the write left it.\n`epic` filters them by their own shortcode. `membership` sends only\nthose three and `Lagged` — for a client whose rows already ride an\nunfiltered `watch`. Without a filter or `membership`, the stream is\nexactly what it was. A filter not taken, or one that asks `under` or\n`text`, is one in-band `error` and the stream ends.",
+      "group": "read",
+      "hash": "41d0ad2059cc69a7",
+      "grant": "tickets.watch",
+      "params": {
+        "properties": {
+          "epic": {
+            "default": null,
+            "description": "Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "filter": {
+            "default": null,
+            "description": "A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "membership": {
+            "default": null,
+            "description": "Send only Entered, Left, Recount and Lagged (optional; default false)",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "tz": {
+            "default": null,
+            "description": "The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC)",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      }
+    }
+  ]
+}
