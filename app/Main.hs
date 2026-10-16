@@ -69,7 +69,8 @@ import Synapse.Deprecation (emitActivationWarning, emitMethodWarning)
 import Synapse.Transport
 import Synapse.Bidir (BidirMode(..), parseBidirMode, detectBidirMode, handleBidirRequest)
 import Plexus.Types (Response(..))
-import Synapse.CLI.Transform (mkTransformEnv, transformParams, defaultTransformers, injectBooleanDefaults, injectSmartDefaults)
+import Synapse.CLI.Transform (TransformEnv(..), mkTransformEnv, transformParams, defaultTransformers, injectBooleanDefaults, injectSmartDefaults)
+import Synapse.CLI.Source (SourceEnv, mkSourceEnv, expandSources, expandValue, stdinWasRead, renderSourceError)
 import Synapse.IR.Builder (buildIR)
 import Synapse.Renderer (RendererConfig, defaultRendererConfig, renderItem, prettyValue, withMethodPath)
 import System.Directory (createDirectoryIfMissing, getHomeDirectory)
@@ -787,11 +788,17 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
           -- Normal Plexus RPC routing
           -- Apply parameter transformations (path expansion, env vars)
           transformEnv <- liftIO mkTransformEnv
-          inlineParams <- liftIO $ transformParams transformEnv defaultTransformers rawParams
+          -- SYNAPSE-10: a value that names its source (@file, -) is read
+          -- first, so no other step ever sees the literal "@file"; stdin is
+          -- read once and kept for the second pass below
+          sourceEnv <- liftIO $ mkSourceEnv (teCwd transformEnv) (teHome transformEnv)
+          let fromSources pairs = liftIO (expandSources sourceEnv pairs) >>= either (throwParse . renderSourceError) pure
+          sourcedParams <- if helpRequested then pure rawParams else fromSources rawParams
+          inlineParams <- liftIO $ transformParams transformEnv defaultTransformers sourcedParams
 
           -- Mode 1.5: Respond subcommand (agent sends a response to a pending bidir request)
           if not (null pathSegs) && head pathSegs == "respond"
-            then handleRespondCommand rawParams
+            then handleRespondCommand sourcedParams
 
           -- Mode 2: Schema request
           else if soSchema
@@ -889,7 +896,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
 
                           -- Fast path: parameter-less method with no help requested
                           if not needsIR
-                            then fireDeprecationWarnings >> invokeMethod path (object [])
+                            then fireDeprecationWarnings >> invokeMethod sourceEnv path (object [])
                             else do
                               -- Build IR for this method's namespace
                               ir <- buildIR soGeneratorInfo (init path)
@@ -909,8 +916,10 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
                                   -- Build params: use IR-driven parsing for inline params
                                   let schemaDefaults = extractSchemaDefaults method
                                   userParams <- case soParams of
-                                    -- -p JSON: parse as raw JSON (bypass IR parsing)
-                                    Just jsonStr ->
+                                    -- -p JSON: parse as raw JSON (bypass IR parsing);
+                                    -- SYNAPSE-10: -p @params.json and -p - name a source
+                                    Just given -> do
+                                      jsonStr <- liftIO (expandValue sourceEnv "" given) >>= either (throwParse . renderSourceError) pure
                                       case eitherDecode (LBS.fromStrict $ TE.encodeUtf8 jsonStr) of
                                         Left err -> throwParse $ T.pack err
                                         Right p -> pure p
@@ -922,7 +931,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
                                               -- Pair the flags again by parameter type, now that the
                                               -- method is known (a value may begin with dashes)
                                               methodParams <- case pairFlags ir methodDef flagArgs of
-                                                Right pairs -> liftIO $ transformParams transformEnv defaultTransformers pairs
+                                                Right pairs -> fromSources pairs >>= liftIO . transformParams transformEnv defaultTransformers
                                                 Left errs -> do
                                                   liftIO $ mapM_ (hPutStrLn stderr . renderParseError) errs
                                                   throwParse "Parameter parsing failed"
@@ -960,7 +969,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
                                             -- Fallback: method not in IR, use basic info
                                             liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
                                       -- IR-15: fire stderr deprecation warnings before real invocation.
-                                      else fireDeprecationWarnings >> invokeMethod path params
+                                      else fireDeprecationWarnings >> invokeMethod sourceEnv path params
   where
     -- AUTH-8: what the _info probe at this address answered (view, auth)
     currentInfo :: SynapseM (Maybe BackendInfo)
@@ -1061,7 +1070,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
             Left err -> throwParse $ "Invalid --response JSON: " <> T.pack err
             Right (resp :: Response Value) -> sendResponse requestId resp
 
-    invokeMethod path params = do
+    invokeMethod srcEnv path params = do
       let namespacePath = init path  -- path without method name
       let methodName' = last path
       -- Set method path hint for template resolution
@@ -1076,6 +1085,12 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
               TIO.hPutStrLn stderr $ "[synapse] Unknown --bidir-mode: " <> modeStr <> ", using auto-detect"
               detectBidirMode
           Nothing -> detectBidirMode
+      -- SYNAPSE-10: a value read from stdin (-) has taken it; the JSON
+      -- bidirectional mode reads stdin too, and the two cannot share
+      stdinTaken <- liftIO $ stdinWasRead srcEnv
+      case bidirMode of
+        BidirJson | stdinTaken -> throwParse "a value was read from stdin (-), so --bidir-mode json cannot read it too; answer the backend's requests with --bidir-cmd, or use a file (@FILE) for the value"
+        _ -> pure ()
       -- IDENTITY-43: while the stored session could still be made again,
       -- a "you have signed out" answered before anything else is held back
       -- for 'run' to log in again and retry.
@@ -1214,6 +1229,13 @@ cliHeader = splash <> T.pack (fst $ renderFailure failure "synapse") <> "\n"
 metaCommands :: [Text]
 metaCommands =
       [ ""
+      , "Values (after the backend and the method):"
+      , "  --flag @FILE        the value is that file's contents; --flag - reads stdin"
+      , "                      (once, however many values ask); @@text sends a literal"
+      , "                      @text. -p @params.json and -p - take the whole object the"
+      , "                      same way. No argument then carries the value, so a body"
+      , "                      can be as large as the backend accepts"
+      , ""
       , "Meta-commands:"
       , ""
       , "  synapse _key new|show|list [NAME]"
@@ -1548,7 +1570,7 @@ optsParser = do
    <> help "Emit IR for code generation (JSON)" )
   soParams <- optional $ T.pack <$> strOption
     ( long "params" <> short 'p' <> metavar "JSON"
-   <> help "Method parameters as JSON object" )
+   <> help "Method parameters as a JSON object, sent as written; @FILE reads it from a file, - from stdin" )
   soRpc <- optional $ T.pack <$> strOption
     ( long "rpc" <> short 'r' <> metavar "JSON"
    <> help "Raw JSON-RPC request (bypass navigation)" )
