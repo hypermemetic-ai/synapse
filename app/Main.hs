@@ -85,6 +85,7 @@ import Data.Time.Format (formatTime, defaultTimeLocale)
 import qualified Synapse.Identity.Command as IdCmd
 import qualified Synapse.Identity.Proof as Proof
 import qualified Synapse.Identity.Session as Session
+import qualified Synapse.Reconnect as Reconnect
 import qualified Synapse.Identity.Store as Store
 import System.Exit (ExitCode(..), exitWith)
 import qualified Synapse.Find as Find
@@ -119,6 +120,7 @@ data SynapseOpts = SynapseOpts
   , soHeaders       :: [(Text, Text)]  -- ^ SAFE-S04/REQ-5: extra --header KEY=VALUE entries
   , soNoDeprecationWarnings :: Bool  -- ^ Suppress invocation-time deprecation warnings (IR-15)
   , soAs            :: Maybe Text    -- ^ IDENTITY-43: which stored agent session to carry
+  , soReconnectFor  :: Maybe Text    -- ^ SYNAPSE-20: how long to ride out an outage (10m; 0 = never)
   }
   deriving Show
 
@@ -253,9 +255,20 @@ sessionHeaders opts host port explicit
 -- | IDENTITY-43: the _info probe, logging in again from the key once when
 -- the upgrade is refused (401) while a stored session is carried.
 probeWithSession :: SynapseOpts -> Text -> Int -> IO (Maybe Text)
-probeWithSession opts host port = do
+probeWithSession = probeWithSession' False
+
+-- | SYNAPSE-20: with @waits@, a probe that fails as an outage does is
+-- tried again for the reconnect window.
+probeWithSession' :: Bool -> SynapseOpts -> Text -> Int -> IO (Maybe Text)
+probeWithSession' waits opts host port = do
   probe <- probeHeaders opts host port
-  r <- probeBackendAtWith probe host port
+  let once = probeBackendAtWith probe host port
+      whereTo = host <> ":" <> T.pack (show port)
+  r <- if waits
+    then Reconnect.awaitBackend
+           (\why -> Reconnect.isOutageText why && not (Session.isUpgradeRefused why))
+           whereTo once
+    else once
   case r of
     Right name -> pure (Just name)
     Left why
@@ -360,6 +373,16 @@ main = do
   args <- execParser argsInfo
   let opts = argOpts args
 
+  -- SYNAPSE-20: the reconnect window, before anything dials
+  envWindow <- lookupEnv "SYNAPSE_RECONNECT_FOR"
+  case soReconnectFor opts <|> fmap T.pack envWindow of
+    Nothing -> pure ()
+    Just w -> case Reconnect.parseDuration w of
+      Just secs -> Reconnect.setReconnectWindow secs
+      Nothing -> do
+        hPutStrLn stderr $ "synapse: --reconnect-for takes a duration (10m, 90s, 1h, 0), not '" <> T.unpack w <> "'"
+        exitWith (ExitFailure 2)
+
   -- IDENTITY-43: keys are local; _login / _logout dial the backend
   -- themselves (a proof opens exactly one connection — no probe first).
   when (argBackend args == Just "_key") $ runKey (argPath args)
@@ -384,7 +407,12 @@ main = do
   -- refuses anonymous upgrades still answers it.
   -- IDENTITY-43: and the agent's stored session, made again from its key
   -- if the upgrade refuses it.
-  maybeBackend <- probeWithSession opts (soHost opts) (soPort opts)
+ -- SYNAPSE-20: a call to a named backend waits out an outage at start
+  -- too (a promote's restart); the registry listing and _self never wait.
+  let waits = case argBackend args of
+        Just b -> b == "_find" || not ("_" `T.isPrefixOf` b || "-" `T.isPrefixOf` b)
+        Nothing -> False
+  maybeBackend <- probeWithSession' waits opts (soHost opts) (soPort opts)
 
   Log.logDebug logger Log.SubsystemDiscovery $
     "Backend check complete: " <> T.pack (show maybeBackend)
@@ -753,7 +781,7 @@ withView host port env = do
 
 -- | Dispatch based on navigation result
 dispatch :: Args -> RendererConfig -> SynapseM ()
-dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererCfg = do
+dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} rendererCfg = do
   -- Check for _self commands first (before anything else)
   case argBackend of
     _ | Just fo <- argFind -> runFind fo
@@ -896,7 +924,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
 
                           -- Fast path: parameter-less method with no help requested
                           if not needsIR
-                            then fireDeprecationWarnings >> invokeMethod sourceEnv path (object [])
+                            then fireDeprecationWarnings >> invokeMethod sourceEnv method path (object [])
                             else do
                               -- Build IR for this method's namespace
                               ir <- buildIR soGeneratorInfo (init path)
@@ -969,7 +997,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
                                             -- Fallback: method not in IR, use basic info
                                             liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
                                       -- IR-15: fire stderr deprecation warnings before real invocation.
-                                      else fireDeprecationWarnings >> invokeMethod sourceEnv path params
+                                      else fireDeprecationWarnings >> invokeMethod sourceEnv method path params
   where
     -- AUTH-8: what the _info probe at this address answered (view, auth)
     currentInfo :: SynapseM (Maybe BackendInfo)
@@ -1070,7 +1098,7 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
             Left err -> throwParse $ "Invalid --response JSON: " <> T.pack err
             Right (resp :: Response Value) -> sendResponse requestId resp
 
-    invokeMethod srcEnv path params = do
+    invokeMethod srcEnv method path params = do
       let namespacePath = init path  -- path without method name
       let methodName' = last path
       -- Set method path hint for template resolution
@@ -1106,8 +1134,37 @@ dispatch Args{argOpts = SynapseOpts{..}, argBackend, argPath, argFind} rendererC
                   HubData{} -> Session.notePrinted
                   _ -> pure ()
                 printResult soJson soRaw rendererCfg' item
+      -- SYNAPSE-20: a stream that resumed after a gap says so — on -j as a
+      -- line of its own (stdout, in the stream), else on stderr
+      let resumed r
+            | soJson = do
+                LBS.putStrLn $ encode $ object $
+                  [ "type" .= ("reconnected" :: Text)
+                  , "outage_secs" .= (fromIntegral (round (Reconnect.rsOutageSecs r) :: Int) :: Int)
+                  , "attempts" .= Reconnect.rsAttempts r
+                  ] ++ maybe [] (\s -> ["since" .= s]) (Reconnect.rsSince r)
+                hFlush stdout
+            | otherwise = TIO.hPutStrLn stderr $
+                "synapse: the stream resumed"
+                  <> maybe "; anything sent during the gap may be missing" (\s -> " from " <> T.pack (show s) <> " (since)") (Reconnect.rsSince r)
+      -- SYNAPSE-20: a stream outliving a restart finds its session gone
+      -- (menger keeps them in memory): sign in again from the key, and
+      -- reconnect with the new one
+      backendName' <- asks seBackend
+      logger' <- asks seLogger
+      let refreshAuth = do
+            st <- Store.systemStoreEnv
+            new <- Session.reattestAgain logger' st host port
+            case new of
+              Nothing -> pure Nothing
+              Just _ -> do
+                env' <- buildEnv host port backendName' logger' soOpts
+                pure (Just (mergeUpgradeHeaders (seToken env') (seCookies env') (seHeaders env')))
       -- Use bidirectional streaming handler
       invokeStreamingWithBidir
+        (Reconnect.callShape method)
+        refreshAuth
+        resumed
         namespacePath
         methodName'
         params
@@ -1610,6 +1667,9 @@ optsParser = do
   soAs <- optional $ T.pack <$> strOption
     ( long "as" <> metavar "AGENT"
    <> help "Carry this agent's stored session (see _login; else SYNAPSE_AS, else the backend's default agent)" )
+  soReconnectFor <- optional $ T.pack <$> strOption
+    ( long "reconnect-for" <> metavar "DURATION"
+   <> help "Ride out an outage this long: a lost connection is retried, a read sent again, a stream resumed (10m, 90s, 1h; 0 = never; else SYNAPSE_RECONNECT_FOR, else 10m)" )
   pure SynapseOpts{..}
 
 -- | Parse a KEY=VALUE pair (used by --cookie/--header). Treats the first '='
