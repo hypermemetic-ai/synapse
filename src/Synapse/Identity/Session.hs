@@ -74,6 +74,8 @@ import Synapse.Auth (SessionGrant(..), Whoami, isMissingAuth, parseSessionGrant,
 import qualified Synapse.Auth.Loopback as Loopback
 import Synapse.Identity.Proof
 import Synapse.Identity.Store
+import Synapse.Endpoint (Endpoint)
+import qualified Synapse.Endpoint as E
 import qualified Synapse.Log as Log
 import Synapse.Monad
 import Synapse.Schema.Types (HubStreamItem, pattern HubData, pattern HubError, pattern HubGuidance)
@@ -100,8 +102,8 @@ nowSecs = round <$> getPOSIXTime
 -- {flow: {session: {ttl_secs?, ceiling?}}}@ — or, on a hub with no @auth@
 -- activation (every hub before AUTH), IDENTITY-42's @session.login {ttl_secs?,
 -- scope?}@ on a second connection with a fresh proof (a proof works once).
-loginWithKey :: Log.Logger -> Text -> Int -> Text -> Seed -> Text -> [Text] -> Maybe Integer -> IO (Either Text LoginResult)
-loginWithKey logger host port backend seed agent scope ttl
+loginWithKey :: Log.Logger -> Endpoint -> Text -> Seed -> Text -> [Text] -> Maybe Integer -> IO (Either Text LoginResult)
+loginWithKey logger ep backend seed agent scope ttl
   | not (validAgent agent) = pure (Left ("an agent id is 1-64 of A-Z a-z 0-9 . _ - (not '" <> agent <> "')"))
   | otherwise = do
       viaAuth <- do
@@ -109,7 +111,7 @@ loginWithKey logger host port backend seed agent scope ttl
         let flow = object $
               maybe [] (\t -> ["ttl_secs" .= t]) ttl
               <> (if null scope then [] else ["ceiling" .= scope])
-        items <- call logger host port backend (Just proof) "auth" "login" (object ["flow" .= object ["session" .= flow]])
+        items <- call logger ep backend (Just proof) "auth" "login" (object ["flow" .= object ["session" .= flow]])
         pure (items >>= grantItem "auth.login")
       case viaAuth of
         Left e | isMissingAuth e -> do
@@ -117,14 +119,14 @@ loginWithKey logger host port backend seed agent scope ttl
           let params = object $
                 maybe [] (\t -> ["ttl_secs" .= t]) ttl
                 <> (if null scope then [] else ["scope" .= scope])
-          items <- call logger host port backend (Just proof) "session" "login" params
+          items <- call logger ep backend (Just proof) "session" "login" params
           pure (items >>= loginItem)
         other -> pure other
   where
     freshProof = do
       nonce <- newNonce
       ts <- nowSecs
-      pure (buildProof seed (wsAudience host port) agent nonce ts)
+      pure (buildProof seed (E.audience ep) agent nonce ts)
     grantItem what items =
       case [g | HubData _ _ _ v <- items, Just g <- [parseSessionGrant v]] of
         (g : _) -> Right LoginResult
@@ -155,15 +157,15 @@ loginWithKey logger host port backend seed agent scope ttl
 -- browser elsewhere), waits up to @secs@ for @GET /cb?code=…&state=…@ with
 -- that state, and trades the code: @auth.login {flow: {code: {code,
 -- state}}}@ → the session. Every call here is anonymous.
-loginPerson :: Log.Logger -> Text -> Int -> Text -> Int -> (Text -> IO ()) -> IO (Either Text SessionGrant)
-loginPerson logger host port backend secs say =
+loginPerson :: Log.Logger -> Endpoint -> Text -> Int -> (Text -> IO ()) -> IO (Either Text SessionGrant)
+loginPerson logger ep backend secs say =
   Loopback.withLoopback $ \lb -> do
     let redirect = Loopback.loopbackRedirect lb
         browserFlow = object ["flow" .= object ["browser" .= object ["redirect" .= redirect]]]
-    first' <- call logger host port backend Nothing "auth" "login" browserFlow
+    first' <- call logger ep backend Nothing "auth" "login" browserFlow
     case first' >>= loginUrl of
       Left e
-        | isMissingAuth e -> pure (Left (addressKey host port <> " has no auth activation, so no browser sign-in"
+        | isMissingAuth e -> pure (Left (addressKey ep <> " has no auth activation, so no browser sign-in"
                                      <> " (an agent signs in with its key: _login " <> backend <> " --key NAME --as AGENT)"))
         | otherwise -> pure (Left e)
       Right (url, state) -> do
@@ -177,7 +179,7 @@ loginPerson logger host port backend secs say =
           Left why -> pure (Left why)
           Right code -> do
             let codeFlow = object ["flow" .= object ["code" .= object ["code" .= code, "state" .= state]]]
-            done <- call logger host port backend Nothing "auth" "login" codeFlow
+            done <- call logger ep backend Nothing "auth" "login" codeFlow
             pure $ done >>= \items ->
               case [g | HubData _ _ _ v <- items, Just g <- [parseSessionGrant v]] of
                 (g : _) -> Right g
@@ -193,13 +195,13 @@ loginPerson logger host port backend secs say =
 
 -- | AUTH-8: who a token is — @auth.whoami@, else (a hub without the auth
 -- activation) @session.whoami@; Nothing when neither says.
-whoamiWith :: Log.Logger -> Text -> Int -> Text -> Text -> IO (Maybe Whoami)
-whoamiWith logger host port backend token = do
-  a <- call logger host port backend (Just token) "auth" "whoami" (object [])
+whoamiWith :: Log.Logger -> Endpoint -> Text -> Text -> IO (Maybe Whoami)
+whoamiWith logger ep backend token = do
+  a <- call logger ep backend (Just token) "auth" "whoami" (object [])
   case a >>= firstWhoami of
     Right w -> pure (Just w)
     Left _ -> do
-      b <- call logger host port backend (Just token) "session" "whoami" (object [])
+      b <- call logger ep backend (Just token) "session" "whoami" (object [])
       pure (either (const Nothing) Just (b >>= firstWhoami))
 
 -- | 'whoamiWith' on the call's own connection (its credential, whatever it
@@ -220,12 +222,12 @@ firstWhoami items = case [w | HubData _ _ _ v <- items, Just w <- [parseWhoami v
 
 -- | End the session this token is: @auth.logout@ (AUTH-5), else — a hub
 -- with no auth activation — @session.logout@.
-logoutWithToken :: Log.Logger -> Text -> Int -> Text -> Text -> IO (Either Text ())
-logoutWithToken logger host port backend token = do
-  a <- call logger host port backend (Just token) "auth" "logout" (object [])
+logoutWithToken :: Log.Logger -> Endpoint -> Text -> Text -> IO (Either Text ())
+logoutWithToken logger ep backend token = do
+  a <- call logger ep backend (Just token) "auth" "logout" (object [])
   case a >>= ended "auth.logout" of
     Left e | isMissingAuth e -> do
-      items <- call logger host port backend (Just token) "session" "logout" (object [])
+      items <- call logger ep backend (Just token) "session" "logout" (object [])
       pure (items >>= ended "session.logout")
     other -> pure other
   where
@@ -241,18 +243,25 @@ logoutWithToken logger host port backend token = do
 
 -- | One @\<ns\>.\<method\>@ call on a fresh connection presenting @cred@
 -- as @Authorization: Bearer@ (none: anonymous).
-call :: Log.Logger -> Text -> Int -> Text -> Maybe Text -> Text -> Text -> Value -> IO (Either Text [HubStreamItem])
-call logger host port backend cred ns method params = do
-  env0 <- initEnv host port backend logger Nothing
+call :: Log.Logger -> Endpoint -> Text -> Maybe Text -> Text -> Text -> Value -> IO (Either Text [HubStreamItem])
+call logger ep backend cred ns method params = do
+  env0 <- initEnvAt ep backend logger Nothing
   let env = withRequestContext [] (maybe [] (\c -> [bearer c]) cred) env0
   r <- runSynapseM env (invoke [ns] method params)
   pure $ case r of
     Right items -> Right items
     Left (TransportErrorContext ctx)
-      | isUpgradeRefused (tcMessage ctx) -> Left (addressKey host port <> " refused the credential at the upgrade (401)")
+      | isUpgradeRefused (tcMessage ctx) -> Left (addressKey ep <> " refused the credential at the upgrade (401)")
       | otherwise -> Left (firstLine (tcMessage ctx))
     Left (TransportError m) -> Left (firstLine m)
     Left e -> Left (T.pack (show e))
+
+-- | SCAFFOLD-21: the global options a sign-in at this address is typed
+-- with, and the space after them (none for the default address).
+loginOpts :: Endpoint -> Text
+loginOpts ep = case E.cliOptions ep of
+  "" -> ""
+  o -> o <> " "
 
 firstLine :: Text -> Text
 firstLine = T.strip . T.takeWhile (/= '\n')
@@ -285,61 +294,60 @@ int = \case
 -- ============================================================================
 
 data ActiveSession = ActiveSession
-  { asHost  :: Text
-  , asPort  :: Int
+  { asEndpoint :: Endpoint
   , asToken :: Text
   , asRec   :: Maybe SessionRec  -- ^ Nothing: PLEXUS_SESSION, nothing to log in again from
   } deriving (Eq, Show)
 
 {-# NOINLINE memo #-}
-memo :: IORef (Map.Map (Text, Int) (Maybe ActiveSession))
+memo :: IORef (Map.Map Endpoint (Maybe ActiveSession))
 memo = unsafePerformIO (newIORef Map.empty)
 
 -- | Addresses already logged in again in this process (at most once each).
 {-# NOINLINE reattested #-}
-reattested :: IORef [(Text, Int)]
+reattested :: IORef [Endpoint]
 reattested = unsafePerformIO (newIORef [])
 
 -- | The session a call to @HOST:PORT@ carries, if any: @PLEXUS_SESSION@,
 -- else the stored one for the agent asked (or the backend's default agent).
 -- One past its @expires_at@ is made again from its key first.
-sessionFor :: Log.Logger -> StoreEnv -> Maybe Text -> Text -> Int -> IO (Maybe ActiveSession)
-sessionFor logger st asked host port = do
-  known <- Map.lookup (host, port) <$> readIORef memo
+sessionFor :: Log.Logger -> StoreEnv -> Maybe Text -> Endpoint -> IO (Maybe ActiveSession)
+sessionFor logger st asked ep = do
+  known <- Map.lookup ep <$> readIORef memo
   case known of
     Just s -> pure s
     Nothing -> do
       s <- find
-      modifyIORef' memo (Map.insert (host, port) s)
+      modifyIORef' memo (Map.insert ep s)
       pure s
   where
     find = do
       envTok <- stEnv st "PLEXUS_SESSION"
       case envTok of
-        Just t | not (null t) -> pure (Just (ActiveSession host port (T.strip (T.pack t)) Nothing))
+        Just t | not (null t) -> pure (Just (ActiveSession ep (T.strip (T.pack t)) Nothing))
         _ -> do
-          agent <- maybe (readDefaultAgent st host port) (pure . Just) asked
+          agent <- maybe (readDefaultAgent st ep) (pure . Just) asked
           case agent of
             Nothing -> pure Nothing
-            Just a -> lookupSession st host port a >>= \case
+            Just a -> lookupSession st ep a >>= \case
               Just (Right rec, _) -> do
                 now <- nowSecs
-                let active = ActiveSession host port (srToken rec) (Just rec)
+                let active = ActiveSession ep (srToken rec) (Just rec)
                 if maybe False (<= now + 5) (srExpiresAt rec)
                   then reattestWith logger st active "had expired"
                   else pure (Just active)
-              Just (Left tok, _) -> pure (Just (ActiveSession host port tok Nothing))
+              Just (Left tok, _) -> pure (Just (ActiveSession ep tok Nothing))
               Nothing -> do
                 when (isJust asked) $ TIO.hPutStrLn stderr $
-                  "synapse: no session for " <> a <> " at " <> addressKey host port
-                    <> " (synapse -P " <> T.pack (show port) <> " _login <backend> --key NAME --as " <> a <> ")"
+                  "synapse: no session for " <> a <> " at " <> addressKey ep
+                    <> " (synapse " <> loginOpts ep <> "_login <backend> --key NAME --as " <> a <> ")"
                 pure Nothing
 
 -- | Can the session in use at this address be made again from its key?
-canReattest :: Text -> Int -> IO Bool
-canReattest host port = do
-  s <- Map.lookup (host, port) <$> readIORef memo
-  done <- elem (host, port) <$> readIORef reattested
+canReattest :: Endpoint -> IO Bool
+canReattest ep = do
+  s <- Map.lookup ep <$> readIORef memo
+  done <- elem ep <$> readIORef reattested
   pure $ case s of
     -- AUTH-8: a person's session (no key) is made again only by signing in
     Just (Just ActiveSession{asRec = Just r}) -> not done && not (T.null (srKey r))
@@ -348,10 +356,10 @@ canReattest host port = do
 -- | The server refused the session in use at this address: log in again
 -- from its key (once per process). The new session, or Nothing when there
 -- was none to remake or the login failed (both said on stderr).
-reattest :: Log.Logger -> StoreEnv -> Text -> Int -> IO (Maybe ActiveSession)
-reattest logger st host port = do
-  ok <- canReattest host port
-  s <- Map.lookup (host, port) <$> readIORef memo
+reattest :: Log.Logger -> StoreEnv -> Endpoint -> IO (Maybe ActiveSession)
+reattest logger st ep = do
+  ok <- canReattest ep
+  s <- Map.lookup ep <$> readIORef memo
   case s of
     Just (Just active) | ok -> do
       r <- reattestWith logger st active "has ended"
@@ -364,10 +372,10 @@ reattest logger st host port = do
 -- stream across a server restart (menger keeps sessions in memory). Its
 -- reconnect loop asks at most once per outage, so the once-per-process
 -- mark is lifted first.
-reattestAgain :: Log.Logger -> StoreEnv -> Text -> Int -> IO (Maybe ActiveSession)
-reattestAgain logger st host port = do
-  modifyIORef' reattested (filter (/= (host, port)))
-  reattest logger st host port
+reattestAgain :: Log.Logger -> StoreEnv -> Endpoint -> IO (Maybe ActiveSession)
+reattestAgain logger st ep = do
+  modifyIORef' reattested (filter (/= ep))
+  reattest logger st ep
 
 reattestWith :: Log.Logger -> StoreEnv -> ActiveSession -> Text -> IO (Maybe ActiveSession)
 reattestWith logger st active why = case asRec active of
@@ -375,29 +383,28 @@ reattestWith logger st active why = case asRec active of
   Just rec | T.null (srKey rec) -> do
     -- AUTH-8: a person's session: there is no key to make it again from
     TIO.hPutStrLn stderr $ "synapse: the session for " <> srAgent rec <> " at "
-      <> addressKey (asHost active) (asPort active) <> " " <> why
-      <> "; sign in again: synapse -P " <> T.pack (show (asPort active)) <> " _login " <> srBackend rec
+      <> addressKey (asEndpoint active) <> " " <> why
+      <> "; sign in again: synapse " <> loginOpts (asEndpoint active) <> "_login " <> srBackend rec
     pure (Just active)
   Just rec -> do
-    let host = asHost active
-        port = asPort active
-        who = srAgent rec <> " at " <> addressKey host port
-    modifyIORef' reattested ((host, port) :)
+    let ep = asEndpoint active
+        who = srAgent rec <> " at " <> addressKey ep
+    modifyIORef' reattested (ep :)
     -- SYNAPSE-15: one process at a time signs this agent in again; one
     -- that waited finds the session another has just made, and takes it
-    withSessionLock st host port (srAgent rec) $ do
+    withSessionLock st ep (srAgent rec) $ do
       fresher <- storedFresher st active rec
       case fresher of
         Just active' -> do
-          modifyIORef' memo (Map.insert (host, port) (Just active'))
+          modifyIORef' memo (Map.insert ep (Just active'))
           pure (Just active')
-        Nothing -> mint host port who rec
+        Nothing -> mint ep who rec
   where
-    mint host port who rec = do
+    mint ep who rec = do
       key <- lookupKey st (srKey rec)
       case key of
         Right (Just (seed, _)) -> do
-          r <- loginWithKey logger host port (srBackend rec) seed (srAgent rec) (srScope rec) (srTtl rec)
+          r <- loginWithKey logger ep (srBackend rec) seed (srAgent rec) (srScope rec) (srTtl rec)
           case r of
             Right lr -> do
               let rec' = rec { srToken = lrToken lr
@@ -407,13 +414,13 @@ reattestWith logger st active why = case asRec active of
                   active' = active { asToken = lrToken lr, asRec = Just rec' }
               -- SYNAPSE-15: a session that cannot be kept is a warning; the
               -- call goes on with the one it holds
-              kept <- try (writeSession st host port rec')
+              kept <- try (writeSession st ep rec')
               case kept of
                 Right _ -> pure ()
                 Left (e :: SomeException) -> TIO.hPutStrLn stderr $
                   "synapse: warning: could not keep the new session for " <> who
                     <> " (" <> T.pack (show e) <> "); this call goes on with it"
-              modifyIORef' memo (Map.insert (host, port) (Just active'))
+              modifyIORef' memo (Map.insert ep (Just active'))
               TIO.hPutStrLn stderr $ "synapse: the session for " <> who <> " " <> why
                 <> "; signed in again from key " <> srKey rec
               pure (Just active')
@@ -434,7 +441,7 @@ reattestWith logger st active why = case asRec active of
 -- is still live — then this call takes it instead of signing in again.
 storedFresher :: StoreEnv -> ActiveSession -> SessionRec -> IO (Maybe ActiveSession)
 storedFresher st active rec = do
-  stored <- try (lookupSession st (asHost active) (asPort active) (srAgent rec))
+  stored <- try (lookupSession st (asEndpoint active) (srAgent rec))
   now <- nowSecs
   pure $ case stored of
     Right (Just (Right r, _))

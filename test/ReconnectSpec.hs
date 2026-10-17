@@ -107,7 +107,7 @@ acceptLoop sock ms calls = do
         Silent -> confirm >> forever (threadDelay 1000000)
 
 cfgFor :: Int -> SubstrateConfig
-cfgFor port = SubstrateConfig "127.0.0.1" port "/" "t" []
+cfgFor port = SubstrateConfig "127.0.0.1" port "/" "t" [] Nothing
 
 -- | One try, as synapse makes it.
 attemptAt :: Int -> Value -> IO () -> (PT.PlexusStreamItem -> IO ()) -> IO (Either PT.TransportError ())
@@ -171,6 +171,17 @@ main = hspec $ do
       let ps = object ["type" .= ("object" :: Text), "properties" .= object ["since" .= object [], "id" .= object []]]
       csSince (callShape (method "await_reply" (Just "read") (Just ps))) `shouldBe` True
       csSince (callShape (method "get" (Just "read") Nothing)) `shouldBe` False
+
+  describe "what an outage is" $ do
+    let upgrade code = PT.ProtocolError ("Connection failed: MalformedResponse (ResponseHead {responseCode = "
+          <> code <> ", responseMessage = \"x\", responseHeaders = []}) \"Wrong response status or message.\"")
+    it "is a proxy in front answering 502 / 503 / 504 while the hub behind it is away (SCAFFOLD-21)" $ do
+      map (isOutage . upgrade) ["502", "503", "504"] `shouldBe` [True, True, True]
+      isOutageText "responseCode = 502, responseMessage = \"Bad Gateway\"" `shouldBe` True
+    it "is not a refused credential, a wrong path, a misdirected request" $
+      map (isOutage . upgrade) ["401", "403", "404", "421"] `shouldBe` [False, False, False, False]
+    it "is the server's own 429, as before" $
+      isOutage (upgrade "429") `shouldBe` True
 
   describe "the client notices a lost connection" $ do
     it "fails a stream whose connection closes, instead of waiting forever" $

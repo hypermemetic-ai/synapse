@@ -73,6 +73,7 @@ runProtocolTests host port backend = do
         , substratePath    = "/"
         , substrateBackend = backend
         , substrateHeaders = []
+        , substrateTls     = Nothing
         }
 
   -- Run all test suites

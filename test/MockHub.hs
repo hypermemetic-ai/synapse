@@ -25,6 +25,8 @@ module MockHub
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, tryPutMVar, tryTakeMVar)
+import System.Timeout (timeout)
 import Control.Exception (SomeException, bracket, try)
 import Control.Monad (forever, void)
 import Data.Aeson
@@ -139,12 +141,38 @@ handle sc c next signedIn o = do
     "menger.call" -> do
       let inner = str "method" params
           args = case KM.lookup "params" params of { Just (Object a) -> a; _ -> KM.empty }
-      callMethod sc signedIn inner args dat err
+      if inner == "tickets.ask"
+        then askBack emit meta dat err
+        else callMethod sc signedIn inner args dat err
+      done
+    -- SCAFFOLD-21: a bidirectional answer, on a connection of its own
+    "menger.respond" -> do
+      void (tryPutMVar responses (KM.lookup "response_data" params))
       done
     _ -> err ("Invalid method format: " <> method) [] >> done
   where
     send :: Value -> IO ()
     send = WS.sendTextData c . encode
+
+-- | SCAFFOLD-21: the answers to 'askBack's requests (@menger.respond@'s
+-- @response_data@), as they arrive on any connection.
+{-# NOINLINE responses #-}
+responses :: MVar (Maybe Value)
+responses = unsafePerformIO newEmptyMVar
+
+-- | A bidirectional method (@tickets.ask@): it asks the caller to confirm
+-- (a @request@ item), waits up to 5 s for @menger.respond@, and answers
+-- with what came back.
+askBack :: (Value -> IO ()) -> Value -> (Text -> Value -> IO ()) -> (Text -> [(K.Key, Value)] -> IO ()) -> IO ()
+askBack emit meta dat err = do
+  _ <- tryTakeMVar responses
+  emit (object
+    [ "type" .= ("request" :: Text), "metadata" .= meta, "request_id" .= ("req-1" :: Text)
+    , "request" .= object ["type" .= ("confirm" :: Text), "message" .= ("go on?" :: Text)] ])
+  got <- timeout 5000000 (takeMVar responses)
+  case got of
+    Just (Just r) -> dat "tickets.ask" (object ["type" .= ("answered" :: Text), "response" .= r])
+    _ -> err "no response to req-1" []
 
 infoFor :: Scenario -> Value
 infoFor sc = case scView sc of
