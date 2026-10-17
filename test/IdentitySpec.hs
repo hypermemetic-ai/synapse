@@ -16,13 +16,16 @@ import qualified Data.Aeson as A
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64.URL as B64U
-import Data.IORef (readIORef)
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (mapConcurrently)
+import Control.Exception (SomeException, try)
+import Data.IORef (readIORef, newIORef, atomicModifyIORef')
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
-import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.Directory (createDirectoryIfMissing, doesFileExist, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Files (fileMode, getFileStatus, intersectFileModes)
@@ -249,6 +252,37 @@ spec = do
         Map.null <$> readIORef ref `shouldReturn` True
         lookupSession st "127.0.0.1" 4455 "worker-3" `shouldReturn` Nothing
         readDefaultAgent st "127.0.0.1" 4455 `shouldReturn` Nothing
+
+  describe "parallel writers (SYNAPSE-15)" $ do
+    let rec = SessionRec
+          { srToken = "mgs_0", srPrincipal = "key:00", srAgent = "worker-3"
+          , srExpiresAt = Just 1791643200, srKey = "agent-7", srScope = []
+          , srTtl = Nothing, srBackend = "menger" }
+
+    it "32 writers of one session at once all succeed, and leave one session, 0600, and no temporary file" $
+      withSystemTempDirectory "identity" $ \dir -> do
+        let st = sandbox [] Nothing dir
+            sdir = dir </> ".plexus" </> "sessions" </> "127.0.0.1_4455"
+        rs <- mapConcurrently (\i -> try (writeSession st "127.0.0.1" 4455 rec { srToken = "mgs_" <> T.pack (show i) }))
+                [1 .. 32 :: Int]
+        [e | Left (e :: SomeException) <- rs] `shouldSatisfy` null
+        Just (Right r, _) <- lookupSession st "127.0.0.1" 4455 "worker-3"
+        srToken r `shouldSatisfy` (`elem` ["mgs_" <> T.pack (show i) | i <- [1 .. 32 :: Int]])
+        mode (sdir </> "worker-3.json") `shouldReturn` 0o600
+        listDirectory sdir `shouldReturn` ["worker-3.json"]
+
+    it "the session lock lets one holder in at a time" $
+      withSystemTempDirectory "identity" $ \dir -> do
+        let st = sandbox [] Nothing dir
+        inside <- newIORef (0 :: Int)
+        most <- newIORef (0 :: Int)
+        _ <- mapConcurrently (\_ -> withSessionLock st "127.0.0.1" 4455 "worker-3" $ do
+               n <- atomicModifyIORef' inside (\k -> (k + 1, k + 1))
+               atomicModifyIORef' most (\m -> (max m n, ()))
+               threadDelay 20000
+               atomicModifyIORef' inside (\k -> (k - 1, ())))
+             [1 .. 8 :: Int]
+        readIORef most `shouldReturn` 1
 
   describe "_login's --scope" $
     it "takes the flag repeated or comma-separated" $

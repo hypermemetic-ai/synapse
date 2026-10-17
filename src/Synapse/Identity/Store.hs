@@ -57,11 +57,13 @@ module Synapse.Identity.Store
   , writeDefaultAgent
   , clearDefaultAgent
 
+  , withSessionLock
+
     -- * Files
   , writePrivateFile
   ) where
 
-import Control.Exception (SomeException, try, catch)
+import Control.Exception (SomeException, try, catch, finally, onException)
 import Control.Monad (unless, when)
 import Data.Aeson (FromJSON(..), ToJSON(..), (.:), (.:?), (.=), (.!=), object, withObject)
 import qualified Data.Aeson as A
@@ -78,10 +80,14 @@ import qualified Data.Text.IO as TIO
 import System.Directory
 import System.Environment (lookupEnv)
 import System.Exit (ExitCode(..))
-import System.FilePath ((</>), takeDirectory, takeExtension, dropExtension)
+import System.FilePath ((</>), takeDirectory, takeExtension, dropExtension, takeFileName)
+import System.IO (hClose, openBinaryTempFile)
 import qualified System.Info as Info
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Files (setFileMode)
+import System.Posix.IO (createFile, closeFd)
+import Foreign.C.Types (CInt(..))
+import Foreign.C.Error (throwErrnoIfMinus1RetryMayBlock_)
 import System.Process (proc, readCreateProcessWithExitCode)
 import System.Timeout (timeout)
 
@@ -483,18 +489,54 @@ clearDefaultAgent st host port agent = do
 
 -- | Write a file only its owner can read: its directory 0700, the file
 -- 0600 from the moment it exists, replaced atomically.
+--
+-- SYNAPSE-15: each writer has a temporary file of its own
+-- (@NAME.tmpNNN@, created with O_EXCL and 0600 by 'openBinaryTempFile'),
+-- renamed over the target; parallel writers never touch each other's
+-- file, and the last rename wins. Before, every writer used @NAME.tmp@,
+-- and one removed another's between its write and its rename.
 writePrivateFile :: FilePath -> BS.ByteString -> IO ()
 writePrivateFile p bytes = do
   let dir = takeDirectory p
-      tmp = p <> ".tmp"
+  privateDir dir
+  (tmp, h) <- openBinaryTempFile dir (takeFileName p <> ".tmp")
+  (do setFileMode tmp 0o600
+      BS.hPut h bytes
+      hClose h
+      renameFile tmp p)
+    `onException` (hClose h >> removeIfExists tmp)
+
+foreign import ccall safe "sys/file.h flock" c_flock :: CInt -> CInt -> IO CInt
+
+-- | flock's LOCK_EX.
+lockEx :: CInt
+lockEx = 2
+
+-- | A directory only its owner can enter, made if missing.
+privateDir :: FilePath -> IO ()
+privateDir dir = do
   existed <- doesDirectoryExist dir
   createDirectoryIfMissing True dir
   unless existed $ setFileMode dir 0o700
-  removeIfExists tmp
-  BS.writeFile tmp ""
-  setFileMode tmp 0o600
-  BS.writeFile tmp bytes
-  renameFile tmp p
+
+-- | SYNAPSE-15: hold the agent's session lock at this backend (an advisory
+-- lock on @AGENT.lock@ beside its session) for the action — so of the
+-- processes that find the session stale at once, one signs in again and
+-- the others, waiting here, find its new session when they read again.
+withSessionLock :: StoreEnv -> Text -> Int -> Text -> IO a -> IO a
+withSessionLock st host port agent act = do
+  let lockPath = sessionDir st host port </> (T.unpack agent <> ".lock")
+  -- flock on a descriptor of our own (not a GHC handle: GHC refuses a
+  -- second writer of one file within a process): processes and threads
+  -- alike wait their turn; closing the descriptor lets the next one in
+  opened <- try (privateDir (takeDirectory lockPath) >> createFile lockPath 0o600)
+  case opened of
+    -- a lock that cannot be had (a read-only store) is no reason to fail
+    -- the call: it goes on unserialised, as before
+    Left (_ :: SomeException) -> act
+    Right fd -> flip finally (closeFd fd) $ do
+      throwErrnoIfMinus1RetryMayBlock_ "flock" (c_flock (fromIntegral fd) lockEx) (pure ())
+      act
 
 removeIfExists :: FilePath -> IO ()
 removeIfExists p = removeFile p `catch` \(_ :: SomeException) -> pure ()

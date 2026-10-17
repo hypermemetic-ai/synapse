@@ -51,6 +51,7 @@ module Synapse.Identity.Session
   , currentCeiling
   ) where
 
+import Control.Exception (SomeException, try)
 import Control.Monad (when)
 import Data.Aeson (Value(..), object, (.=))
 import qualified Data.Aeson.KeyMap as KM
@@ -382,33 +383,67 @@ reattestWith logger st active why = case asRec active of
         port = asPort active
         who = srAgent rec <> " at " <> addressKey host port
     modifyIORef' reattested ((host, port) :)
-    key <- lookupKey st (srKey rec)
-    case key of
-      Right (Just (seed, _)) -> do
-        r <- loginWithKey logger host port (srBackend rec) seed (srAgent rec) (srScope rec) (srTtl rec)
-        case r of
-          Right lr -> do
-            let rec' = rec { srToken = lrToken lr
-                           , srPrincipal = if T.null (lrPrincipal lr) then srPrincipal rec else lrPrincipal lr
-                           , srExpiresAt = lrExpiresAt lr
-                           }
-                active' = active { asToken = lrToken lr, asRec = Just rec' }
-            _ <- writeSession st host port rec'
-            modifyIORef' memo (Map.insert (host, port) (Just active'))
-            TIO.hPutStrLn stderr $ "synapse: the session for " <> who <> " " <> why
-              <> "; signed in again from key " <> srKey rec
-            pure (Just active')
-          Left e -> do
-            TIO.hPutStrLn stderr $ "synapse: the session for " <> who <> " " <> why
-              <> " and signing in again from key " <> srKey rec <> " failed: " <> e
-            pure (Just active)
-      Right Nothing -> do
-        TIO.hPutStrLn stderr $ "synapse: the session for " <> who <> " " <> why
-          <> ", and key " <> srKey rec <> " is in no store to sign in again from"
-        pure (Just active)
-      Left e -> do
-        TIO.hPutStrLn stderr $ "synapse: the session for " <> who <> " " <> why <> "; key " <> srKey rec <> ": " <> e
-        pure (Just active)
+    -- SYNAPSE-15: one process at a time signs this agent in again; one
+    -- that waited finds the session another has just made, and takes it
+    withSessionLock st host port (srAgent rec) $ do
+      fresher <- storedFresher st active rec
+      case fresher of
+        Just active' -> do
+          modifyIORef' memo (Map.insert (host, port) (Just active'))
+          pure (Just active')
+        Nothing -> mint host port who rec
+  where
+    mint host port who rec = do
+      key <- lookupKey st (srKey rec)
+      case key of
+        Right (Just (seed, _)) -> do
+          r <- loginWithKey logger host port (srBackend rec) seed (srAgent rec) (srScope rec) (srTtl rec)
+          case r of
+            Right lr -> do
+              let rec' = rec { srToken = lrToken lr
+                             , srPrincipal = if T.null (lrPrincipal lr) then srPrincipal rec else lrPrincipal lr
+                             , srExpiresAt = lrExpiresAt lr
+                             }
+                  active' = active { asToken = lrToken lr, asRec = Just rec' }
+              -- SYNAPSE-15: a session that cannot be kept is a warning; the
+              -- call goes on with the one it holds
+              kept <- try (writeSession st host port rec')
+              case kept of
+                Right _ -> pure ()
+                Left (e :: SomeException) -> TIO.hPutStrLn stderr $
+                  "synapse: warning: could not keep the new session for " <> who
+                    <> " (" <> T.pack (show e) <> "); this call goes on with it"
+              modifyIORef' memo (Map.insert (host, port) (Just active'))
+              TIO.hPutStrLn stderr $ "synapse: the session for " <> who <> " " <> why
+                <> "; signed in again from key " <> srKey rec
+              pure (Just active')
+            Left e -> do
+              TIO.hPutStrLn stderr $ "synapse: the session for " <> who <> " " <> why
+                <> " and signing in again from key " <> srKey rec <> " failed: " <> e
+              pure (Just active)
+        Right Nothing -> do
+          TIO.hPutStrLn stderr $ "synapse: the session for " <> who <> " " <> why
+            <> ", and key " <> srKey rec <> " is in no store to sign in again from"
+          pure (Just active)
+        Left e -> do
+          TIO.hPutStrLn stderr $ "synapse: the session for " <> who <> " " <> why <> "; key " <> srKey rec <> ": " <> e
+          pure (Just active)
+
+-- | SYNAPSE-15: the agent's stored session, read again under its lock,
+-- when another process has replaced the one this call holds with one that
+-- is still live — then this call takes it instead of signing in again.
+storedFresher :: StoreEnv -> ActiveSession -> SessionRec -> IO (Maybe ActiveSession)
+storedFresher st active rec = do
+  stored <- try (lookupSession st (asHost active) (asPort active) (srAgent rec))
+  now <- nowSecs
+  pure $ case stored of
+    Right (Just (Right r, _))
+      | srToken r /= asToken active
+      , not (T.null (srToken r))
+      , maybe True (> now + 5) (srExpiresAt r)
+      -> Just active { asToken = srToken r, asRec = Just r }
+    Right _ -> Nothing
+    Left (_ :: SomeException) -> Nothing
 
 -- ============================================================================
 -- Recognising an ended session

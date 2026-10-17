@@ -681,7 +681,9 @@ runWithDiscovery discovery backendName args = do
       -- Verify the resolved backend actually identifies as the requested name.
       -- This catches cases where -P points to a different backend than expected,
       -- or the registry has stale entries.
-      actualName <- probeWithSession opts (backendHost backend) (backendPort backend)
+      -- SYNAPSE-20: a named backend's probe waits out an outage (or the
+      -- server's 429 under many parallel calls) as the first one did
+      actualName <- probeWithSession' True opts (backendHost backend) (backendPort backend)
       case actualName of
         Just name | name /= backendName -> do
           hPutStrLn stderr $ "Backend mismatch: requested '" <> T.unpack backendName
@@ -704,7 +706,7 @@ runWithDiscovery discovery backendName args = do
     Nothing -> do
       -- Backend not found in registry - check if this was a direct connection attempt
       -- where the protocol handshake failed
-      maybeDirectBackend <- probeWithSession opts (soHost opts) (soPort opts)
+      maybeDirectBackend <- probeWithSession' True opts (soHost opts) (soPort opts)
       logger <- makeLoggerFromOpts opts
       env <- buildEnv (soHost opts) (soPort opts) backendName logger opts
       case maybeDirectBackend of

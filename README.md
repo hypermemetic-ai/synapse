@@ -507,6 +507,13 @@ network blip — for **ten minutes** by default.
 - **After the window**, synapse **exits 69** with the reason (`… unreachable
   for 10m (connection refused) — giving up`). It never hangs.
 
+Many agents' calls at once ride out a restart too (SYNAPSE-15): a call
+whose stored session the restart ended signs in again from its key under a
+lock on that session, and a call that waited for the lock takes the session
+the first one made. Sixteen or thirty-two parallel calls after a restart
+sign in once and all succeed; a connection refused for the server's
+connection limits (429) is waited out like any outage.
+
 | exit | meaning |
 | -- | -- |
 | 69 | the backend stayed unreachable for the whole window |
