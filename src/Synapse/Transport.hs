@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- | Transport layer for Synapse
@@ -25,6 +26,7 @@ module Synapse.Transport
   ) where
 
 import Control.Monad.IO.Class (liftIO)
+import Data.IORef (newIORef, readIORef, modifyIORef')
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value)
 import qualified Data.ByteString.Char8 as BS8
@@ -41,6 +43,7 @@ import qualified Plexus.Types as PT
 import Synapse.Schema.Types
 import Synapse.Monad
 import qualified Synapse.Log as Log
+import qualified Synapse.Reconnect as R
 
 -- | Fetch the root schema
 fetchSchema :: SynapseM PluginSchema
@@ -68,6 +71,7 @@ transportErrorToText (PT.ConnectionTimeout host port) =
   "Connection timeout to " <> host <> ":" <> T.pack (show port)
 transportErrorToText (PT.ProtocolError msg) = renderProtocolError msg
 transportErrorToText (PT.NetworkError msg) = "Network error: " <> msg
+transportErrorToText (PT.ConnectionLost msg _) = "Connection lost: " <> msg
 
 -- | Inspect a protocol-error message for an embedded JSON-RPC error code
 -- and rewrite with a semantic prefix. Falls back to the original message
@@ -112,6 +116,7 @@ transportErrorToCategory (PT.ConnectionRefused _ _) = ConnectionRefused
 transportErrorToCategory (PT.ConnectionTimeout _ _) = ConnectionTimeout
 transportErrorToCategory (PT.ProtocolError _) = ProtocolError
 transportErrorToCategory (PT.NetworkError _) = UnknownTransportError
+transportErrorToCategory (PT.ConnectionLost _ _) = UnknownTransportError
 
 -- | Fetch schema at a specific path
 fetchSchemaAt :: Path -> SynapseM PluginSchema
@@ -120,7 +125,7 @@ fetchSchemaAt path = do
   cfg <- getConfig
   Log.logDebug logger Log.SubsystemSchema $
     "Fetching schema at path: " <> T.pack (show path)
-  result <- liftIO $ ST.fetchSchemaAt cfg path
+  result <- liftIO $ R.retrying (whereOf cfg) $ ST.fetchSchemaAt cfg path
   case result of
     Left err -> do
       Log.logInfo logger Log.SubsystemSchema $
@@ -136,7 +141,7 @@ fetchSchemaAt path = do
 fetchMethodSchema :: Path -> Text -> SynapseM MethodSchema
 fetchMethodSchema path methodName = do
   cfg <- getConfig
-  result <- liftIO $ ST.fetchMethodSchemaAt cfg path methodName
+  result <- liftIO $ R.retrying (whereOf cfg) $ ST.fetchMethodSchemaAt cfg path methodName
   case result of
     Left err -> throwNav $ FetchError (transportErrorToText err) path
     Right schema -> pure schema
@@ -241,14 +246,18 @@ invokeStreaming namespacePath method params onItem = do
 -- the response is sent back via {backend}.respond (if the handler returns Just).
 -- If the handler returns Nothing (BidirRespond mode), no response is sent immediately.
 invokeStreamingWithBidir
-  :: Path
+  :: R.CallShape                                           -- ^ SYNAPSE-20: how it rides out an outage
+  -> IO (Maybe WS.Headers)                                 -- ^ SYNAPSE-20: sign in again; the upgrade's new headers
+  -> (R.Resumed -> IO ())                                  -- ^ told when a stream resumed after a gap
+  -> Path
   -> Text
   -> Value
   -> (HubStreamItem -> IO ())                              -- ^ Handler for non-request items
   -> (Text -> PT.Request Value -> IO (Maybe (PT.Response Value)))  -- ^ Handler for bidirectional requests
   -> SynapseM ()
-invokeStreamingWithBidir namespacePath method params onItem onBidirRequest = do
+invokeStreamingWithBidir shape refreshAuth onResume namespacePath method params onItem onBidirRequest = do
   cfg <- getConfig
+  cfgRef <- liftIO $ newIORef cfg
   let wrappedHandler item = case item of
         PT.StreamRequest _ _ reqId reqData _timeout -> do
           -- Handle the bidirectional request
@@ -260,7 +269,17 @@ invokeStreamingWithBidir namespacePath method params onItem onBidirRequest = do
               pure ()
             Nothing -> pure ()  -- agent will respond via separate call
         _ -> onItem item
-  result <- liftIO $ ST.invokeMethodStreaming cfg namespacePath method params wrappedHandler
+      attempt ps subscribed h = do
+        c <- readIORef cfgRef
+        ST.invokeMethodStreamingWith c subscribed namespacePath method ps h
+      reauth = refreshAuth >>= \case
+        Just hs -> True <$ modifyIORef' cfgRef (\c -> c { substrateHeaders = hs })
+        Nothing -> pure False
+  -- SYNAPSE-20: through an outage — a read sent again, a stream resumed
+  -- (with since when it takes one), a write that went out never repeated
+  result <- liftIO $
+    R.resilientCall (whereOf cfg) shape attempt reauth params onResume wrappedHandler
+      >>= R.reportEnding (whereOf cfg)
   case result of
     Left transportErr -> do
       backend <- asks seBackend
@@ -282,6 +301,10 @@ invokeStreamingWithBidir namespacePath method params onItem onBidirRequest = do
     getPort (PT.ConnectionRefused _ p) _ = p
     getPort (PT.ConnectionTimeout _ p) _ = p
     getPort _ c = substratePort c
+
+-- | SYNAPSE-20: @host:port@, for what synapse says about an outage.
+whereOf :: SubstrateConfig -> Text
+whereOf c = T.pack (substrateHost c) <> ":" <> T.pack (show (substratePort c))
 
 -- | Send a response for a bidirectional request
 sendResponse :: Text -> PT.Response Value -> SynapseM ()

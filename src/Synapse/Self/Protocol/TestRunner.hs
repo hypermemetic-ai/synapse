@@ -357,6 +357,8 @@ formatTransportError (PT.ProtocolError msg) =
   "Protocol error: " <> msg
 formatTransportError (PT.NetworkError msg) =
   "Network error: " <> msg
+formatTransportError (PT.ConnectionLost msg _) =
+  "Connection lost: " <> msg
 
 -- | Simple timeout implementation
 -- Returns Nothing if timeout occurs, Just result otherwise

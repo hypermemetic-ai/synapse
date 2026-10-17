@@ -32,6 +32,7 @@ module Synapse.Identity.Session
   , ActiveSession(..)
   , sessionFor
   , reattest
+  , reattestAgain
   , canReattest
   , bearer
 
@@ -357,6 +358,15 @@ reattest logger st host port = do
         Just new | asToken new /= asToken active -> Just new
         _ -> Nothing
     _ -> pure Nothing
+
+-- | SYNAPSE-20: 'reattest' for a call that outlived its session — a long
+-- stream across a server restart (menger keeps sessions in memory). Its
+-- reconnect loop asks at most once per outage, so the once-per-process
+-- mark is lifted first.
+reattestAgain :: Log.Logger -> StoreEnv -> Text -> Int -> IO (Maybe ActiveSession)
+reattestAgain logger st host port = do
+  modifyIORef' reattested (filter (/= (host, port)))
+  reattest logger st host port
 
 reattestWith :: Log.Logger -> StoreEnv -> ActiveSession -> Text -> IO (Maybe ActiveSession)
 reattestWith logger st active why = case asRec active of

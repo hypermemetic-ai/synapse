@@ -460,6 +460,59 @@ Generate templates from the schema:
 synapse --generate-templates substrate
 ```
 
+## Outages: reconnecting (SYNAPSE-20)
+
+synapse rides out a backend that goes away — a restart, a promote, a
+network blip — for **ten minutes** by default.
+
+- **A lost connection is noticed**: the server closing it, a reset, or
+  silence. While a call is open, synapse pings after 15 s with nothing heard
+  and counts the connection lost when 10 s more pass without an answer
+  (`PLEXUS_KEEPALIVE=IDLE[,TIMEOUT]` in seconds, `0` for none). A call is
+  never left waiting on a dead socket.
+- **It retries for the window**: 0.5 s, doubling, to 15 s between tries.
+  `--reconnect-for 10m` (`90s`, `1h`, `0` = never; or
+  `SYNAPSE_RECONNECT_FOR`) sets how long. A backend that is down when synapse
+  starts is waited for the same way (a wrong port that answers something
+  other than Plexus fails at once). Progress goes to **stderr only**:
+
+  ```
+  synapse: connection to 127.0.0.1:4455 lost (the connection was closed) — reconnecting for up to 10m
+  synapse: retrying 127.0.0.1:4455 in 4s (4s of 10m)
+  synapse: reconnected to 127.0.0.1:4455 after 8s
+  ```
+
+- **A read is sent again; a write is not.** A method is a read when its
+  schema's `group` is `read` (else when its name is a read's: `get`, `list`,
+  `watch`, …); anything else, and anything bidirectional, is a write. A
+  write whose request went out before the connection was lost may have
+  happened, so synapse says so and **exits 75** (`connection to … lost
+  before an answer — the write may have happened; check before sending it
+  again`). A write that never left (the backend was down when it was
+  sent) is sent once the backend is back.
+- **A stream resumes.** `watch`, `await_reply` and any other streaming read
+  are subscribed again with the same params. A method that takes `since`
+  (menger's `await_reply`) gets `since` = the unix time the call began
+  unless you gave one, so an answer given during the outage is still
+  delivered. Under `-j` a line marks the resume, in the stream on stdout:
+
+  ```json
+  {"type":"reconnected","outage_secs":8,"attempts":4,"since":1792204276}
+  ```
+
+  (`since` only when the resumed call carried it.) The resumed stream
+  starts as a new call does — `await_reply` says `waiting` again. Without
+  `since`, events during the gap may be missing: re-read what you need.
+  Other modes say it on stderr.
+- **After the window**, synapse **exits 69** with the reason (`… unreachable
+  for 10m (connection refused) — giving up`). It never hangs.
+
+| exit | meaning |
+| -- | -- |
+| 69 | the backend stayed unreachable for the whole window |
+| 75 | a write went out and its answer never came — it may have happened |
+| 77 | the hub refused the call (AUTH-8) |
+
 ## Code Generation
 
 Synapse emits a structured Intermediate Representation for building typed clients:

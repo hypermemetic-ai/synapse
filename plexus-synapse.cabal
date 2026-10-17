@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            3.14.8
+version:            3.14.9
 synopsis:           Schema-driven CLI for Plexus RPC servers
 license:            MIT
 author:
@@ -31,6 +31,7 @@ library
     Synapse.Algebra.Walk
     Synapse.Algebra.Recursion
     Synapse.Transport
+    Synapse.Reconnect
     Synapse.Cache
     Synapse.Deprecation
     Synapse.Renderer
@@ -578,6 +579,29 @@ test-suite find-test
     network >= 3.1 && < 3.3,
     websockets >= 0.13 && < 0.14,
     vector >= 0.12 && < 0.14,
+    hspec >= 2.10 && < 2.12
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -threaded
+
+test-suite reconnect-test
+  -- SYNAPSE-20: a lost connection is noticed (a close, a drop before any
+  -- answer, a silent peer by its keepalive) and synapse rides out the
+  -- outage — a read sent again, a stream resumed with since, a write that
+  -- went out never repeated, one that never left sent when the backend is
+  -- back, the window run out — against a flaky hub on ports of its own.
+  type:             exitcode-stdio-1.0
+  main-is:          ReconnectSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    text >= 2.0 && < 2.2,
+    network >= 3.1 && < 3.3,
+    websockets >= 0.13 && < 0.14,
     hspec >= 2.10 && < 2.12
   hs-source-dirs:   test
   default-language: GHC2021

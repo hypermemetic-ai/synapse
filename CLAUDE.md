@@ -87,6 +87,19 @@ Arguments are derived from JSON Schema. The CLI accepts simple values:
 - Lists of scalars: `--tags a,b,c` or `--tags a --tags b`; an element containing a comma is double-quoted, with the quotes protected from the shell: `--tags '"a,b",c'` (see README "Lists")
 - Raw JSON override: `-p '{"custom": "params"}'`
 
+## Outages (SYNAPSE-20, 3.14.9)
+
+synapse reconnects for 10 minutes (`--reconnect-for 10m`, `0` = never;
+`SYNAPSE_RECONNECT_FOR`), noticing a close, a reset or a silent drop (a
+keepalive ping after 15 s idle; `PLEXUS_KEEPALIVE=IDLE[,TIMEOUT]`). A read is
+sent again; a write that went out is not (exit 75: it may have happened); a
+stream resubscribes, with `since` = when it began when the method takes one
+(`await_reply`), and `-j` prints `{"type":"reconnected",…}`; past the window,
+exit 69. Progress is on stderr. The detection is plexus-protocol's
+`Plexus.Client` (`LostConnection`, `scClosed`, the keepalive); the policy is
+`Synapse.Reconnect`; `test/ReconnectSpec.hs` pins both against a flaky hub.
+README "Outages: reconnecting".
+
 ## Credentials & `_self`
 
 Per-backend credential defaults live at `~/.plexus/<backend>/defaults.json`. Each cookie/header value is a **credential-reference URI** resolved at request time — never a raw secret in the file unless using the `literal:` escape hatch.
