@@ -87,6 +87,23 @@ Arguments are derived from JSON Schema. The CLI accepts simple values:
 - Lists of scalars: `--tags a,b,c` or `--tags a --tags b`; an element containing a comma is double-quoted, with the quotes protected from the shell: `--tags '"a,b",c'` (see README "Lists")
 - Raw JSON override: `-p '{"custom": "params"}'`
 
+## wss (SCAFFOLD-21, 3.15.0)
+
+`synapse --url wss://hostdemo.menger.sh/ws hostdemo …` (or `-H HOST --tls
+--path /ws`; `--cacert FILE` for a local CA) reaches a hub behind TLS — every
+command: calls, streams and their reconnects, `-s`, `_find`, bidirectional
+`respond`, `_login`. The address is one `Synapse.Endpoint` (host, port, tls,
+path, CA files) from `app/Main.hs`'s `resolveConnection` to every dial
+(`substrateConfig`); the TLS dial is plexus-protocol's `Plexus.Client`
+(`substrateTls`, the `tls` package, the system trust store via
+crypton-x509-system — always verified, no skip switch). Sessions: a plain
+`ws://HOST:PORT/` keeps `HOST_PORT` (nothing moves); anything else is keyed
+by its URL (`sessions/wss_HOST_443_ws/`, keychain `backend=wss://HOST:443/ws`).
+A key proof's `aud` is `wss://HOST` behind TLS (`Endpoint.audience`).
+`test/EndpointSpec.hs` pins the keys; `test/TlsSpec.hs` runs the probe, a
+call, a bidirectional request and a key login through a TLS terminator of its
+own (openssl makes the CA per run). README "A hub behind TLS".
+
 ## Outages (SYNAPSE-20, 3.14.9)
 
 synapse reconnects for 10 minutes (`--reconnect-for 10m`, `0` = never;

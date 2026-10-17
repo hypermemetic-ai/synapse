@@ -15,7 +15,7 @@
 -- is passed through for method invocation.
 module Main where
 
-import Control.Monad (when)
+import Control.Monad (filterM, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson
@@ -40,7 +40,7 @@ import System.IO (hPutStrLn, stderr, hFlush, stdout, hIsTerminalDevice)
 
 
 import Synapse.Schema.Types
-import Synapse.Monad (SynapseM, SynapseEnv(..), SynapseError(..), BackendErrorType(..), TransportContext(..), TransportErrorCategory(..), initEnv, runSynapseM, throwNav, throwTransport, throwParse, throwBackend, withRequestContext, withViewKey)
+import Synapse.Monad (SynapseM, SynapseEnv(..), SynapseError(..), BackendErrorType(..), TransportContext(..), TransportErrorCategory(..), initEnvAt, runSynapseM, throwNav, throwTransport, throwParse, throwBackend, withRequestContext, withViewKey)
 import qualified Synapse.Self as Self
   ( CredentialRef(..)
   , ResolveError(..)
@@ -73,11 +73,13 @@ import Synapse.CLI.Transform (TransformEnv(..), mkTransformEnv, transformParams,
 import Synapse.CLI.Source (SourceEnv, mkSourceEnv, expandSources, expandValue, stdinWasRead, renderSourceError)
 import Synapse.IR.Builder (buildIR)
 import Synapse.Renderer (RendererConfig, defaultRendererConfig, renderItem, prettyValue, withMethodPath)
-import System.Directory (createDirectoryIfMissing, getHomeDirectory)
+import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirectory)
 import System.FilePath ((</>))
 import qualified Synapse.Self.Commands as Self
 import qualified Synapse.Self.Command as SelfCmd
-import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscovery, pingBackends, getBackendAt, getBackendAtWith, probeBackendAtWith, registerWithRegistry, probedInfo)
+import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscoveryAt, endpointFor, pingBackendsVia, getBackendAt, getBackendAtEp, probeBackendAtEp, registerWithRegistry, probedInfoAt, probeFailureAt)
+import Synapse.Endpoint (Endpoint(..), plainAt, isPlain, parseUrl, normalisePath, cliOptions)
+import qualified Synapse.Endpoint as E
 import Control.Applicative ((<|>))
 import System.Environment (lookupEnv)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -100,6 +102,13 @@ import Synapse.IR.Cache (newIRCache, defaultCacheConfig)
 data SynapseOpts = SynapseOpts
   { soHost          :: Text          -- ^ Registry host for discovery
   , soPort          :: Int           -- ^ Registry port for discovery
+  , soHostFlag      :: Maybe Text    -- ^ SCAFFOLD-21: -H as given
+  , soPortFlag      :: Maybe Int     -- ^ SCAFFOLD-21: -P as given
+  , soUrl           :: Maybe Text    -- ^ SCAFFOLD-21: --url ws[s]://HOST[:PORT][/PATH]
+  , soTls           :: Bool          -- ^ SCAFFOLD-21: --tls — wss to -H / -P
+  , soPath          :: Maybe Text    -- ^ SCAFFOLD-21: --path — the socket's path
+  , soCaCerts       :: [Text]        -- ^ SCAFFOLD-21: --cacert FILE — trusted beside the system's
+  , soEndpoint      :: Endpoint      -- ^ SCAFFOLD-21: the connection point, resolved from the above
   , soJson          :: Bool          -- ^ Output raw JSON stream items
   , soRaw           :: Bool          -- ^ Output raw content (no templates)
   , soDryRun        :: Bool          -- ^ Show request without sending
@@ -219,10 +228,10 @@ resolveToken opts _backend =
 --
 -- (No signature: the result is the websockets package's header list, which
 -- this executable does not depend on by name.)
-probeHeaders opts host port = do
+probeHeaders opts ep = do
   mToken <- resolveToken opts ""
   (cookies, headers) <- collectRequestContext opts
-  sess <- sessionHeaders opts host port (isJust mToken || hasCredential cookies headers)
+  sess <- sessionHeaders opts ep (isJust mToken || hasCredential cookies headers)
   pure (mergeUpgradeHeaders mToken cookies (headers ++ sess))
 
 -- | Does this cookie/header set already carry a credential (an
@@ -241,29 +250,29 @@ askedAgent opts = do
   where mfilter' f m = m >>= \x -> if f x then Just x else Nothing
 
 -- | IDENTITY-43: the stored session's @Authorization: Bearer@ for a call to
--- HOST:PORT — none when the call already carries a credential (-t,
+-- the address — none when the call already carries a credential (-t,
 -- --token-file, an access_token cookie, an Authorization header).
-sessionHeaders :: SynapseOpts -> Text -> Int -> Bool -> IO [(Text, Text)]
-sessionHeaders opts host port explicit
+sessionHeaders :: SynapseOpts -> Endpoint -> Bool -> IO [(Text, Text)]
+sessionHeaders opts ep explicit
   | explicit = pure []
   | otherwise = do
       st <- Store.systemStoreEnv
       asked <- askedAgent opts
       logger <- makeLoggerFromOpts opts
-      maybe [] (\s -> [Session.bearer (Session.asToken s)]) <$> Session.sessionFor logger st asked host port
+      maybe [] (\s -> [Session.bearer (Session.asToken s)]) <$> Session.sessionFor logger st asked ep
 
 -- | IDENTITY-43: the _info probe, logging in again from the key once when
 -- the upgrade is refused (401) while a stored session is carried.
-probeWithSession :: SynapseOpts -> Text -> Int -> IO (Maybe Text)
+probeWithSession :: SynapseOpts -> Endpoint -> IO (Maybe Text)
 probeWithSession = probeWithSession' False
 
 -- | SYNAPSE-20: with @waits@, a probe that fails as an outage does is
 -- tried again for the reconnect window.
-probeWithSession' :: Bool -> SynapseOpts -> Text -> Int -> IO (Maybe Text)
-probeWithSession' waits opts host port = do
-  probe <- probeHeaders opts host port
-  let once = probeBackendAtWith probe host port
-      whereTo = host <> ":" <> T.pack (show port)
+probeWithSession' :: Bool -> SynapseOpts -> Endpoint -> IO (Maybe Text)
+probeWithSession' waits opts ep = do
+  probe <- probeHeaders opts ep
+  let once = probeBackendAtEp probe ep
+      whereTo = Store.addressKey ep
   r <- if waits
     then Reconnect.awaitBackend
            (\why -> Reconnect.isOutageText why && not (Session.isUpgradeRefused why))
@@ -273,16 +282,16 @@ probeWithSession' waits opts host port = do
     Right name -> pure (Just name)
     Left why
       | Session.isUpgradeRefused why -> do
-          can <- Session.canReattest host port
+          can <- Session.canReattest ep
           if not can then pure Nothing else do
             st <- Store.systemStoreEnv
             logger <- makeLoggerFromOpts opts
-            new <- Session.reattest logger st host port
+            new <- Session.reattest logger st ep
             case new of
               Nothing -> pure Nothing
               Just _ -> do
-                probe' <- probeHeaders opts host port
-                getBackendAtWith probe' host port
+                probe' <- probeHeaders opts ep
+                getBackendAtEp probe' ep
       | otherwise -> pure Nothing
 
 -- ============================================================================
@@ -320,8 +329,8 @@ renderResolveError = \case
 --
 -- On resolve failure: print a clear message and 'exitFailure'. We never
 -- build a half-authenticated 'SynapseEnv'.
-buildEnv :: Text -> Int -> Text -> Log.Logger -> SynapseOpts -> IO SynapseEnv
-buildEnv host port backend logger opts = do
+buildEnv :: Endpoint -> Text -> Log.Logger -> SynapseOpts -> IO SynapseEnv
+buildEnv ep backend logger opts = do
   -- Legacy token path (unchanged semantically; SELF-3 consolidates).
   mToken <- resolveToken opts backend
   (cliCookieList, cliHeaderList) <- collectRequestContext opts
@@ -351,13 +360,13 @@ buildEnv host port backend logger opts = do
 
   -- IDENTITY-43: no credential given or stored for this backend — carry
   -- the agent's stored session, if there is one.
-  sess <- sessionHeaders opts host port
+  sess <- sessionHeaders opts ep
             (hasCredential (Map.toList mergedCookies) (Map.toList mergedHeaders))
 
   -- 'seToken = Nothing' here: any access_token cookie already sits in the
   -- merged cookie map. Transport's mergeUpgradeHeaders joins them into a
   -- single Cookie header exactly as before.
-  env0 <- initEnv host port backend logger Nothing
+  env0 <- initEnvAt ep backend logger Nothing
   pure $ withRequestContext (Map.toList mergedCookies)
                              (Map.toList mergedHeaders ++ sess)
                              env0
@@ -370,8 +379,13 @@ buildEnv host port backend logger opts = do
 
 main :: IO ()
 main = do
-  args <- execParser argsInfo
-  let opts = argOpts args
+  args0 <- execParser argsInfo
+  -- SCAFFOLD-21: where the connection point is — --url, or -H / -P with
+  -- --tls / --path — resolved once, before anything dials
+  opts <- either (\e -> hPutStrLn stderr ("synapse: " <> T.unpack e) >> exitWith (ExitFailure 2)) pure
+            =<< resolveConnection (argOpts args0)
+  let args = args0 { argOpts = opts }
+      ep = soEndpoint opts
 
   -- SYNAPSE-20: the reconnect window, before anything dials
   envWindow <- lookupEnv "SYNAPSE_RECONNECT_FOR"
@@ -395,12 +409,12 @@ main = do
   Log.logDebug logger Log.SubsystemCLI "synapse starting..."
 
   -- Use specified host/port for registry discovery
-  let discovery = registryDiscovery (soHost opts) (soPort opts)
+  let discovery = registryDiscoveryAt ep
 
   -- Get the backend at the connection point (host:port)
   -- If it has a registry plugin, that's used for discovering other backends
   Log.logDebug logger Log.SubsystemDiscovery $
-    "Checking backend at " <> soHost opts <> ":" <> T.pack (show (soPort opts))
+    "Checking backend at " <> Store.addressKey ep
 
   -- IDENTITY-16: the probe carries what the command line supplied (-t,
   -- --token-file, --cookie, --header and their env forms), so a backend that
@@ -412,7 +426,7 @@ main = do
   let waits = case argBackend args of
         Just b -> b == "_find" || not ("_" `T.isPrefixOf` b || "-" `T.isPrefixOf` b)
         Nothing -> False
-  maybeBackend <- probeWithSession' waits opts (soHost opts) (soPort opts)
+  maybeBackend <- probeWithSession' waits opts ep
 
   Log.logDebug logger Log.SubsystemDiscovery $
     "Backend check complete: " <> T.pack (show maybeBackend)
@@ -422,7 +436,9 @@ main = do
   -- discovered backend to the registry at the default port (if reachable)
   let targetPort = soPort opts
       targetHost = soHost opts
-  when (targetPort /= defaultPort) $ do
+  -- SCAFFOLD-21: a registry records ws://HOST:PORT; an address behind TLS
+  -- or on a path is not registered
+  when (targetPort /= defaultPort && isPlain ep) $ do
     case maybeBackend of
       Just name -> do
         -- Check if the registry is at the default port
@@ -444,9 +460,9 @@ main = do
           TIO.putStr cliHeader
           backends <- discoverBackends discovery
           -- Ping backends to check if they're reachable
-          backendsWithStatus <- pingBackends backends
+          backendsWithStatus <- pingBackendsVia ep backends
           TIO.putStrLn "\nAvailable backends:"
-          mapM_ printBackend backendsWithStatus
+          mapM_ (printBackend ep) backendsWithStatus
           TIO.putStrLn "\nUsage: synapse <backend> [command...]"
     Just backend
       -- Handle --help/-h if it somehow ends up as the backend
@@ -522,12 +538,13 @@ runKey rest = do
 -- | IDENTITY-43: where @_login@ / @_logout@ dial — the connection point
 -- named with @-P@, else what the registry says of the backend, else the
 -- connection point.
-loginAddress :: SynapseOpts -> Text -> IO (Text, Int)
+loginAddress :: SynapseOpts -> Text -> IO Endpoint
 loginAddress opts backendName
-  | soPort opts /= defaultPort = pure (soHost opts, soPort opts)
+  | soPort opts /= defaultPort || not (isPlain ep) = pure ep
   | otherwise = do
-      registered <- getBackendInfo (registryDiscovery (soHost opts) (soPort opts)) backendName
-      pure $ maybe (soHost opts, soPort opts) (\b -> (backendHost b, backendPort b)) registered
+      registered <- getBackendInfo (registryDiscoveryAt ep) backendName
+      pure $ maybe ep (endpointFor ep) registered
+  where ep = soEndpoint opts
 
 dieWith :: Text -> IO a
 dieWith msg = TIO.hPutStrLn stderr ("synapse: " <> msg) >> exitFailure
@@ -548,10 +565,10 @@ runLogin opts rest = do
     Left e -> dieWith e
     Right Nothing -> dieWith ("no key " <> keyName <> " (synapse _key new " <> keyName <> ")")
     Right (Just (s, _)) -> pure s
-  (host, port) <- loginAddress opts (IdCmd.loBackend lo)
+  ep <- loginAddress opts (IdCmd.loBackend lo)
   logger <- makeLoggerFromOpts opts
-  r <- Session.loginWithKey logger host port (IdCmd.loBackend lo) seed agent (IdCmd.loScope lo) (IdCmd.loTtl lo)
-  lr <- either (\e -> dieWith ("login to " <> IdCmd.loBackend lo <> " at " <> Store.addressKey host port <> " failed: " <> e)) pure r
+  r <- Session.loginWithKey logger ep (IdCmd.loBackend lo) seed agent (IdCmd.loScope lo) (IdCmd.loTtl lo)
+  lr <- either (\e -> dieWith ("login to " <> IdCmd.loBackend lo <> " at " <> Store.addressKey ep <> " failed: " <> e)) pure r
   let rec = Store.SessionRec
         { Store.srToken = Session.lrToken lr
         , Store.srPrincipal = if T.null (Session.lrPrincipal lr) then Proof.principalOf seed else Session.lrPrincipal lr
@@ -562,8 +579,8 @@ runLogin opts rest = do
         , Store.srTtl = IdCmd.loTtl lo
         , Store.srBackend = IdCmd.loBackend lo
         }
-  src <- Store.writeSession st host port rec
-  Store.writeDefaultAgent st host port (Store.srAgent rec)
+  src <- Store.writeSession st ep rec
+  Store.writeDefaultAgent st ep (Store.srAgent rec)
   let until' = case Store.srExpiresAt rec of
         Just t -> T.pack (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC" (posixSecondsToUTCTime (fromIntegral t)))
         Nothing -> "(the server named no end)"
@@ -572,7 +589,7 @@ runLogin opts rest = do
         Store.SessionFromKeychain -> "keychain"
         Store.SessionFromFile p -> T.pack p
         Store.SessionFromEnv -> "PLEXUS_SESSION"
-  TIO.putStrLn $ "signed in to " <> IdCmd.loBackend lo <> " at " <> Store.addressKey host port <> " as " <> Store.srAgent rec
+  TIO.putStrLn $ "signed in to " <> IdCmd.loBackend lo <> " at " <> Store.addressKey ep <> " as " <> Store.srAgent rec
   mapM_ (\(k, v) -> TIO.putStrLn ("  " <> T.justifyLeft 10 ' ' k <> v))
     [ ("principal", Store.srPrincipal rec)
     , ("scope", scope)
@@ -592,13 +609,13 @@ personAgent = "me"
 runLoginPerson :: SynapseOpts -> IdCmd.LoginOpts -> IO ()
 runLoginPerson opts lo = do
   let backend = IdCmd.loBackend lo
-  (host, port) <- loginAddress opts backend
+  ep <- loginAddress opts backend
   logger <- makeLoggerFromOpts opts
-  r <- Session.loginPerson logger host port backend 300 (TIO.hPutStrLn stderr)
-  g <- either (\e -> dieWith ("sign-in to " <> backend <> " at " <> Store.addressKey host port <> " failed: " <> e)) pure r
+  r <- Session.loginPerson logger ep backend 300 (TIO.hPutStrLn stderr)
+  g <- either (\e -> dieWith ("sign-in to " <> backend <> " at " <> Store.addressKey ep <> " failed: " <> e)) pure r
   who <- case sgWhoami g of
     Just w -> pure (Just w)
-    Nothing -> Session.whoamiWith logger host port backend (sgToken g)
+    Nothing -> Session.whoamiWith logger ep backend (sgToken g)
   let rec = Store.SessionRec
         { Store.srToken = sgToken g
         , Store.srPrincipal = sgPrincipal g
@@ -610,8 +627,8 @@ runLoginPerson opts lo = do
         , Store.srBackend = backend
         }
   st <- Store.systemStoreEnv
-  src <- Store.writeSession st host port rec
-  Store.writeDefaultAgent st host port personAgent
+  src <- Store.writeSession st ep rec
+  Store.writeDefaultAgent st ep personAgent
   let named = case who of
         Just w -> maybe "" id (T.stripPrefix "you are " (renderCallerHeader w))
         Nothing -> case sgName g of
@@ -636,30 +653,32 @@ runLogout :: SynapseOpts -> [Text] -> IO ()
 runLogout opts rest = do
   lo <- handleParseResult (execParserPure defaultPrefs IdCmd.logoutInfo (map T.unpack rest))
   st <- Store.systemStoreEnv
-  (host, port) <- loginAddress opts (IdCmd.lgBackend lo)
+  ep <- loginAddress opts (IdCmd.lgBackend lo)
   asked <- askedAgent opts
-  dflt <- Store.readDefaultAgent st host port
-  agent <- maybe (dieWith ("no agent is signed in to " <> Store.addressKey host port <> " (name one: --as AGENT)")) pure
+  dflt <- Store.readDefaultAgent st ep
+  agent <- maybe (dieWith ("no agent is signed in to " <> Store.addressKey ep <> " (name one: --as AGENT)")) pure
              (IdCmd.lgAs lo <|> asked <|> dflt)
-  found <- Store.lookupSession st host port agent
+  found <- Store.lookupSession st ep agent
   rec <- case found of
     Just (Right r, src) | src /= Store.SessionFromEnv -> pure r
-    _ -> dieWith ("no stored session for " <> agent <> " at " <> Store.addressKey host port)
+    _ -> dieWith ("no stored session for " <> agent <> " at " <> Store.addressKey ep)
   logger <- makeLoggerFromOpts opts
-  r <- Session.logoutWithToken logger host port (IdCmd.lgBackend lo) (Store.srToken rec)
-  Store.removeSession st host port agent
-  Store.clearDefaultAgent st host port agent
+  r <- Session.logoutWithToken logger ep (IdCmd.lgBackend lo) (Store.srToken rec)
+  Store.removeSession st ep agent
+  Store.clearDefaultAgent st ep agent
   case r of
-    Right () -> TIO.putStrLn ("signed out " <> agent <> " at " <> Store.addressKey host port)
-    Left e -> TIO.putStrLn ("forgot " <> agent <> "'s session at " <> Store.addressKey host port
+    Right () -> TIO.putStrLn ("signed out " <> agent <> " at " <> Store.addressKey ep)
+    Left e -> TIO.putStrLn ("forgot " <> agent <> "'s session at " <> Store.addressKey ep
                              <> " (the server said: " <> e <> ")")
   exitSuccess
 
 -- | Print a backend in the list
-printBackend :: Backend -> IO ()
-printBackend b = do
+-- (SCAFFOLD-21: the connection point by the URL it was named with, when
+-- it is not plain ws://HOST:PORT/)
+printBackend :: Endpoint -> Backend -> IO ()
+printBackend ep b = do
   let nameField = T.justifyLeft 15 ' ' (backendName b)
-  let hostPort = backendHost b <> ":" <> T.pack (show (backendPort b))
+  let hostPort = Store.addressKey (endpointFor ep b)
   let status = case backendReachable b of
         Just True  -> " [OK]"
         Just False -> " [UNREACHABLE]"
@@ -673,6 +692,7 @@ printBackend b = do
 runWithDiscovery :: BackendDiscovery -> Text -> Args -> IO ()
 runWithDiscovery discovery backendName args = do
   let opts = argOpts args
+      ep = soEndpoint opts
   -- Try to discover backend info
   maybeBackend <- getBackendInfo discovery backendName
 
@@ -683,17 +703,20 @@ runWithDiscovery discovery backendName args = do
       -- or the registry has stale entries.
       -- SYNAPSE-20: a named backend's probe waits out an outage (or the
       -- server's 429 under many parallel calls) as the first one did
-      actualName <- probeWithSession' True opts (backendHost backend) (backendPort backend)
+      -- SCAFFOLD-21: at the connection point, reached as it was named
+      let at = endpointFor ep backend
+      actualName <- probeWithSession' True opts at
       case actualName of
         Just name | name /= backendName -> do
           hPutStrLn stderr $ "Backend mismatch: requested '" <> T.unpack backendName
-            <> "' but " <> T.unpack (backendHost backend) <> ":" <> show (backendPort backend)
+            <> "' but " <> T.unpack (Store.addressKey at)
             <> " identifies as '" <> T.unpack name <> "'"
           exitFailure
         Nothing -> do
           -- Protocol handshake failed when verifying backend
+          when (epTls at) $ tlsUnreachable at
           logger <- makeLoggerFromOpts opts
-          env <- buildEnv (soHost opts) (soPort opts) backendName logger opts
+          env <- buildEnv ep backendName logger opts
           result <- runSynapseM env (throwBackend (ProtocolHandshakeFailed (backendHost backend) (backendPort backend)) [])
           case result of
             Left err -> do
@@ -702,16 +725,17 @@ runWithDiscovery discovery backendName args = do
             Right () -> exitSuccess
         Just _ ->
           -- Match confirmed
-          run backendName (backendHost backend) (backendPort backend) args
+          run backendName at args
     Nothing -> do
       -- Backend not found in registry - check if this was a direct connection attempt
       -- where the protocol handshake failed
-      maybeDirectBackend <- probeWithSession' True opts (soHost opts) (soPort opts)
+      maybeDirectBackend <- probeWithSession' True opts ep
       logger <- makeLoggerFromOpts opts
-      env <- buildEnv (soHost opts) (soPort opts) backendName logger opts
+      env <- buildEnv ep backendName logger opts
       case maybeDirectBackend of
         Nothing -> do
           -- Protocol handshake failed at the specified host:port
+          when (epTls ep) $ tlsUnreachable ep
           result <- runSynapseM env (throwBackend (ProtocolHandshakeFailed (soHost opts) (soPort opts)) [])
           case result of
             Left err -> do
@@ -721,7 +745,7 @@ runWithDiscovery discovery backendName args = do
         Just discoveredName | discoveredName /= backendName -> do
           -- Backend exists but has a different name
           backends <- discoverBackends discovery
-          backendsWithStatus <- pingBackends backends
+          backendsWithStatus <- pingBackendsVia ep backends
           result <- runSynapseM env (throwBackend (BackendNotFound backendName) backendsWithStatus)
           case result of
             Left err -> do
@@ -730,15 +754,45 @@ runWithDiscovery discovery backendName args = do
             Right () -> exitSuccess
         Just _ -> do
           -- Backend discovered successfully - should not reach here, but proceed
-          run backendName (soHost opts) (soPort opts) args
+          run backendName ep args
+
+-- | SCAFFOLD-21: a wss address whose probe failed — why, from the probe
+-- (a certificate the trust store refused, a name it does not cover, a
+-- proxy that does not upgrade), and what to do about a local CA. Exits 1.
+tlsUnreachable :: Endpoint -> IO ()
+tlsUnreachable at = do
+  why <- maybe "no answer" id <$> probeFailureAt at
+  let shown = T.replace "\\\"" "\"" (fst (T.breakOn "\\nCallStack" why))
+      detail = case T.breakOn "Error_Protocol \"" shown of
+        (_, r) | not (T.null r) -> T.takeWhile (/= '"') (T.drop (T.length "Error_Protocol \"") r)
+        _ -> shown
+      has = any (`T.isInfixOf` shown)
+  if has ["HandshakeFailed"]
+    then do
+      TIO.hPutStrLn stderr $ "synapse: the TLS handshake with " <> E.shortUrl at <> " failed: " <> detail
+      TIO.hPutStrLn stderr $
+        if has ["UnknownCa", "unknown CA", "ertificate", "NameMismatch", "Expired", "SelfSigned"]
+          then "  its certificate is checked against the system's trust store and each --cacert, and its name\n"
+            <> "  against " <> epHost at <> "; for a local CA, add --cacert ROOT.pem"
+          else "  the server refused it — does it serve a certificate for " <> epHost at <> "?"
+    else case T.breakOn "responseCode = " shown of
+      (_, r) | not (T.null r) -> do
+        let code = T.takeWhile (`elem` ['0' .. '9']) (T.drop (T.length "responseCode = ") r)
+        TIO.hPutStrLn stderr $ "synapse: " <> E.shortUrl at <> " answered the upgrade with HTTP " <> code
+          <> ", not a WebSocket"
+        TIO.hPutStrLn stderr $ if code `elem` ["401", "403"]
+          then "  it refused the credential: sign in with synapse " <> cliOptions at <> " _login BACKEND"
+          else "  is " <> epPath at <> " the socket's path? (a hosted app's is /ws)"
+      _ -> TIO.hPutStrLn stderr $ "synapse: " <> E.shortUrl at <> " did not answer the _info probe: " <> detail
+  exitFailure
 
 -- | Run a Hub command with specified backend and connection details
-run :: Text -> Text -> Int -> Args -> IO ()
-run backend host port args = do
+run :: Text -> Endpoint -> Args -> IO ()
+run backend ep args = do
   let opts = argOpts args
   logger <- makeLoggerFromOpts opts
-  Log.logInfo logger Log.SubsystemCLI $ "Synapse starting: backend=" <> backend <> ", host=" <> host <> ", port=" <> T.pack (show port)
-  env <- withView host port =<< buildEnv host port backend logger opts
+  Log.logInfo logger Log.SubsystemCLI $ "Synapse starting: backend=" <> backend <> ", at " <> Store.addressKey ep
+  env <- withView ep =<< buildEnv ep backend logger opts
   rendererCfg <- defaultRendererConfig
   Log.logDebug logger Log.SubsystemCLI "Running dispatch..."
   result <- runSynapseM env (dispatch args rendererCfg)
@@ -752,10 +806,10 @@ run backend host port args = do
         _ -> False
   result' <- if not (isJust ended || refused) then pure result else do
     st <- Store.systemStoreEnv
-    new <- Session.reattest logger st host port
+    new <- Session.reattest logger st ep
     case new of
       Just _ -> do
-        env' <- withView host port =<< buildEnv host port backend logger opts
+        env' <- withView ep =<< buildEnv ep backend logger opts
         runSynapseM env' (dispatch args rendererCfg)
       Nothing -> do
         mapM_ (\m -> hPutStrLn stderr ("Error: " <> T.unpack m)) ended
@@ -775,9 +829,9 @@ refusedExit = 77
 
 -- | AUTH-8: the env's cache keys qualified by the caller's view, as the
 -- _info probe at this address answered it (the view's hash, else its kind).
-withView :: Text -> Int -> SynapseEnv -> IO SynapseEnv
-withView host port env = do
-  info <- probedInfo host port
+withView :: Endpoint -> SynapseEnv -> IO SynapseEnv
+withView ep env = do
+  info <- probedInfoAt ep
   let key = info >>= \i -> infoViewHash i <|> (viewText <$> infoView i)
   pure (withViewKey key env)
 
@@ -1004,9 +1058,8 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
     -- AUTH-8: what the _info probe at this address answered (view, auth)
     currentInfo :: SynapseM (Maybe BackendInfo)
     currentInfo = do
-      h <- asks seHost
-      p <- asks sePort
-      liftIO (probedInfo h p)
+      ep <- asks seEndpoint
+      liftIO (probedInfoAt ep)
 
     viewSchema = \case
       ViewPlugin schema _ -> Just schema
@@ -1035,9 +1088,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
     -- SYNAPSE-13: synapse and the global options that reach this backend,
     -- as a command line shown in help (@synapse -P 4455@).
     invokeProgram :: Text
-    invokeProgram = "synapse"
-      <> (if soHost /= defaultHost then " -H " <> soHost else "")
-      <> (if soPort /= defaultPort then " -P " <> T.pack (show soPort) else "")
+    invokeProgram = T.unwords (filter (not . T.null) ["synapse", cliOptions soEndpoint])
 
     -- SYNAPSE-13: what a method's page needs beside the IR — how it is
     -- reached, its schema (examples, values, grant) and the caller's view.
@@ -1124,9 +1175,8 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
       -- IDENTITY-43: while the stored session could still be made again,
       -- a "you have signed out" answered before anything else is held back
       -- for 'run' to log in again and retry.
-      host <- asks seHost
-      port <- asks sePort
-      armed <- liftIO $ Session.canReattest host port
+      ep <- asks seEndpoint
+      armed <- liftIO $ Session.canReattest ep
       let printer item = do
             shown <- Session.printedAny
             if armed && not shown && Session.isSessionEndedItem item
@@ -1156,11 +1206,11 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
       logger' <- asks seLogger
       let refreshAuth = do
             st <- Store.systemStoreEnv
-            new <- Session.reattestAgain logger' st host port
+            new <- Session.reattestAgain logger' st ep
             case new of
               Nothing -> pure Nothing
               Just _ -> do
-                env' <- buildEnv host port backendName' logger' soOpts
+                env' <- buildEnv ep backendName' logger' soOpts
                 pure (Just (mergeUpgradeHeaders (seToken env') (seCookies env') (seHeaders env')))
       -- Use bidirectional streaming handler
       invokeStreamingWithBidir
@@ -1294,6 +1344,14 @@ metaCommands =
       , "                      @text. -p @params.json and -p - take the whole object the"
       , "                      same way. No argument then carries the value, so a body"
       , "                      can be as large as the backend accepts"
+      , ""
+      , "Where the hub is (before the backend):"
+      , "  -P PORT / -H HOST   plain ws://HOST:PORT/ (default 127.0.0.1:4444, the registry)"
+      , "  --url wss://HOST/ws a hub behind TLS (every hosted app), or ws://HOST:PORT/PATH;"
+      , "                      the same as -H HOST --tls --path /ws (443 unless -P). The"
+      , "                      certificate is checked against the system's trust store;"
+      , "                      --cacert FILE trusts a local CA too. Sessions are kept per"
+      , "                      URL, so _login and every call take the same options"
       , ""
       , "Meta-commands:"
       , ""
@@ -1601,14 +1659,24 @@ argsParser = Args <$> optsParser <*> backendParser <*> restParser <*> pure Nothi
 
 optsParser :: Parser SynapseOpts
 optsParser = do
-  soHost <- T.pack <$> strOption
+  soHostFlag <- optional $ T.pack <$> strOption
     ( long "host" <> short 'H' <> metavar "HOST"
-   <> value (T.unpack defaultHost)
    <> help "Registry/discovery host (default: 127.0.0.1)" )
-  soPort <- option auto
+  soPortFlag <- optional $ option auto
     ( long "port" <> short 'P' <> metavar "PORT"
-   <> value defaultPort
-   <> help "Registry/discovery port (default: 4444)" )
+   <> help "Registry/discovery port (default: 4444; 443 with --tls)" )
+  soUrl <- optional $ T.pack <$> strOption
+    ( long "url" <> metavar "URL"
+   <> help "The hub's socket as a URL: ws://HOST[:PORT][/PATH] or wss://HOST[:PORT][/PATH] (e.g. wss://app.menger.sh/ws); in place of -H/-P/--tls/--path" )
+  soTls <- switch
+    ( long "tls"
+   <> help "Dial wss:// (TLS; the certificate checked against the system's trust store) at -H/-P" )
+  soPath <- optional $ T.pack <$> strOption
+    ( long "path" <> metavar "PATH"
+   <> help "The socket's path at -H/-P (default: /), e.g. /ws" )
+  soCaCerts <- many $ T.pack <$> strOption
+    ( long "cacert" <> metavar "FILE"
+   <> help "With wss: also trust the CA certificate(s) in this PEM file (repeatable; a local CA for a test)" )
   soJson <- switch
     ( long "json" <> short 'j'
    <> help "Output raw JSON stream items" )
@@ -1672,7 +1740,41 @@ optsParser = do
   soReconnectFor <- optional $ T.pack <$> strOption
     ( long "reconnect-for" <> metavar "DURATION"
    <> help "Ride out an outage this long: a lost connection is retried, a read sent again, a stream resumed (10m, 90s, 1h; 0 = never; else SYNAPSE_RECONNECT_FOR, else 10m)" )
-  pure SynapseOpts{..}
+  pure SynapseOpts
+    { soHost = maybe defaultHost id soHostFlag
+    , soPort = maybe defaultPort id soPortFlag
+    , soEndpoint = plainAt (maybe defaultHost id soHostFlag) (maybe defaultPort id soPortFlag)
+    , ..
+    }
+
+-- | SCAFFOLD-21: the connection point from the options — @--url@, or @-H@
+-- / @-P@ with @--tls@ (port 443 unless @-P@) and @--path@; plain
+-- @ws://127.0.0.1:4444/@ when none is given. @soHost@ / @soPort@ follow it.
+-- A @--cacert@ that cannot be read is refused here, not at the handshake.
+resolveConnection :: SynapseOpts -> IO (Either Text SynapseOpts)
+resolveConnection o = case pick of
+  Left e -> pure (Left e)
+  Right ep0 -> do
+    let ep = ep0 { epCaFiles = map T.unpack (soCaCerts o) }
+    missing <- filterM (fmap not . doesFileExist . T.unpack) (soCaCerts o)
+    pure $ case () of
+      _ | not (null (soCaCerts o)) && not (epTls ep) ->
+            Left "--cacert is for a wss:// address (--url wss://… or --tls)"
+        | (f : _) <- missing -> Left ("--cacert " <> f <> ": no such file")
+        | otherwise -> Right o { soHost = epHost ep, soPort = epPort ep, soEndpoint = ep }
+  where
+    pick = case soUrl o of
+      Just u
+        | isJust (soHostFlag o) || isJust (soPortFlag o) || soTls o || isJust (soPath o) ->
+            Left "--url names the whole address: give it alone, or -H / -P with --tls / --path"
+        | otherwise -> parseUrl u
+      Nothing -> Right Endpoint
+        { epHost = maybe defaultHost id (soHostFlag o)
+        , epPort = maybe (if soTls o then 443 else defaultPort) id (soPortFlag o)
+        , epTls = soTls o
+        , epPath = maybe "/" normalisePath (soPath o)
+        , epCaFiles = []
+        }
 
 -- | Parse a KEY=VALUE pair (used by --cookie/--header). Treats the first '='
 -- as the separator; everything before is the key, everything after is the value.

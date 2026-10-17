@@ -172,6 +172,60 @@ synapse lforge hyperforge repos_list --org juggernaut
 
 The key mental model: **don't think in terms of hosts and ports.** Register your backends, then use them by name. The registry is the source of truth.
 
+## A hub behind TLS: `--url wss://…` (SCAFFOLD-21, 3.15.0)
+
+A hosted app sits behind a proxy that terminates TLS and routes its socket
+at a path — every app on the house's edge is `wss://<app>.menger.sh/ws`.
+Name it with `--url`, before the backend name like every global option:
+
+```bash
+synapse --url wss://hostdemo.menger.sh/ws hostdemo greeter hello --name Ada
+synapse --url wss://hostdemo.menger.sh/ws -j hostdemo greeter count --to 3
+synapse --url wss://hostdemo.menger.sh/ws -s hostdemo greeter        # the schema
+synapse --url wss://hostdemo.menger.sh/ws                            # the backend there, [OK]
+synapse -H hostdemo.menger.sh --tls --path /ws hostdemo greeter hello --name Ada   # the same address
+```
+
+| option | meaning |
+| -- | -- |
+| `--url ws[s]://HOST[:PORT][/PATH]` | the whole address; the port defaults to the scheme's (80, 443), the path to `/`. Not with `-H`/`-P`/`--tls`/`--path`; `http(s)://` is refused with the `ws(s)://` it means |
+| `--tls` | dial `wss://` at `-H`/`-P` (port 443 unless `-P`) |
+| `--path PATH` | the socket's path at `-H`/`-P` (default `/`) |
+| `--cacert FILE` | with wss, also trust the CA certificate(s) in this PEM file (repeatable) |
+
+**The certificate is always verified**: the chain against the system's trust
+store (the distribution's bundle; `SYSTEM_CERTIFICATE_PATH` points synapse at
+another directory or file) and the name against the host, which is also sent
+as SNI. A failed check fails the handshake before any of the request — a
+token included — is sent. There is no switch that skips the check: for a local
+CA (a throwaway proxy, `caddy … tls internal`), pass its root with `--cacert`.
+
+**Everything rides the same address**: the `_info` probe, calls, streams and
+their reconnects (SYNAPSE-20 — the outage line names the URL), `-s`, `-i`,
+`_find`, bidirectional requests and their `respond`, `_login` / `_logout` and the
+session every later call carries. The upgrade's `Host` is the host alone on 443
+(`host:port` otherwise). A registry lists plain `ws://HOST:PORT` backends, so an
+address behind TLS or on a path is never auto-registered: name it each time,
+or put `--url` in a shell alias.
+
+**Sessions are kept per URL.** A plain `ws://HOST:PORT/` keeps the key it
+always had (`~/.plexus/sessions/HOST_PORT/`, keychain `backend=HOST:PORT`), so
+no stored session moves. Any other address is keyed by its URL with the port
+written — `~/.plexus/sessions/wss_hostdemo.menger.sh_443_ws/AGENT.json`,
+keychain `backend=wss://hostdemo.menger.sh:443/ws` — so a ws and a wss backend
+on one host, or two paths, never share a session. Sign in with the options
+the calls use:
+
+```bash
+synapse --url wss://app.example/ws _login app --key builder --as builder
+synapse --url wss://app.example/ws app tickets health     # carries builder's session
+```
+
+An agent's key proof names the server's socket origin as its audience:
+`ws://HOST:PORT` on a plain address (as before), `wss://HOST` (`:PORT` when
+not 443) behind TLS — what a hub run with `--public-url https://HOST` accepts
+(plexus-login's `socket_urls`). The path is not part of it.
+
 ## Progressive Discovery
 
 Once you're connected, just start typing. Synapse navigates the backend like a filesystem — each level shows what's available, so you never need external docs:

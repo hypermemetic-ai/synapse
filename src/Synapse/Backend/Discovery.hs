@@ -44,16 +44,25 @@ module Synapse.Backend.Discovery
     -- * Implementations
   , stubDiscovery
   , registryDiscovery
+  , registryDiscoveryAt
+
+    -- * SCAFFOLD-21: an address that is not plain ws://HOST:PORT/
+  , endpointFor
 
     -- * Backend Discovery
   , getBackendAt
   , getBackendAtWith
+  , getBackendAtEp
   , probeBackendAtWith
+  , probeBackendAtEp
   , probedInfo
+  , probedInfoAt
+  , probeFailureAt
 
     -- * Health Checks
   , pingBackend
   , pingBackends
+  , pingBackendsVia
 
     -- * Registry Registration
   , registerWithRegistry
@@ -80,7 +89,7 @@ import qualified Data.Map.Strict as Map
 import System.IO.Unsafe (unsafePerformIO)
 import Plexus.Auth (BackendInfo, parseBackendInfo)
 import Control.Monad (void)
-import Plexus.Client (SubstrateConfig(..))
+import Synapse.Endpoint (Endpoint(..), plainAt, substrateConfig, addressKey)
 import qualified Network.WebSockets as WS
 import qualified Plexus.Transport as ST
 import Plexus.Types (PlexusStreamItem(..), TransportError(..))
@@ -193,10 +202,17 @@ instance FromJSON BackendInfoResponse where
 -- Connects to the registry service and queries for registered backends.
 -- Falls back to stubDiscovery if registry is unavailable.
 registryDiscovery :: Text -> Int -> BackendDiscovery
-registryDiscovery registryHost registryPort = BackendDiscovery
+registryDiscovery registryHost registryPort = registryDiscoveryAt (plainAt registryHost registryPort)
+
+-- | SCAFFOLD-21: 'registryDiscovery' through a connection point at any
+-- address (a hub behind TLS, on a path). The backends a registry lists
+-- are plain @ws://HOST:PORT/@, as it records them; the connection point
+-- itself is reached as it was named ('endpointFor').
+registryDiscoveryAt :: Endpoint -> BackendDiscovery
+registryDiscoveryAt ep = BackendDiscovery
   { discoverBackends = do
       -- First, discover the backend name using _info
-      maybeBackendName <- discoverBackendName registryHost registryPort
+      maybeBackendName <- either (const Nothing) Just <$> probeBackendAtEp [] ep
       case maybeBackendName of
         Just discoveredName -> do
           -- Create a Backend entry for the discovered backend
@@ -210,7 +226,7 @@ registryDiscovery registryHost registryPort = BackendDiscovery
                 }
 
           -- Try to get additional backends from registry (if it exists)
-          registryBackends <- queryRegistry registryHost registryPort discoveredName
+          registryBackends <- queryRegistry ep discoveredName
 
           -- Only include discovered backend if not already in registry
           -- (prefer registry entry since it has more details)
@@ -226,97 +242,119 @@ registryDiscovery registryHost registryPort = BackendDiscovery
         Nothing ->
           -- Connection failed completely
           discoverBackends stubDiscovery
-  , getBackendInfo   = queryBackend registryHost registryPort
+  , getBackendInfo   = queryBackend ep
   }
+  where
+    registryHost = epHost ep
+    registryPort = epPort ep
+
+-- | SCAFFOLD-21: how to reach a backend a discovery answered — the
+-- connection point as it was named (its scheme, path, CAs) when the
+-- backend is at its host and port, else plain @ws://HOST:PORT/@.
+endpointFor :: Endpoint -> Backend -> Endpoint
+endpointFor ep b
+  | backendHost b == epHost ep && backendPort b == epPort ep = ep
+  | otherwise = plainAt (backendHost b) (backendPort b)
 
 -- | Get the backend name at a given host/port via _info
 -- Returns whatever backend is running there (e.g., "registry-hub", "plexus")
 -- If that backend has a registry plugin, it can be used to discover other backends
 getBackendAt :: Text -> Int -> IO (Maybe Text)
-getBackendAt = discoverBackendName
+getBackendAt host port = getBackendAtEp [] (plainAt host port)
 
 -- | IDENTITY-16: 'getBackendAt', its _info probe carrying the caller's
 -- upgrade headers (the token's cookie, --cookie, --header; see
 -- 'Synapse.Transport.mergeUpgradeHeaders'). A backend that refuses
 -- anonymous upgrades answers the probe only with them.
 getBackendAtWith :: WS.Headers -> Text -> Int -> IO (Maybe Text)
-getBackendAtWith = discoverBackendNameWith
+getBackendAtWith headers host port = getBackendAtEp headers (plainAt host port)
 
--- | Discover the backend name by calling _info (with 2000ms timeout)
-discoverBackendName :: Text -> Int -> IO (Maybe Text)
-discoverBackendName = discoverBackendNameWith []
-
--- | 'discoverBackendName' with upgrade headers.
-discoverBackendNameWith :: WS.Headers -> Text -> Int -> IO (Maybe Text)
-discoverBackendNameWith headers host port =
-  either (const Nothing) Just <$> probeBackendAtWith headers host port
+-- | SCAFFOLD-21: 'getBackendAtWith' at any address.
+getBackendAtEp :: WS.Headers -> Endpoint -> IO (Maybe Text)
+getBackendAtEp headers ep = either (const Nothing) Just <$> probeBackendAtEp headers ep
 
 -- | IDENTITY-43: the _info probe, saying why when it fails — so a caller
 -- can tell the upgrade's 401 (its session ended) from a backend that is
 -- down.
 probeBackendAtWith :: WS.Headers -> Text -> Int -> IO (Either Text Text)
-probeBackendAtWith headers host port = do
-  let cfg = SubstrateConfig
-        { substrateHost    = T.unpack host
-        , substratePort    = port
-        , substratePath    = "/"
-        , substrateBackend = "" -- Not used for _info
-        , substrateHeaders = headers
-        }
+probeBackendAtWith headers host port = probeBackendAtEp headers (plainAt host port)
+
+-- | SCAFFOLD-21: 'probeBackendAtWith' at any address. Behind TLS the
+-- probe waits longer (a handshake across the internet, not loopback).
+probeBackendAtEp :: WS.Headers -> Endpoint -> IO (Either Text Text)
+probeBackendAtEp headers ep = do
+  let cfg = substrateConfig ep "" headers   -- the backend is not used for _info
+      secs = probeSecs ep
       timeout = do
-        threadDelay 2000000  -- 2 second timeout
-        pure (Left $ ConnectionTimeout host port)
+        threadDelay (secs * 1000000)
+        pure (Left $ ConnectionTimeout (epHost ep) (epPort ep))
       rpcCall = do
         ST.rpcCallWith cfg "_info" Aeson.Null
           `catch` \(e :: SomeException) ->
             pure (Left $ NetworkError ("Connection failed: " <> T.pack (show e)))
 
-  -- Race the RPC call against a 2 second timeout
+  -- Race the RPC call against the timeout
   raceResult <- race timeout rpcCall
 
+  let failed why = do
+        -- SCAFFOLD-21: kept, so a caller can say why (a certificate refused)
+        modifyIORef' failMemo (Map.insert (addressKey ep) why)
+        pure (Left why)
   case raceResult of
     Left _err ->
-      pure (Left "the _info probe timed out")
+      failed "the _info probe timed out"
     Right (Left err) ->
-      pure (Left (T.pack (show err)))
+      failed (T.pack (show err))
     Right (Right items) -> do
       -- Extract the backend name from subscription response
       case [Aeson.fromJSON content | StreamData _ _ _ content <- items] of
         (Aeson.Success v@(Aeson.Object obj):_) | Just (Aeson.String name) <- KM.lookup "backend" obj -> do
           -- AUTH-8: kept for the rest of the process — the view and the
           -- auth block this connection's credential was answered with
-          mapM_ (\i -> modifyIORef' infoMemo (Map.insert (host, port) i)) (parseBackendInfo v)
+          mapM_ (\i -> modifyIORef' infoMemo (Map.insert (addressKey ep) i)) (parseBackendInfo v)
           pure (Right name)
         _ ->
-          pure (Left "the _info probe answered no backend name")
+          failed "the _info probe answered no backend name"
+
+-- | How long the _info probe waits: 2 s on a plain socket (loopback, as
+-- ever), 10 s behind TLS.
+probeSecs :: Endpoint -> Int
+probeSecs ep = if epTls ep then 10 else 2
 
 -- | AUTH-8: what the last successful _info probe at HOST:PORT answered in
 -- this process (its view and auth block), when it was probed.
 probedInfo :: Text -> Int -> IO (Maybe BackendInfo)
-probedInfo host port = Map.lookup (host, port) <$> readIORef infoMemo
+probedInfo host port = probedInfoAt (plainAt host port)
+
+-- | SCAFFOLD-21: 'probedInfo' at any address.
+probedInfoAt :: Endpoint -> IO (Maybe BackendInfo)
+probedInfoAt ep = Map.lookup (addressKey ep) <$> readIORef infoMemo
+
+-- | SCAFFOLD-21: why the last _info probe at this address failed, in this
+-- process (a TLS handshake's refusal, say), if it did.
+probeFailureAt :: Endpoint -> IO (Maybe Text)
+probeFailureAt ep = Map.lookup (addressKey ep) <$> readIORef failMemo
+
+{-# NOINLINE failMemo #-}
+failMemo :: IORef (Map.Map Text Text)
+failMemo = unsafePerformIO (newIORef Map.empty)
 
 {-# NOINLINE infoMemo #-}
-infoMemo :: IORef (Map.Map (Text, Int) BackendInfo)
+infoMemo :: IORef (Map.Map Text BackendInfo)
 infoMemo = unsafePerformIO (newIORef Map.empty)
 
 -- | Query the registry for all backends
-queryRegistry :: Text -> Int -> Text -> IO [Backend]
-queryRegistry host port backendName = do
+queryRegistry :: Endpoint -> Text -> IO [Backend]
+queryRegistry ep backendName = do
   -- Try registry query first
-  queryRegistryImpl host port backendName `catch` \(_e :: SomeException) ->
+  queryRegistryImpl ep backendName `catch` \(_e :: SomeException) ->
     -- Return empty list on error - caller will handle fallback
     pure []
 
 -- | Implementation of registry query
-queryRegistryImpl :: Text -> Int -> Text -> IO [Backend]
-queryRegistryImpl host port backendName = do
-  let cfg = SubstrateConfig
-        { substrateHost    = T.unpack host
-        , substratePort    = port
-        , substratePath    = "/"
-        , substrateBackend = backendName
-        , substrateHeaders = []
-        }
+queryRegistryImpl :: Endpoint -> Text -> IO [Backend]
+queryRegistryImpl ep backendName = do
+  let cfg = substrateConfig ep backendName []
   -- Call registry.list through the backend
   result <- ST.invokeMethod cfg ["registry"] "list" (Aeson.object [])
   case result of
@@ -329,10 +367,10 @@ queryRegistryImpl host port backendName = do
       pure $ map convertBackend backendInfos
 
 -- | Query for a specific backend by name
-queryBackend :: Text -> Int -> Text -> IO (Maybe Backend)
-queryBackend host port name = do
+queryBackend :: Endpoint -> Text -> IO (Maybe Backend)
+queryBackend ep name = do
   -- First discover the backend name
-  maybeBackendName <- discoverBackendName host port
+  maybeBackendName <- getBackendAtEp [] ep
   case maybeBackendName of
     Just discoveredName -> do
       -- Check if the requested name matches the discovered backend
@@ -340,29 +378,23 @@ queryBackend host port name = do
         then pure $ Just Backend
           { backendName        = discoveredName
           , backendDescription = "Backend discovered via _info"
-          , backendHost        = host
-          , backendPort        = port
+          , backendHost        = epHost ep
+          , backendPort        = epPort ep
           , backendVersion     = Nothing
           , backendReachable   = Nothing
           }
         else do
           -- Try to find it in the registry
           result <- catch
-            (queryBackendImpl host port discoveredName name)
+            (queryBackendImpl ep discoveredName name)
             (\(_e :: SomeException) -> pure Nothing)
           pure result
     Nothing -> getBackendInfo stubDiscovery name
 
 -- | Implementation of backend get query
-queryBackendImpl :: Text -> Int -> Text -> Text -> IO (Maybe Backend)
-queryBackendImpl host port backendName name = do
-  let cfg = SubstrateConfig
-        { substrateHost    = T.unpack host
-        , substratePort    = port
-        , substratePath    = "/"
-        , substrateBackend = backendName
-        , substrateHeaders = []
-        }
+queryBackendImpl :: Endpoint -> Text -> Text -> IO (Maybe Backend)
+queryBackendImpl ep backendName name = do
+  let cfg = substrateConfig ep backendName []
       params = Aeson.object ["name" Aeson..= name]
   result <- ST.invokeMethod cfg ["registry"] "get" params
   case result of
@@ -390,19 +422,21 @@ convertBackend info = Backend
 -- 300ms allows for WebSocket connection establishment overhead (~150-200ms)
 -- plus actual RPC round-trip time
 pingBackend :: Backend -> IO Backend
-pingBackend backend = do
-  let cfg = SubstrateConfig
-        { substrateHost    = T.unpack (backendHost backend)
-        , substratePort    = backendPort backend
-        , substratePath    = "/"
-        , substrateBackend = ""  -- _info has no namespace prefix
-        , substrateHeaders = []
-        }
-      timeout = threadDelay 300000 >> pure (Left $ ConnectionTimeout (backendHost backend) (backendPort backend))
+pingBackend = pingBackendAt Nothing
+
+-- | SCAFFOLD-21: ping at the backend's own address — the connection point
+-- as it was named when the backend is there ('endpointFor'), which behind
+-- TLS is given 5 s rather than 300 ms.
+pingBackendAt :: Maybe Endpoint -> Backend -> IO Backend
+pingBackendAt via backend = do
+  let ep = maybe (plainAt (backendHost backend) (backendPort backend)) (`endpointFor` backend) via
+      cfg = substrateConfig ep "" []  -- _info has no namespace prefix
+      micros = if epTls ep then 5000000 else 300000
+      timeout = threadDelay micros >> pure (Left $ ConnectionTimeout (backendHost backend) (backendPort backend))
       rpcCall = ST.rpcCallWith cfg "_info" Aeson.Null
         `catch` \(_e :: SomeException) -> pure (Left $ NetworkError "Connection failed")
 
-  -- Race the RPC call against a 300ms timeout
+  -- Race the RPC call against the timeout
   result <- race timeout rpcCall
   let reachable = case result of
         Left _          -> False  -- Timeout
@@ -414,6 +448,10 @@ pingBackend backend = do
 -- | Ping all backends in parallel
 pingBackends :: [Backend] -> IO [Backend]
 pingBackends backends = mapConcurrently pingBackend backends
+
+-- | SCAFFOLD-21: 'pingBackends', the connection point reached as named.
+pingBackendsVia :: Endpoint -> [Backend] -> IO [Backend]
+pingBackendsVia ep = mapConcurrently (pingBackendAt (Just ep))
 
 -- ============================================================================
 -- Registry Registration
@@ -432,13 +470,7 @@ registerWithRegistry
   -> Int    -- ^ Backend port
   -> IO ()
 registerWithRegistry registryHost registryPort registryBackend name host port = do
-  let cfg = SubstrateConfig
-        { substrateHost    = T.unpack registryHost
-        , substratePort    = registryPort
-        , substratePath    = "/"
-        , substrateBackend = registryBackend
-        , substrateHeaders = []
-        }
+  let cfg = substrateConfig (plainAt registryHost registryPort) registryBackend []
       params = Aeson.object
         [ "name"     Aeson..= name
         , "host"     Aeson..= host

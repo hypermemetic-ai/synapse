@@ -20,7 +20,10 @@ module Synapse.Monad
 
     -- * Environment
   , SynapseEnv(..)
+  , seHost
+  , sePort
   , initEnv
+  , initEnvAt
   , defaultEnv
   , withRequestContext
   , withViewKey
@@ -64,13 +67,13 @@ import qualified Data.Text as T
 
 import Synapse.Schema.Types
 import Synapse.Backend.Discovery (Backend(..))
+import Synapse.Endpoint (Endpoint(..), plainAt)
 import qualified Synapse.Log as Log
 import qualified Katip
 
 -- | Environment for Synapse operations
 data SynapseEnv = SynapseEnv
-  { seHost    :: !Text                        -- ^ Hub host
-  , sePort    :: !Int                         -- ^ Hub port
+  { seEndpoint :: !Endpoint                   -- ^ Where the hub is reached (SCAFFOLD-21: ws or wss, its path)
   , seBackend :: !Text                        -- ^ Backend name (first CLI argument)
   , seCache   :: !(IORef (HashMap PluginHash PluginSchema))  -- ^ Schema cache
   , seVisited :: !(IORef (HashSet PluginHash))               -- ^ Cycle detection
@@ -143,16 +146,28 @@ runSynapseM' backend action = do
   env <- defaultEnv backend logger
   runSynapseM env action
 
--- | Initialize environment with given host/port/backend/logger/token.
+-- | The hub's host.
+seHost :: SynapseEnv -> Text
+seHost = epHost . seEndpoint
+
+-- | The hub's port.
+sePort :: SynapseEnv -> Int
+sePort = epPort . seEndpoint
+
+-- | Initialize environment with given host/port/backend/logger/token, for a
+-- hub at plain @ws://HOST:PORT/@ ('initEnvAt' for any address).
 -- Extra cookies/headers default to empty; use 'withRequestContext' to add
 -- them after construction (SAFE-S04/REQ-5).
 initEnv :: Text -> Int -> Text -> Log.Logger -> Maybe Text -> IO SynapseEnv
-initEnv host port backend logger token = do
+initEnv host port = initEnvAt (plainAt host port)
+
+-- | SCAFFOLD-21: 'initEnv' for a hub at any address (@wss://…/ws@ too).
+initEnvAt :: Endpoint -> Text -> Log.Logger -> Maybe Text -> IO SynapseEnv
+initEnvAt ep backend logger token = do
   cache <- newIORef HM.empty
   visited <- newIORef HS.empty
   pure SynapseEnv
-    { seHost    = host
-    , sePort    = port
+    { seEndpoint = ep
     , seBackend = backend
     , seCache   = cache
     , seVisited = visited

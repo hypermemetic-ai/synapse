@@ -36,12 +36,13 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Network.WebSockets as WS
 
-import Plexus.Client (SubstrateConfig(..), cookieHeader)
+import Plexus.Client (SubstrateConfig(..), cookieHeader, hostHeader)
 import qualified Plexus.Transport as ST
 import qualified Plexus.Types as PT
 
 import Synapse.Schema.Types
 import Synapse.Monad
+import Synapse.Endpoint (substrateConfig)
 import qualified Synapse.Log as Log
 import qualified Synapse.Reconnect as R
 
@@ -302,9 +303,12 @@ invokeStreamingWithBidir shape refreshAuth onResume namespacePath method params 
     getPort (PT.ConnectionTimeout _ p) _ = p
     getPort _ c = substratePort c
 
--- | SYNAPSE-20: @host:port@, for what synapse says about an outage.
+-- | SYNAPSE-20: @host:port@, for what synapse says about an outage
+-- (SCAFFOLD-21: the URL, for an address behind TLS or on a path).
 whereOf :: SubstrateConfig -> Text
-whereOf c = T.pack (substrateHost c) <> ":" <> T.pack (show (substratePort c))
+whereOf c = case (substrateTls c, substratePath c) of
+  (Nothing, "/") -> T.pack (substrateHost c) <> ":" <> T.pack (show (substratePort c))
+  (tls, path) -> maybe "ws" (const "wss") tls <> "://" <> T.pack (hostHeader c) <> T.pack path
 
 -- | Send a response for a bidirectional request
 sendResponse :: Text -> PT.Response Value -> SynapseM ()
@@ -328,20 +332,14 @@ sendResponse requestId response = do
 -- | Get SubstrateConfig from environment
 getConfig :: SynapseM SubstrateConfig
 getConfig = do
-  host    <- asks seHost
-  port    <- asks sePort
+  ep      <- asks seEndpoint
   backend <- asks seBackend
   mToken  <- asks seToken
   cks     <- asks seCookies
   hdrs    <- asks seHeaders
-  pure $ SubstrateConfig
-    { substrateHost    = T.unpack host
-    , substratePort    = port
-    , substratePath    = "/"
-    , substrateBackend = backend
-    -- SAFE-S04: merge token Cookie + arbitrary --cookie/--header upgrade context.
-    , substrateHeaders = mergeUpgradeHeaders mToken cks hdrs
-    }
+  -- SAFE-S04: merge token Cookie + arbitrary --cookie/--header upgrade context.
+  -- SCAFFOLD-21: the endpoint's scheme (ws / wss) and path come along.
+  pure $ substrateConfig ep backend (mergeUpgradeHeaders mToken cks hdrs)
 
 -- | Build the WS upgrade Headers list from optional token + extra cookies + extra headers.
 -- Cookies are concatenated into a single Cookie header as @key=value; key=value@.

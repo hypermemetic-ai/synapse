@@ -21,7 +21,7 @@ import Synapse.Monad
 import Synapse.Backend.Discovery (getBackendAt)
 import qualified Synapse.Self.Template as Template
 import qualified Synapse.Self.Debugger as Debugger
-import Plexus.Client (SubstrateConfig(..))
+import Synapse.Endpoint (substrateConfig)
 
 -- | Dispatch to a specific _self subcommand
 dispatch :: Text -> [Text] -> [(Text, Text)] -> SynapseM ()
@@ -48,20 +48,13 @@ dispatch "test" rest params = do
   let methodParams = filter (\(k, _) -> k /= "allow_unknown" && k /= "raw") params
 
   -- Get connection settings from environment (set by -H/-P flags)
-  host <- asks seHost
-  port <- asks sePort
+  ep <- asks seEndpoint
   backend <- asks seBackend
 
   case rest of
     methodParts | not (null methodParts) -> do
       let method = T.intercalate "." methodParts
-      let config = SubstrateConfig
-            { substrateHost    = T.unpack host
-            , substratePort    = port
-            , substratePath    = "/"
-            , substrateBackend = backend
-            , substrateHeaders = []
-            }
+      let config = substrateConfig ep backend []
       liftIO $ Debugger.testMethod config method methodParams allowUnknown rawJson
     _ ->
       throwParse "Usage: synapse [options] _self test [--allow-unknown] [--raw <json>] <method> [--param value ...]\n  Note: Use -H/--host and -P/--port flags to set connection (default: 127.0.0.1:4444)"

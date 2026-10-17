@@ -124,7 +124,8 @@ newNonce :: IO ByteString
 newNonce = getRandomBytes 32
 
 -- | The URL a proof's @aud@ names: the socket synapse dials,
--- @ws://HOST:PORT@.
+-- @ws://HOST:PORT@ (SCAFFOLD-21: behind TLS, @wss://HOST@ —
+-- 'Synapse.Endpoint.audience' says which for an address).
 wsAudience :: Text -> Int -> Text
 wsAudience host port = "ws://" <> host <> ":" <> T.pack (show port)
 

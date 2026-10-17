@@ -31,6 +31,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Files (fileMode, getFileStatus, intersectFileModes)
 import Test.Hspec
 
+import Synapse.Endpoint (plainAt)
 import Synapse.Identity.Command (splitScopes)
 import Synapse.Identity.Proof
 import Synapse.Identity.Store
@@ -217,24 +218,24 @@ spec = do
         (kc, _) <- memoryKeychain
         let fileSt = sandbox [] Nothing dir
             p = dir </> ".plexus" </> "sessions" </> "127.0.0.1_4455" </> "worker-3.json"
-        writeSession fileSt "127.0.0.1" 4455 rec `shouldReturn` SessionFromFile p
+        writeSession fileSt (plainAt "127.0.0.1" 4455) rec `shouldReturn` SessionFromFile p
         mode p `shouldReturn` 0o600
-        lookupSession fileSt "127.0.0.1" 4455 "worker-3" `shouldReturn` Just (Right rec, SessionFromFile p)
+        lookupSession fileSt (plainAt "127.0.0.1" 4455) "worker-3" `shouldReturn` Just (Right rec, SessionFromFile p)
         let kcSt = sandbox [] (Just kc) dir
             rec2 = rec { srToken = "mgs_def" }
-        writeSession kcSt "127.0.0.1" 4455 rec2 `shouldReturn` SessionFromKeychain
-        lookupSession kcSt "127.0.0.1" 4455 "worker-3" `shouldReturn` Just (Right rec2, SessionFromKeychain)
+        writeSession kcSt (plainAt "127.0.0.1" 4455) rec2 `shouldReturn` SessionFromKeychain
+        lookupSession kcSt (plainAt "127.0.0.1" 4455) "worker-3" `shouldReturn` Just (Right rec2, SessionFromKeychain)
         -- a keychain write drops the stale file
         doesFileExist p `shouldReturn` False
         let envSt = sandbox [("PLEXUS_SESSION", "mgs_env\n")] (Just kc) dir
-        lookupSession envSt "127.0.0.1" 4455 "worker-3" `shouldReturn` Just (Left "mgs_env", SessionFromEnv)
-        lookupSession kcSt "127.0.0.1" 4455 "worker-4" `shouldReturn` Nothing
-        lookupSession kcSt "127.0.0.1" 4456 "worker-3" `shouldReturn` Nothing
+        lookupSession envSt (plainAt "127.0.0.1" 4455) "worker-3" `shouldReturn` Just (Left "mgs_env", SessionFromEnv)
+        lookupSession kcSt (plainAt "127.0.0.1" 4455) "worker-4" `shouldReturn` Nothing
+        lookupSession kcSt (plainAt "127.0.0.1" 4456) "worker-3" `shouldReturn` Nothing
 
     it "keeps the key name, scope and backend a re-login needs" $
       withSystemTempDirectory "identity" $ \dir -> do
         let st = sandbox [] Nothing dir
-        _ <- writeSession st "127.0.0.1" 4455 rec
+        _ <- writeSession st (plainAt "127.0.0.1" 4455) rec
         raw <- BS.readFile (dir </> ".plexus" </> "sessions" </> "127.0.0.1_4455" </> "worker-3.json")
         let Just (A.Object o) = A.decodeStrict raw
         map (`KM.member` o) ["token", "principal", "agent", "expires_at", "key", "scope", "backend"]
@@ -244,14 +245,14 @@ spec = do
       withSystemTempDirectory "identity" $ \dir -> do
         (kc, ref) <- memoryKeychain
         let st = sandbox [] (Just kc) dir
-        _ <- writeSession st "127.0.0.1" 4455 rec
-        writeDefaultAgent st "127.0.0.1" 4455 "worker-3"
-        readDefaultAgent st "127.0.0.1" 4455 `shouldReturn` Just "worker-3"
-        removeSession st "127.0.0.1" 4455 "worker-3"
-        clearDefaultAgent st "127.0.0.1" 4455 "worker-3"
+        _ <- writeSession st (plainAt "127.0.0.1" 4455) rec
+        writeDefaultAgent st (plainAt "127.0.0.1" 4455) "worker-3"
+        readDefaultAgent st (plainAt "127.0.0.1" 4455) `shouldReturn` Just "worker-3"
+        removeSession st (plainAt "127.0.0.1" 4455) "worker-3"
+        clearDefaultAgent st (plainAt "127.0.0.1" 4455) "worker-3"
         Map.null <$> readIORef ref `shouldReturn` True
-        lookupSession st "127.0.0.1" 4455 "worker-3" `shouldReturn` Nothing
-        readDefaultAgent st "127.0.0.1" 4455 `shouldReturn` Nothing
+        lookupSession st (plainAt "127.0.0.1" 4455) "worker-3" `shouldReturn` Nothing
+        readDefaultAgent st (plainAt "127.0.0.1" 4455) `shouldReturn` Nothing
 
   describe "parallel writers (SYNAPSE-15)" $ do
     let rec = SessionRec
@@ -263,10 +264,10 @@ spec = do
       withSystemTempDirectory "identity" $ \dir -> do
         let st = sandbox [] Nothing dir
             sdir = dir </> ".plexus" </> "sessions" </> "127.0.0.1_4455"
-        rs <- mapConcurrently (\i -> try (writeSession st "127.0.0.1" 4455 rec { srToken = "mgs_" <> T.pack (show i) }))
+        rs <- mapConcurrently (\i -> try (writeSession st (plainAt "127.0.0.1" 4455) rec { srToken = "mgs_" <> T.pack (show i) }))
                 [1 .. 32 :: Int]
         [e | Left (e :: SomeException) <- rs] `shouldSatisfy` null
-        Just (Right r, _) <- lookupSession st "127.0.0.1" 4455 "worker-3"
+        Just (Right r, _) <- lookupSession st (plainAt "127.0.0.1" 4455) "worker-3"
         srToken r `shouldSatisfy` (`elem` ["mgs_" <> T.pack (show i) | i <- [1 .. 32 :: Int]])
         mode (sdir </> "worker-3.json") `shouldReturn` 0o600
         listDirectory sdir `shouldReturn` ["worker-3.json"]
@@ -276,7 +277,7 @@ spec = do
         let st = sandbox [] Nothing dir
         inside <- newIORef (0 :: Int)
         most <- newIORef (0 :: Int)
-        _ <- mapConcurrently (\_ -> withSessionLock st "127.0.0.1" 4455 "worker-3" $ do
+        _ <- mapConcurrently (\_ -> withSessionLock st (plainAt "127.0.0.1" 4455) "worker-3" $ do
                n <- atomicModifyIORef' inside (\k -> (k + 1, k + 1))
                atomicModifyIORef' most (\m -> (max m n, ()))
                threadDelay 20000

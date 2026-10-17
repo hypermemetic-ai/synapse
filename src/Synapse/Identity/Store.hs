@@ -19,6 +19,12 @@
 -- 2. the keychain (@service=plexus-session backend=HOST:PORT agent=AGENT@)
 -- 3. @~\/.plexus\/sessions\/HOST_PORT\/AGENT.json@ (0600)
 --
+-- SCAFFOLD-21: a backend reached any other way than plain
+-- @ws://HOST:PORT/@ is keyed by its URL — @backend=wss://HOST:443/ws@ in the
+-- keychain, @~\/.plexus\/sessions\/wss_HOST_443_ws\/AGENT.json@ on disk —
+-- so a ws and a wss backend on one host keep sessions apart, and every
+-- session stored before is found where it was.
+--
 -- Writes go to the keychain when it answers, else the file. The keychain
 -- is asked through its command-line tool with a 2 s limit, and a host with
 -- no session bus (a server) has none — so a headless machine falls through
@@ -92,6 +98,8 @@ import System.Process (proc, readCreateProcessWithExitCode)
 import System.Timeout (timeout)
 
 import Synapse.Identity.Proof
+import Synapse.Endpoint (Endpoint)
+import qualified Synapse.Endpoint as E
 
 -- ============================================================================
 -- Environment
@@ -399,54 +407,56 @@ instance FromJSON SessionRec where
 data SessionSource = SessionFromEnv | SessionFromKeychain | SessionFromFile FilePath
   deriving (Eq, Show)
 
--- | @HOST:PORT@, the backend a session belongs to.
-addressKey :: Text -> Int -> Text
-addressKey host port = host <> ":" <> T.pack (show port)
+-- | @HOST:PORT@, the backend a session belongs to (SCAFFOLD-21: the
+-- whole URL for an address that is not plain @ws://HOST:PORT/@ — see
+-- 'Synapse.Endpoint.addressKey').
+addressKey :: Endpoint -> Text
+addressKey = E.addressKey
 
-sessionDir :: StoreEnv -> Text -> Int -> FilePath
-sessionDir st host port = stPlexus st </> "sessions" </> (T.unpack host <> "_" <> show port)
+sessionDir :: StoreEnv -> Endpoint -> FilePath
+sessionDir st ep = stPlexus st </> "sessions" </> E.dirName ep
 
-sessionFilePath :: StoreEnv -> Text -> Int -> Text -> FilePath
-sessionFilePath st host port agent = sessionDir st host port </> (T.unpack agent <> ".json")
+sessionFilePath :: StoreEnv -> Endpoint -> Text -> FilePath
+sessionFilePath st ep agent = sessionDir st ep </> (T.unpack agent <> ".json")
 
-sessionAttrs :: Text -> Int -> Text -> [(Text, Text)]
-sessionAttrs host port agent = [("backend", addressKey host port), ("agent", agent)]
+sessionAttrs :: Endpoint -> Text -> [(Text, Text)]
+sessionAttrs ep agent = [("backend", addressKey ep), ("agent", agent)]
 
 -- | The session for this backend and agent. @PLEXUS_SESSION@ is the token
 -- alone: no record, nothing to sign in again from.
-lookupSession :: StoreEnv -> Text -> Int -> Text -> IO (Maybe (Either Text SessionRec, SessionSource))
-lookupSession st host port agent = do
+lookupSession :: StoreEnv -> Endpoint -> Text -> IO (Maybe (Either Text SessionRec, SessionSource))
+lookupSession st ep agent = do
   envTok <- stEnv st "PLEXUS_SESSION"
   case envTok of
     Just t | not (null t) -> pure (Just (Left (T.strip (T.pack t)), SessionFromEnv))
     _ -> do
       fromKc <- case stKeychain st of
         Nothing -> pure Nothing
-        Just kc -> kcLookup kc "plexus-session" (sessionAttrs host port agent) >>= \case
+        Just kc -> kcLookup kc "plexus-session" (sessionAttrs ep agent) >>= \case
           KcFound v -> pure (A.decodeStrict (TE.encodeUtf8 v))
           _ -> pure Nothing
       case fromKc of
         Just r -> pure (Just (Right r, SessionFromKeychain))
         Nothing -> do
-          let p = sessionFilePath st host port agent
+          let p = sessionFilePath st ep agent
           e <- doesFileExist p
           if not e then pure Nothing else do
             r <- A.decodeFileStrict p
             pure ((\s -> (Right s, SessionFromFile p)) <$> r)
 
 -- | Keep a session: the keychain when it answers, else the file.
-writeSession :: StoreEnv -> Text -> Int -> SessionRec -> IO SessionSource
-writeSession st host port s = do
+writeSession :: StoreEnv -> Endpoint -> SessionRec -> IO SessionSource
+writeSession st ep s = do
   let json = TE.decodeUtf8 (LBS.toStrict (A.encode s))
-      p = sessionFilePath st host port (srAgent s)
+      p = sessionFilePath st ep (srAgent s)
       toFile = do
         writePrivateFile p (LBS.toStrict (A.encode s))
         pure (SessionFromFile p)
   case stKeychain st of
     Nothing -> toFile
     Just kc -> do
-      r <- kcStore kc ("plexus session " <> addressKey host port <> " " <> srAgent s)
-             "plexus-session" (sessionAttrs host port (srAgent s)) json
+      r <- kcStore kc ("plexus session " <> addressKey ep <> " " <> srAgent s)
+             "plexus-session" (sessionAttrs ep (srAgent s)) json
       case r of
         Right () -> do
           -- a stale file would shadow nothing (the keychain is read first)
@@ -456,32 +466,32 @@ writeSession st host port s = do
         Left _ -> toFile
 
 -- | Forget a session, wherever it is kept.
-removeSession :: StoreEnv -> Text -> Int -> Text -> IO ()
-removeSession st host port agent = do
-  mapM_ (\kc -> kcClear kc "plexus-session" (sessionAttrs host port agent)) (stKeychain st)
-  removeIfExists (sessionFilePath st host port agent)
+removeSession :: StoreEnv -> Endpoint -> Text -> IO ()
+removeSession st ep agent = do
+  mapM_ (\kc -> kcClear kc "plexus-session" (sessionAttrs ep agent)) (stKeychain st)
+  removeIfExists (sessionFilePath st ep agent)
 
-defaultAgentPath :: StoreEnv -> Text -> Int -> FilePath
-defaultAgentPath st host port = sessionDir st host port </> "default"
+defaultAgentPath :: StoreEnv -> Endpoint -> FilePath
+defaultAgentPath st ep = sessionDir st ep </> "default"
 
 -- | The agent a backend's calls go as when none is named.
-readDefaultAgent :: StoreEnv -> Text -> Int -> IO (Maybe Text)
-readDefaultAgent st host port = do
-  let p = defaultAgentPath st host port
+readDefaultAgent :: StoreEnv -> Endpoint -> IO (Maybe Text)
+readDefaultAgent st ep = do
+  let p = defaultAgentPath st ep
   e <- doesFileExist p
   if not e then pure Nothing else do
     t <- T.strip <$> TIO.readFile p
     pure (if validAgent t then Just t else Nothing)
 
-writeDefaultAgent :: StoreEnv -> Text -> Int -> Text -> IO ()
-writeDefaultAgent st host port agent =
-  writePrivateFile (defaultAgentPath st host port) (TE.encodeUtf8 (agent <> "\n"))
+writeDefaultAgent :: StoreEnv -> Endpoint -> Text -> IO ()
+writeDefaultAgent st ep agent =
+  writePrivateFile (defaultAgentPath st ep) (TE.encodeUtf8 (agent <> "\n"))
 
 -- | Drop the default when it names this agent.
-clearDefaultAgent :: StoreEnv -> Text -> Int -> Text -> IO ()
-clearDefaultAgent st host port agent = do
-  cur <- readDefaultAgent st host port
-  when (cur == Just agent) $ removeIfExists (defaultAgentPath st host port)
+clearDefaultAgent :: StoreEnv -> Endpoint -> Text -> IO ()
+clearDefaultAgent st ep agent = do
+  cur <- readDefaultAgent st ep
+  when (cur == Just agent) $ removeIfExists (defaultAgentPath st ep)
 
 -- ============================================================================
 -- Files
@@ -523,9 +533,9 @@ privateDir dir = do
 -- lock on @AGENT.lock@ beside its session) for the action — so of the
 -- processes that find the session stale at once, one signs in again and
 -- the others, waiting here, find its new session when they read again.
-withSessionLock :: StoreEnv -> Text -> Int -> Text -> IO a -> IO a
-withSessionLock st host port agent act = do
-  let lockPath = sessionDir st host port </> (T.unpack agent <> ".lock")
+withSessionLock :: StoreEnv -> Endpoint -> Text -> IO a -> IO a
+withSessionLock st ep agent act = do
+  let lockPath = sessionDir st ep </> (T.unpack agent <> ".lock")
   -- flock on a descriptor of our own (not a GHC handle: GHC refuses a
   -- second writer of one file within a process): processes and threads
   -- alike wait their turn; closing the descriptor lets the next one in
