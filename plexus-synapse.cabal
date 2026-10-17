@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            3.14.9
+version:            3.14.10
 synopsis:           Schema-driven CLI for Plexus RPC servers
 license:            MIT
 author:
@@ -477,6 +477,7 @@ test-suite identity-test
   main-is:          IdentitySpec.hs
   build-depends:
     base >= 4.17 && < 5,
+    async >= 2.2 && < 2.3,
     plexus-synapse,
     text >= 2.0 && < 2.2,
     bytestring >= 0.11 && < 0.13,

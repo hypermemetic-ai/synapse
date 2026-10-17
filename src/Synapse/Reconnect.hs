@@ -159,7 +159,11 @@ isOutage = \case
   PT.ConnectionTimeout{} -> True
   PT.ConnectionLost{}    -> True
   PT.NetworkError msg    -> isOutageText msg
-  PT.ProtocolError _     -> False
+  PT.ProtocolError msg   -> tooMany msg
+
+-- | The server's connection limits (ACCESS-29): a 429 at the upgrade.
+tooMany :: Text -> Bool
+tooMany msg = any (`T.isInfixOf` T.toLower msg) ["responsecode = 429", "too many requests"]
 
 -- | The same, read from a message (the probe says why as text). A refused
 -- upgrade (401, 403, 421) is not an outage.
@@ -168,6 +172,9 @@ isOutageText msg = any (`T.isInfixOf` T.toLower msg)
   [ "refused", "timed out", "timeout", "reset by peer", "connectionlost"
   , "connection lost", "broken pipe", "connectionclosed", "end of file"
   , "no route to host", "network is unreachable", "does not exist (connection"
+    -- the server's connection limits (ACCESS-29) answer 429 at the upgrade:
+    -- nothing was sent, and it passes
+  , "responsecode = 429", "too many requests"
   ]
 
 -- | The upgrade's 401: the credential refused (IDENTITY-43's test).

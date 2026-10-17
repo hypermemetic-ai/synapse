@@ -157,6 +157,13 @@ synapse -P 4455 _logout menger [--as worker-3]
   cookie, an `Authorization` header). An expired session, a 401 at the
   upgrade, or "you have signed out" → log in again from the key, once, with a
   one-line notice on stderr.
+- Many processes at once (SYNAPSE-15, 3.14.10): a re-login holds an advisory
+  lock (`flock` on `…/HOST_PORT/AGENT.lock`) and reads the stored session
+  again under it — when another process has just made a live one, it takes
+  that one instead of logging in again, so N parallel calls after a restart
+  log in once. Every private file is written through a temporary file of
+  its own (O_EXCL, 0600) renamed over the target; a session that cannot be
+  kept is a warning, never the call's failure.
 
 ## Each caller its own server (AUTH-8)
 
