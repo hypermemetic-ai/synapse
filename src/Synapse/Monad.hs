@@ -28,6 +28,9 @@ module Synapse.Monad
   , withRequestContext
   , withViewKey
   , viewQualified
+  , SchemaSource(..)
+  , withSchemaSource
+  , isCached
 
     -- * Errors
   , SynapseError(..)
@@ -65,8 +68,10 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
 import Data.Text (Text)
 import qualified Data.Text as T
 
+import qualified Data.Map.Strict as Map
 import Synapse.Schema.Types
 import Synapse.Backend.Discovery (Backend(..))
+import Synapse.SchemaStore (Store, Plan)
 import Synapse.Endpoint (Endpoint(..), plainAt)
 import qualified Synapse.Log as Log
 import qualified Katip
@@ -82,7 +87,24 @@ data SynapseEnv = SynapseEnv
   , seCookies :: ![(Text, Text)]              -- ^ SAFE-S04/REQ-5: extra cookies for WS upgrade
   , seHeaders :: ![(Text, Text)]              -- ^ SAFE-S04/REQ-5: extra headers for WS upgrade
   , seViewKey :: !(Maybe Text)                -- ^ AUTH-8: the caller's view (its hash, else its kind); qualifies every cache key
+  , seSchemaSource :: !SchemaSource           -- ^ SYNAPSE-28: where a schema comes from (the server, or the cache alone)
+  , seFetched :: !(IORef (Map.Map Path PluginSchema))  -- ^ SYNAPSE-28: each path fetched once a run
+  , sePlan    :: !(Maybe Plan)                -- ^ SYNAPSE-28: the call's plan, when the cache had one
   }
+
+-- | SYNAPSE-28: where this run's schemas come from.
+data SchemaSource
+  = FromServer (Maybe Store)   -- ^ fetched, and kept in the store when there is one
+  | FromCache Store            -- ^ the store alone: what it lacks is 'StaleSchema', never a fetch
+
+-- | SYNAPSE-28: the run sends first, from the cache.
+isCached :: SynapseEnv -> Bool
+isCached env = case seSchemaSource env of
+  FromCache _ -> True
+  FromServer _ -> False
+
+withSchemaSource :: SchemaSource -> Maybe Plan -> SynapseEnv -> SynapseEnv
+withSchemaSource src plan env = env { seSchemaSource = src, sePlan = plan }
 
 -- | Errors that can occur during Synapse operations
 data SynapseError
@@ -92,6 +114,13 @@ data SynapseError
   | ParseError Text
   | ValidationError Text
   | BackendError BackendErrorType [Backend]
+  | StaleSchema Text
+    -- ^ SYNAPSE-28: the cache misled the call (a method or flag it does not
+    -- know, or the server refused what it said): forget it, ask the server,
+    -- run the call again
+  | CacheMiss Text
+    -- ^ SYNAPSE-28: the cache has not got what the call needs (a schema it
+    -- never fetched): ask the server, and keep what it says
   deriving stock (Show, Eq)
 
 -- | Backend-specific error types
@@ -166,6 +195,7 @@ initEnvAt :: Endpoint -> Text -> Log.Logger -> Maybe Text -> IO SynapseEnv
 initEnvAt ep backend logger token = do
   cache <- newIORef HM.empty
   visited <- newIORef HS.empty
+  fetched <- newIORef Map.empty
   pure SynapseEnv
     { seEndpoint = ep
     , seBackend = backend
@@ -176,6 +206,9 @@ initEnvAt ep backend logger token = do
     , seCookies = []
     , seHeaders = []
     , seViewKey = Nothing
+    , seSchemaSource = FromServer Nothing
+    , seFetched = fetched
+    , sePlan = Nothing
     }
 
 -- | Augment a SynapseEnv with extra cookies and headers for the WS upgrade.

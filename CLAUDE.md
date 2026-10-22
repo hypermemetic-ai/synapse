@@ -117,6 +117,32 @@ exit 69. Progress is on stderr. The detection is plexus-protocol's
 `Synapse.Reconnect`; `test/ReconnectSpec.hs` pins both against a flaky hub.
 README "Outages: reconnecting".
 
+## One round trip a call (SYNAPSE-28, 3.16.0)
+
+A warm call is one round trip and the server's time (`tickets health` against
+app.menger.sh: 81 ms, ping 77 ms; 4.6 s in 3.15.0). Every request a run makes
+goes through plexus-protocol's `Plexus.Transport.setCallRouter` (0.5.3) to
+`Synapse.Hold`: the **holder** for its address and agent (`synapse _hold`,
+started by the first run; `$XDG_RUNTIME_DIR/synapse/ADDRESS@AGENT-VERSION.sock`,
+0600; exits idle after `--hold-for`, 10m; `--no-hold` / `SYNAPSE_NO_HOLD=1`
+skip it), else the run's own **multiplexer** — one connection per address
+and credential, every call on it, schema and `_info` reads asked once however
+many wait. Failures read as a connection of the run's own reports them
+(`LostConnection` with whether it was sent, a failed dial as `connect`'s error
+call), so `Synapse.Reconnect` and the re-login run unchanged on top.
+**Send first** (`Main.sendFirst`): with the backend's route, `_info` and the
+method's plan in `Synapse.SchemaStore` (`~/.cache/synapse/schemas/`, per
+address, agent and backend; schemas as `PATH@VERSION-HASH.json` + `PATH.pin`,
+plans under `plans/`), the call is built from the plan and sent with no probe
+and no fetch; a `CacheMiss` (the cache lacks it) or `StaleSchema` (it misled
+the call, or the server refused what it said before the method ran) runs the
+call again the old way (`slowPath`), which fills the cache. Help, listings,
+`-s`, `-i`, `_find` and calls with a credential of their own read the server.
+`test/HoldSpec.hs` counts connections, probes and schema fetches at
+`test/MockHub.hs` (cold: one connection; warm: none, no probe, no fetch;
+`--no-hold`: one; a renamed method falls back and answers); `ReconnectSpec`
+runs every outage again through a holder. README "One round trip a call".
+
 ## Credentials & `_self`
 
 Per-backend credential defaults live at `~/.plexus/<backend>/defaults.json`. Each cookie/header value is a **credential-reference URI** resolved at request time — never a raw secret in the file unless using the `literal:` escape hatch.

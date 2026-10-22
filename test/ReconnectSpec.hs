@@ -32,6 +32,10 @@ import Plexus.Schema.Recursive (MethodSchema(..), MethodRole(..))
 import qualified Plexus.Transport as ST
 import qualified Plexus.Types as PT
 import Synapse.Reconnect
+import qualified Synapse.Hold as Hold
+import System.Directory (doesFileExist, getTemporaryDirectory)
+import System.FilePath ((</>))
+import System.Posix.Process (getProcessID)
 
 -- ---------------------------------------------------------------------------
 -- The flaky hub
@@ -183,6 +187,23 @@ main = hspec $ do
     it "is the server's own 429, as before" $
       isOutage (upgrade "429") `shouldBe` True
 
+  outageSpec
+  -- SYNAPSE-28: the same outages, every call through a connection holder
+  -- (in this process, on a socket of the test's own): what the run sees
+  -- of an outage is what it saw dialing itself
+  describe "through the connection holder" $ beforeAll_ throughHolder $ do
+    it "is the holder that answers" $
+      withHub [Answer] $ \h -> do
+        sock <- holderSocket
+        acc <- newIORef (0 :: Int)
+        Hold.holderCall sock (cfgFor (hubPort h)) (pure ()) "t.call" (object ["method" .= ("t.m" :: Text)])
+          (\i -> if isData i then modifyIORef' acc (+ 1) else pure ())
+        readIORef acc `shouldReturn` 1
+    outageSpec
+
+-- | SYNAPSE-20's outages, as a run meets them.
+outageSpec :: Spec
+outageSpec = do
   describe "the client notices a lost connection" $ do
     it "fails a stream whose connection closes, instead of waiting forever" $
       withHub [DropMid] $ \h -> do
@@ -267,6 +288,26 @@ main = hspec $ do
   where
     newEmptyIORef :: IO (IORef (Maybe Int))
     newEmptyIORef = newIORef Nothing
+
+-- | SYNAPSE-28: the holder's socket for these tests.
+holderSocket :: IO FilePath
+holderSocket = do
+  tmp <- getTemporaryDirectory
+  pid <- getProcessID
+  pure (tmp </> ("synapse-reconnect-test-" <> show pid <> ".sock"))
+
+-- | Start a holder in this process and route every call through it.
+throughHolder :: IO ()
+throughHolder = do
+  sock <- holderSocket
+  _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 600) `catch'` ()
+  let wait (0 :: Int) = pure ()
+      wait n = doesFileExist sock >>= \ok -> if ok then pure () else threadDelay 20000 >> wait (n - 1)
+  wait 250
+  _ <- Hold.installRouter Hold.RouterOpts { Hold.roHold = Just (const (pure (Just sock))), Hold.roHoldFor = 600 }
+  pure ()
+  where
+    catch' act v = void (try act :: IO (Either SomeException ())) >> pure v
 
 -- | A hub on a port already chosen.
 withHubAt :: Int -> [Mode] -> (Hub -> IO a) -> IO a

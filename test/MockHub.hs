@@ -22,6 +22,11 @@ module MockHub
   , mockState
   , catalogHub
   , schemaCalls
+    -- * SYNAPSE-28: what a run cost the hub
+  , connectionsAccepted
+  , infoCalls
+  , unsubscribes
+  , renamedGet
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -69,6 +74,27 @@ catalogHub v = Scenario v False False mockState True
 schemaCalls :: IORef Int
 schemaCalls = unsafePerformIO (newIORef 0)
 
+-- | SYNAPSE-28: WebSocket connections the mock hubs have accepted (this process).
+{-# NOINLINE connectionsAccepted #-}
+connectionsAccepted :: IORef Int
+connectionsAccepted = unsafePerformIO (newIORef 0)
+
+-- | SYNAPSE-28: _info probes answered.
+{-# NOINLINE infoCalls #-}
+infoCalls :: IORef Int
+infoCalls = unsafePerformIO (newIORef 0)
+
+-- | SYNAPSE-28: @menger.call_unsub@ requests, by subscription.
+{-# NOINLINE unsubscribes #-}
+unsubscribes :: IORef [Value]
+unsubscribes = unsafePerformIO (newIORef [])
+
+-- | SYNAPSE-28: the hub renamed @tickets.get@ to @tickets.fetch@ (its schema
+-- says @fetch@, and @get@ is not found).
+{-# NOINLINE renamedGet #-}
+renamedGet :: IORef Bool
+renamedGet = unsafePerformIO (newIORef False)
+
 mockCode, mockState :: Text
 mockCode = "c_19ab"
 mockState = "s_7f2c"
@@ -109,6 +135,7 @@ acceptLoop sc sock = do
       -- the credential the upgrade carried, if any
       let bearer = lookup "Authorization" (WS.requestHeaders (WS.pendingRequest pending))
       c <- WS.acceptRequest pending
+      atomicModifyIORef' connectionsAccepted (\n -> (n + 1, ()))
       next <- newIORef (100 :: Int)
       forever $ do
         msg <- WS.receiveData c
@@ -122,6 +149,18 @@ handle sc c next signedIn o = do
   let rid = KM.lookup "id" o
       method = str "method" o
       params = case KM.lookup "params" o of { Just (Object p) -> p; _ -> KM.empty }
+  -- SYNAPSE-28: an unsubscribe is answered true, and noted
+  if method == "menger.call_unsub"
+    then do
+      atomicModifyIORef' unsubscribes (\us -> (maybe Null id (KM.lookup "params" o) : us, ()))
+      send (object ["jsonrpc" .= ("2.0" :: Text), "id" .= rid, "result" .= True])
+    else handleCall sc c next signedIn o rid method params
+  where
+    send :: Value -> IO ()
+    send = WS.sendTextData c . encode
+
+handleCall :: Scenario -> WS.Connection -> IORef Int -> Bool -> Object -> Maybe Value -> Text -> Object -> IO ()
+handleCall sc c next signedIn _o rid method params = do
   sub <- atomicModifyIORef' next (\n -> (n + 1, n))
   send (object ["jsonrpc" .= ("2.0" :: Text), "id" .= rid, "result" .= sub])
   let emit item = send (object
@@ -136,15 +175,25 @@ handle sc c next signedIn o = do
       done = emit (object ["type" .= ("done" :: Text), "metadata" .= meta])
   case method of
     "_info" -> do
+      atomicModifyIORef' infoCalls (\n -> (n + 1, ()))
       dat "_info" (infoFor sc)
       done
     "menger.call" -> do
       let inner = str "method" params
           args = case KM.lookup "params" params of { Just (Object a) -> a; _ -> KM.empty }
-      if inner == "tickets.ask"
-        then askBack emit meta dat err
-        else callMethod sc signedIn inner args dat err
-      done
+      renamed <- readIORef renamedGet
+      case inner of
+        -- waits for its answer off the connection's loop, as a real hub
+        -- runs calls side by side (SYNAPSE-28: the answer may come on this
+        -- very connection)
+        "tickets.ask" -> void $ forkIO (askBack emit meta dat err >> done)
+        -- SYNAPSE-28: a stream that never ends by itself (until unsubscribed)
+        "tickets.watch" -> dat "tickets.watch" (object ["type" .= ("watching" :: Text)])
+        "tickets.get" | renamed -> err "Method not found: tickets.get" [] >> done
+        "tickets.fetch" | renamed -> callMethod sc signedIn "tickets.get" args dat err >> done
+        "tickets.schema" | renamed, scView sc /= AnonymousView, not (scCatalog sc) ->
+          dat "tickets.schema" (renameGet (ticketsSchema sc)) >> done
+        _ -> callMethod sc signedIn inner args dat err >> done
     -- SCAFFOLD-21: a bidirectional answer, on a connection of its own
     "menger.respond" -> do
       void (tryPutMVar responses (KM.lookup "response_data" params))
@@ -303,6 +352,17 @@ ticketsSchema sc = object $
       , "params" .= object ["type" .= ("object" :: Text), "required" .= (["id"] :: [Text]),
           "properties" .= object ["id" .= object ["type" .= ("string" :: Text), "description" .= ("Ticket id, e.g. MNG-2" :: Text)]]] ]
       <> (if caller then [ "grant" .= ("tickets." <> n), "held_on" .= (held :: [Text]) ] <> maybe [] (\t -> ["target" .= (t :: Text)]) target else [])
+
+-- | SYNAPSE-28: the schema after @get@ was renamed @fetch@ (a new hash).
+renameGet :: Value -> Value
+renameGet (Object o) = Object (KM.insert "hash" (String "t1") (maybe o (\v -> KM.insert "methods" (ms v) o) (KM.lookup "methods" o)))
+  where
+    ms (Array a) = Array (V.map m a)
+    ms v = v
+    m (Object mo) | KM.lookup "name" mo == Just (String "get") =
+      Object (KM.insert "name" (String "fetch") (KM.insert "hash" (String "fetch0") mo))
+    m v = v
+renameGet v = v
 
 -- | The tickets schema as the caller's view shows it: without what only an
 -- admin holds (tickets.delete).

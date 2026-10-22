@@ -239,9 +239,11 @@ spec = do
         before <- readIORef schemaCalls
         Right first <- runSynapseM env (loadCatalog (Just cache))
         middle <- readIORef schemaCalls
-        -- a fresh cache on the same directory: from disk, as the next process reads it
+        -- a fresh cache on the same directory: from disk, as the next process
+        -- reads it (SYNAPSE-28: and a fresh env — a run fetches each path once)
         cache' <- newIRCache (CacheConfig True 100 True dir)
-        Right second <- runSynapseM env (loadCatalog (Just cache'))
+        env' <- initEnv "127.0.0.1" port "menger" logger Nothing
+        Right second <- runSynapseM env' (loadCatalog (Just cache'))
         after <- readIORef schemaCalls
         (middle - before) `shouldSatisfy` (>= 3)
         (after - middle) `shouldBe` 1

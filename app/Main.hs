@@ -40,7 +40,14 @@ import System.IO (hPutStrLn, stderr, hFlush, stdout, hIsTerminalDevice)
 
 
 import Synapse.Schema.Types
-import Synapse.Monad (SynapseM, SynapseEnv(..), SynapseError(..), BackendErrorType(..), TransportContext(..), TransportErrorCategory(..), initEnvAt, runSynapseM, throwNav, throwTransport, throwParse, throwBackend, withRequestContext, withViewKey)
+import Synapse.Monad (SynapseM, SynapseEnv(..), SynapseError(..), BackendErrorType(..), TransportContext(..), TransportErrorCategory(..), initEnvAt, runSynapseM, throwNav, throwTransport, throwParse, throwBackend, withRequestContext, withViewKey, SchemaSource(..), withSchemaSource, isCached)
+import qualified Synapse.SchemaStore as SS
+import qualified Synapse.Hold as Hold
+import Plexus.Client (SubstrateConfig(..), TlsOptions(..))
+import Plexus.Auth (Refusal(..))
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import System.IO.Unsafe (unsafePerformIO)
+import Data.Maybe (fromMaybe, isNothing)
 import qualified Synapse.Self as Self
   ( CredentialRef(..)
   , ResolveError(..)
@@ -63,6 +70,7 @@ import Synapse.CLI.Help (MethodPage(..), renderMethodPage)
 import Synapse.CLI.Parse (parseParams, parsePathAndParams, pairFlags)
 import qualified Synapse.CLI.Parse as Parse
 import Synapse.IR.Types (IR, irMethods, MethodDef)
+import Plexus.Schema.Recursive (DeprecationInfo)
 import qualified Data.Map.Strict as Map
 import qualified Synapse.CLI.Template as TemplateIR
 import Synapse.Deprecation (emitActivationWarning, emitMethodWarning)
@@ -77,7 +85,7 @@ import System.Directory (createDirectoryIfMissing, doesFileExist, getHomeDirecto
 import System.FilePath ((</>))
 import qualified Synapse.Self.Commands as Self
 import qualified Synapse.Self.Command as SelfCmd
-import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscoveryAt, endpointFor, pingBackendsVia, getBackendAt, getBackendAtEp, probeBackendAtEp, registerWithRegistry, probedInfoAt, probeFailureAt)
+import Synapse.Backend.Discovery (Backend(..), BackendDiscovery(..), registryDiscoveryAt, endpointFor, pingBackendsVia, getBackendAt, getBackendAtEp, probeBackendAtEp, registerWithRegistry, probedInfoAt, probeFailureAt, probedNameAt, rememberInfo)
 import Synapse.Endpoint (Endpoint(..), plainAt, isPlain, parseUrl, normalisePath, cliOptions)
 import qualified Synapse.Endpoint as E
 import Control.Applicative ((<|>))
@@ -130,6 +138,8 @@ data SynapseOpts = SynapseOpts
   , soNoDeprecationWarnings :: Bool  -- ^ Suppress invocation-time deprecation warnings (IR-15)
   , soAs            :: Maybe Text    -- ^ IDENTITY-43: which stored agent session to carry
   , soReconnectFor  :: Maybe Text    -- ^ SYNAPSE-20: how long to ride out an outage (10m; 0 = never)
+  , soNoHold        :: Bool          -- ^ SYNAPSE-28: no connection held between runs
+  , soHoldFor       :: Maybe Text    -- ^ SYNAPSE-28: how long the holder waits with nothing to do (10m)
   }
   deriving Show
 
@@ -269,7 +279,13 @@ probeWithSession = probeWithSession' False
 -- | SYNAPSE-20: with @waits@, a probe that fails as an outage does is
 -- tried again for the reconnect window.
 probeWithSession' :: Bool -> SynapseOpts -> Endpoint -> IO (Maybe Text)
-probeWithSession' waits opts ep = do
+probeWithSession' waits opts ep = probedNameAt ep >>= \case
+  -- SYNAPSE-28: this run has asked already
+  Just name -> pure (Just name)
+  Nothing -> probeWithSession'' waits opts ep
+
+probeWithSession'' :: Bool -> SynapseOpts -> Endpoint -> IO (Maybe Text)
+probeWithSession'' waits opts ep = do
   probe <- probeHeaders opts ep
   let once = probeBackendAtEp probe ep
       whereTo = Store.addressKey ep
@@ -380,6 +396,8 @@ buildEnv ep backend logger opts = do
 main :: IO ()
 main = do
   args0 <- execParser argsInfo
+  -- SYNAPSE-28: the connection holder a run started (synapse _hold …)
+  when (argBackend args0 == Just "_hold") $ runHold (argPath args0)
   -- SCAFFOLD-21: where the connection point is — --url, or -H / -P with
   -- --tls / --path — resolved once, before anything dials
   opts <- either (\e -> hPutStrLn stderr ("synapse: " <> T.unpack e) >> exitWith (ExitFailure 2)) pure
@@ -402,6 +420,26 @@ main = do
   when (argBackend args == Just "_key") $ runKey (argPath args)
   when (argBackend args == Just "_login") $ runLogin opts (argPath args)
   when (argBackend args == Just "_logout") $ runLogout opts (argPath args)
+
+  -- SYNAPSE-28: every request of this run goes over one connection — the
+  -- holder's, kept between runs, or (--no-hold) this process's own
+  installCallRouter opts
+
+  -- SYNAPSE-28: a call to a backend the cache knows is sent at once — no
+  -- probe, no schema fetch; they run only when the call fails in a way
+  -- the schema explains
+  case argBackend args of
+    Just b | sendsFirst args b -> sendFirst args b
+    _ -> pure ()
+  slowPath args
+
+-- | The run as it always went: the probe, the backend found, the schema
+-- fetched (SYNAPSE-28: once each, on the run's one connection, and kept
+-- for the next run).
+slowPath :: Args -> IO ()
+slowPath args = do
+  let opts = argOpts args
+      ep = soEndpoint opts
 
   -- Initialize logger (default: ErrorS, only show errors)
   logger <- makeLoggerFromOpts opts
@@ -725,7 +763,7 @@ runWithDiscovery discovery backendName args = do
             Right () -> exitSuccess
         Just _ ->
           -- Match confirmed
-          run backendName at args
+          run Fresh backendName at args
     Nothing -> do
       -- Backend not found in registry - check if this was a direct connection attempt
       -- where the protocol handshake failed
@@ -754,7 +792,7 @@ runWithDiscovery discovery backendName args = do
             Right () -> exitSuccess
         Just _ -> do
           -- Backend discovered successfully - should not reach here, but proceed
-          run backendName ep args
+          run Fresh backendName ep args
 
 -- | SCAFFOLD-21: a wss address whose probe failed — why, from the probe
 -- (a certificate the trust store refused, a name it does not cover, a
@@ -786,16 +824,48 @@ tlsUnreachable at = do
       _ -> TIO.hPutStrLn stderr $ "synapse: " <> E.shortUrl at <> " did not answer the _info probe: " <> detail
   exitFailure
 
+-- | SYNAPSE-28: how a run gets its schemas.
+data RunMode
+  = Fresh
+    -- ^ from the server (the probe has run), kept in the cache for the next run
+  | Cached SS.Store (Maybe SS.Plan) (IO ())
+    -- ^ from the cache alone, the call sent first; the action is the run
+    -- again from the server, for when the cache could not answer or the
+    -- server refused what it said (it exits)
+
 -- | Run a Hub command with specified backend and connection details
-run :: Text -> Endpoint -> Args -> IO ()
-run backend ep args = do
+run :: RunMode -> Text -> Endpoint -> Args -> IO ()
+run mode backend ep args = do
   let opts = argOpts args
   logger <- makeLoggerFromOpts opts
   Log.logInfo logger Log.SubsystemCLI $ "Synapse starting: backend=" <> backend <> ", at " <> Store.addressKey ep
-  env <- withView ep =<< buildEnv ep backend logger opts
+  -- SYNAPSE-28: where this run's schemas come from and go
+  source <- case mode of
+    Cached st plan _ -> pure (FromCache st, plan)
+    Fresh -> do
+      st <- storeAt opts ep backend
+      case st of
+        Just store -> do
+          SS.writeRoute (soEndpoint opts) backend ep
+          probedInfoAt ep >>= mapM_ (SS.writeInfo store)
+        Nothing -> pure ()
+      pure (FromServer st, Nothing)
+  let mkEnv = uncurry withSchemaSource source <$> (withView ep =<< buildEnv ep backend logger opts)
+  env <- mkEnv
   rendererCfg <- defaultRendererConfig
   Log.logDebug logger Log.SubsystemCLI "Running dispatch..."
   result <- runSynapseM env (dispatch args rendererCfg)
+  -- SYNAPSE-28: the cache could not answer for the call, or the server
+  -- refused it before it ran (a method or flag the cache did not know):
+  -- ask the server and run it again
+  stale <- takeStale
+  case mode of
+    Cached st _ again | stale || isStaleError result || isMiss result -> do
+      Log.logInfo logger Log.SubsystemCLI $ "The cache could not answer (" <> staleWhy result <> "); asking " <> Store.addressKey ep
+      -- what misled the call is forgotten; a miss forgets nothing
+      when (not (isMiss result)) $ SS.forget st
+      again
+    _ -> pure ()
   -- IDENTITY-43: the server refused the stored session (the upgrade's 401,
   -- or the in-band "you have signed out" held back before anything was
   -- shown): log in again from the key, and run the call once more.
@@ -809,7 +879,7 @@ run backend ep args = do
     new <- Session.reattest logger st ep
     case new of
       Just _ -> do
-        env' <- withView ep =<< buildEnv ep backend logger opts
+        env' <- mkEnv
         runSynapseM env' (dispatch args rendererCfg)
       Nothing -> do
         mapM_ (\m -> hPutStrLn stderr ("Error: " <> T.unpack m)) ended
@@ -822,6 +892,163 @@ run backend ep args = do
       -- AUTH-8: a refusal was shown — the call did not happen
       refused' <- Session.wasRefused
       if refused' then exitWith (ExitFailure refusedExit) else exitSuccess
+  where
+    isStaleError = \case
+      Left (StaleSchema _) -> True
+      _ -> False
+    isMiss = \case
+      Left (CacheMiss _) -> True
+      _ -> False
+    staleWhy = \case
+      Left (StaleSchema why) -> why
+      Left (CacheMiss why) -> why
+      _ -> "the server refused what it said"
+
+-- | SYNAPSE-28: the cache this run reads and fills — the agent's view of
+-- the backend at the address; none when the call carries a credential of
+-- its own (-t, --token-file, a cookie or header, PLEXUS_SESSION), whose
+-- view is no agent's.
+storeAt :: SynapseOpts -> Endpoint -> Text -> IO (Maybe SS.Store)
+storeAt opts ep backend = do
+  explicit <- explicitCredential opts
+  if explicit then pure Nothing else do
+    st <- Store.systemStoreEnv
+    asked <- askedAgent opts
+    agent <- maybe (Store.readDefaultAgent st ep) (pure . Just) asked
+    Just <$> SS.storeFor ep (fromMaybe "anonymous" agent) backend
+
+-- | SYNAPSE-28: does the call bring its own credential?
+explicitCredential :: SynapseOpts -> IO Bool
+explicitCredential opts = do
+  (cookies, headers) <- collectRequestContext opts
+  envSession <- lookupEnv "PLEXUS_SESSION"
+  pure $ isJust (soToken opts) || isJust (soTokenFile opts)
+    || not (null cookies) || not (null headers)
+    || maybe False (not . null) envSession
+
+-- | SYNAPSE-28: may this call be sent first? A call to a named backend
+-- (not a meta-command), and not a mode that is about the schema itself.
+sendsFirst :: Args -> Text -> Bool
+sendsFirst args b =
+  not ("_" `T.isPrefixOf` b || "-" `T.isPrefixOf` b)
+    && not (soSchema o || soGenerate o || soEmitIR o || soNoCache o)
+    && isNothing (soRpc o) && isNothing (argFind args)
+  where o = argOpts args
+
+-- | SYNAPSE-28: send the call from the cache — where the backend is, its
+-- _info and the method's plan as the last run left them — with no probe
+-- and no schema fetch. Returns (to the run as it always went) when the
+-- cache has not got what the call needs; otherwise it exits.
+sendFirst :: Args -> Text -> IO ()
+sendFirst args backend = do
+  let opts = argOpts args
+      (pathSegs, _, _, helpRequested) = parsePathAndParams (argPath args)
+  route <- SS.readRoute (soEndpoint opts) backend
+  case route of
+    Nothing -> pure ()
+    Just ep -> do
+      mst <- storeAt opts ep backend
+      case mst of
+        Nothing -> pure ()
+        Just st -> do
+          info <- SS.readInfo st
+          plan <- SS.readPlan st pathSegs
+          case info of
+            -- an anonymous view is the door, never sent first; help and
+            -- listings are read from the server (they show what is new)
+            Just i | infoView i /= Just Anonymous, infoBackend i == backend
+                   , not (null pathSegs), not helpRequested -> do
+              rememberInfo ep i
+              run (Cached st plan (slowPath args)) backend ep args
+            _ -> pure ()
+
+-- | SYNAPSE-28: the cache cannot answer for the call: ask the server.
+stale :: Text -> SynapseM a
+stale why = throwError (StaleSchema why)
+
+-- | SYNAPSE-28: the server refused a call sent from the cache before it
+-- ran, in a way the schema explains — a method it does not have (under
+-- the AUTH gate, an unlisted method is one only admin holds), or params it
+-- cannot read (a field missing, unknown, or of another type). The item is
+-- held back, and the call is run again from the server's schema.
+{-# NOINLINE staleRef #-}
+staleRef :: IORef Bool
+staleRef = unsafePerformIO (newIORef False)
+
+markStale :: IO ()
+markStale = writeIORef staleRef True
+
+takeStale :: IO Bool
+takeStale = do
+  v <- readIORef staleRef
+  writeIORef staleRef False
+  pure v
+
+isStaleItem :: HubStreamItem -> Bool
+isStaleItem item = case itemRefusal item of
+  Just r -> refusalRoles r == ["admin"]
+  Nothing -> case item of
+    HubError _ _ msg _ -> any (`T.isInfixOf` msg)
+      [ "Method not found", "Activation not found", "Unknown method", "method not found"
+      , "errCode = -32601", "missing field", "unknown field", "invalid type", "unknown variant" ]
+    _ -> False
+
+-- | SYNAPSE-28: route every call through the connection holder for its
+-- address and agent (started by the first run), or — with --no-hold, a
+-- credential of the call's own, or no holder to be had — over one
+-- connection of this process's own.
+installCallRouter :: SynapseOpts -> IO ()
+installCallRouter opts = do
+  noHoldEnv <- lookupEnv "SYNAPSE_NO_HOLD"
+  holdForEnv <- lookupEnv "SYNAPSE_HOLD_FOR"
+  holdFor <- case soHoldFor opts <|> fmap T.pack holdForEnv of
+    Nothing -> pure Hold.defaultHoldFor
+    Just w -> case Reconnect.parseDuration w of
+      Just secs -> pure secs
+      Nothing -> do
+        hPutStrLn stderr $ "synapse: --hold-for takes a duration (10m, 90s, 1h, 0), not '" <> T.unpack w <> "'"
+        exitWith (ExitFailure 2)
+  explicit <- explicitCredential opts
+  let off = soNoHold opts || maybe False (`elem` ["1", "true", "yes", "on"]) noHoldEnv
+              || explicit || holdFor <= 0
+  st <- Store.systemStoreEnv
+  asked <- askedAgent opts
+  let version = T.pack (showVersion Meta.version)
+      cp = soEndpoint opts
+      viaRegistry = Store.addressKey cp == Store.addressKey (plainAt defaultHost defaultPort)
+      socketFor cfg = do
+        let ep = endpointOfConfig cfg
+        -- the run's own address is held — or, reached through the
+        -- registry, whatever it names; a registry the run only glances at
+        -- (the auto-registration's probe) is not
+        if not viaRegistry && Store.addressKey ep /= Store.addressKey cp then pure Nothing else do
+          agent <- maybe (Store.readDefaultAgent st ep) (pure . Just) asked
+          Just <$> Hold.socketPathFor version (E.dirName ep) (fromMaybe "anonymous" agent)
+  _ <- Hold.installRouter Hold.RouterOpts
+         { Hold.roHold = if off then Nothing else Just socketFor
+         , Hold.roHoldFor = holdFor }
+  pure ()
+
+-- | The address a plexus-protocol config dials.
+endpointOfConfig :: SubstrateConfig -> Endpoint
+endpointOfConfig c = Endpoint
+  { epHost = T.pack (substrateHost c)
+  , epPort = substratePort c
+  , epTls = isJust (substrateTls c)
+  , epPath = T.pack (substratePath c)
+  , epCaFiles = maybe [] tlsCaFiles (substrateTls c)
+  }
+
+-- | SYNAPSE-28: @synapse _hold --socket PATH --hold-for SECS@ — the
+-- connection holder (a run starts it; it exits when idle).
+runHold :: [Text] -> IO ()
+runHold rest = case rest of
+  ["--socket", path, "--hold-for", secs]
+    | Just d <- (readMaybe (T.unpack secs) :: Maybe Double) ->
+        Hold.runHolder Hold.HoldOpts { Hold.hoSocket = T.unpack path, Hold.hoHoldFor = d }
+  _ -> do
+    hPutStrLn stderr "synapse _hold --socket PATH --hold-for SECS (started by synapse itself)"
+    exitWith (ExitFailure 2)
 
 -- | AUTH-8: the exit status of a call the hub refused (sysexits' EX_NOPERM).
 refusedExit :: Int
@@ -915,8 +1142,12 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                   -- Mode 5: Normal navigation
                   info <- currentInfo
                   let anonymous = (info >>= infoView) == Just Anonymous
+                  -- SYNAPSE-28: sent first, from the cache — what the cache
+                  -- cannot answer is asked of the server (StaleSchema)
+                  cached <- asks isCached
+                  plan <- asks sePlan
                   if null pathSegs
-                    then do
+                    then if cached then stale "a listing" else do
                       -- SYNAPSE-12: a backend named, its help is the
                       -- backend's alone — no banner, options or meta-commands.
                       -- AUTH-8: to an anonymous caller, only the door.
@@ -931,7 +1162,11 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                       -- Navigate to target
                       -- AUTH-8: an anonymous caller asking for anything the
                       -- door does not show is shown the door
-                      view <- navigate pathSegs `catchError` \e -> case e of
+                      view <- case plan of
+                       Just p -> pure (ViewMethod (SS.plMethod p) (SS.plPath p))
+                       Nothing -> navigate pathSegs `catchError` \e -> case e of
+                        NavError (NotFound {}) | cached -> stale "a path the cache does not know"
+                        NavError (MethodNotTerminal {}) | cached -> stale "a path the cache does not know"
                         NavError (NotFound {}) | anonymous -> do
                           root <- (Just <$> navigate []) `catchError` \_ -> pure Nothing
                           showAnonymous info (root >>= viewSchema)
@@ -940,6 +1175,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                             exitWith (ExitFailure refusedExit)
                         _ -> throwError e
                       case view of
+                        ViewPlugin {} | cached -> stale "a listing"
                         -- Landed on a plugin: show help
                         ViewPlugin schema _ -> showPluginHelp info pathSegs schema
 
@@ -954,20 +1190,46 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                           -- sites below (fast path and slow path). --help, --dry-run,
                           -- --schema, and --emit-ir do not invoke, and intentionally
                           -- do not fire these warnings.
-                          let fireDeprecationWarnings :: SynapseM ()
+                          -- SYNAPSE-28: the activation's deprecation, from the
+                          -- plan when there is one
+                          let namespacePath = init path
+                              parentDeprecation :: SynapseM (Maybe DeprecationInfo)
+                              parentDeprecation = case plan of
+                                Just p -> pure (SS.plDeprecation p)
+                                Nothing
+                                  | null namespacePath -> pure Nothing
+                                  | otherwise -> psDeprecation <$> fetchSchemaAt namespacePath
+                              fireDeprecationWarnings :: SynapseM ()
                               fireDeprecationWarnings = do
                                 liftIO $ emitMethodWarning
                                   soNoDeprecationWarnings
                                   fullPath
                                   (methodDeprecation method)
-                                let namespacePath = init path
                                 when (not (null namespacePath)) $ do
                                   let activationNs = T.intercalate "." namespacePath
-                                  parentPlugin <- fetchSchemaAt namespacePath
+                                  dep <- parentDeprecation
                                   liftIO $ emitActivationWarning
                                     soNoDeprecationWarnings
                                     activationNs
-                                    (psDeprecation parentPlugin)
+                                    dep
+                              -- SYNAPSE-28: what the next call of this path
+                              -- reads in place of the activation's schema
+                              keepPlan :: Maybe IR -> SynapseM ()
+                              keepPlan mir = do
+                                src <- asks seSchemaSource
+                                let store = case src of
+                                      FromCache st -> Just st
+                                      FromServer st -> st
+                                    current = case plan of
+                                      Just p -> isJust (SS.plIR p) || isNothing mir
+                                      Nothing -> False
+                                case store of
+                                  Just st | not current -> do
+                                    dep <- parentDeprecation
+                                    liftIO $ SS.writePlan st pathSegs SS.Plan
+                                      { SS.plMethod = method, SS.plPath = path, SS.plDeprecation = dep
+                                      , SS.plIR = SS.planIR fullPath <$> mir }
+                                  _ -> pure ()
 
                           -- Optimization: Skip IR construction for parameter-less methods
                           -- IR is only needed for:
@@ -980,14 +1242,17 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
 
                           -- Fast path: parameter-less method with no help requested
                           if not needsIR
-                            then fireDeprecationWarnings >> invokeMethod sourceEnv method path (object [])
+                            then fireDeprecationWarnings >> keepPlan Nothing >> invokeMethod sourceEnv method path (object [])
                             else do
                               -- Build IR for this method's namespace
-                              ir <- buildIR soGeneratorInfo (init path)
+                              -- (SYNAPSE-28: the plan's, when it has one)
+                              ir <- case plan >>= SS.plIR of
+                                Just planned -> pure planned
+                                Nothing -> buildIR soGeneratorInfo (init path)
 
                               -- If --help was explicitly requested, show help and exit
                               if helpRequested
-                                then do
+                                then if cached then stale "help" else do
                                   case Map.lookup fullPath (irMethods ir) of
                                     Just methodDef -> do
                                       page <- pageFor info pathSegs method
@@ -1016,6 +1281,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                                               -- method is known (a value may begin with dashes)
                                               methodParams <- case pairFlags ir methodDef flagArgs of
                                                 Right pairs -> fromSources pairs >>= liftIO . transformParams transformEnv defaultTransformers
+                                                Left _ | cached -> stale "a flag the cache does not know"
                                                 Left errs -> do
                                                   liftIO $ mapM_ (hPutStrLn stderr . renderParseError) errs
                                                   throwParse "Parameter parsing failed"
@@ -1025,9 +1291,11 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                                               paramsWithDefaults <- liftIO $ injectSmartDefaults transformEnv ir methodDef paramsWithBools
                                               case parseParams ir methodDef paramsWithDefaults of
                                                 Right p -> pure p
+                                                Left _ | cached -> stale "a flag the cache does not know"
                                                 Left errs -> do
                                                   liftIO $ mapM_ (hPutStrLn stderr . renderParseError) errs
                                                   throwParse "Parameter parsing failed"
+                                            Nothing | cached -> stale "a method the cache's IR lacks"
                                             Nothing ->
                                               -- Fallback to flat object if method not in IR
                                               pure $ buildParamsObject inlineParams
@@ -1041,7 +1309,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                                       liftIO $ LBS.putStrLn $ encodeDryRun backend (init path) (last path) params
                                     -- Show help when: method has required params AND user provided no params
                                     else if hasRequiredParams method && userParams == object [] && null inlineParams
-                                      then do
+                                      then if cached then stale "help" else do
                                         -- Render help from IR
                                         case Map.lookup fullPath (irMethods ir) of
                                           Just methodDef -> do
@@ -1053,7 +1321,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                                             -- Fallback: method not in IR, use basic info
                                             liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
                                       -- IR-15: fire stderr deprecation warnings before real invocation.
-                                      else fireDeprecationWarnings >> invokeMethod sourceEnv method path params
+                                      else fireDeprecationWarnings >> keepPlan (Just ir) >> invokeMethod sourceEnv method path params
   where
     -- AUTH-8: what the _info probe at this address answered (view, auth)
     currentInfo :: SynapseM (Maybe BackendInfo)
@@ -1177,9 +1445,15 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
       -- for 'run' to log in again and retry.
       ep <- asks seEndpoint
       armed <- liftIO $ Session.canReattest ep
+      cachedRun <- asks isCached
       let printer item = do
             shown <- Session.printedAny
-            if armed && not shown && Session.isSessionEndedItem item
+            held <- readIORef staleRef
+            -- SYNAPSE-28: a call sent from the cache that the server refused
+            -- as the schema explains is held back, and run again
+            if held then pure ()
+            else if cachedRun && not shown && isStaleItem item then markStale
+            else if armed && not shown && Session.isSessionEndedItem item
               then Session.markSessionEnded (endedMessage item)
               else do
                 case item of
@@ -1353,6 +1627,13 @@ metaCommands =
       , "                      --cacert FILE trusts a local CA too. Sessions are kept per"
       , "                      URL, so _login and every call take the same options"
       , ""
+      , "A connection held between runs (SYNAPSE-28):"
+      , "  the first call to a backend starts a holder that keeps the signed-in socket"
+      , "  open ($XDG_RUNTIME_DIR/synapse/, one per address and agent); later calls cost"
+      , "  one round trip. It exits after --hold-for (10m) with nothing to do; --no-hold"
+      , "  dials a connection of the run's own. A call is sent from the schema cache"
+      , "  (~/.cache/synapse/schemas) and checked against the server only when it fails"
+      , ""
       , "Meta-commands:"
       , ""
       , "  synapse _key new|show|list [NAME]"
@@ -1419,6 +1700,10 @@ renderError = \case
     "Parse error: " <> T.unpack msg
   ValidationError msg ->
     "Validation error: " <> T.unpack msg
+  StaleSchema msg ->
+    "The schema cache could not answer: " <> T.unpack msg
+  CacheMiss msg ->
+    "The schema cache could not answer: " <> T.unpack msg
   BackendError errorType backends ->
     case errorType of
       BackendNotFound name ->
@@ -1740,6 +2025,12 @@ optsParser = do
   soReconnectFor <- optional $ T.pack <$> strOption
     ( long "reconnect-for" <> metavar "DURATION"
    <> help "Ride out an outage this long: a lost connection is retried, a read sent again, a stream resumed (10m, 90s, 1h; 0 = never; else SYNAPSE_RECONNECT_FOR, else 10m)" )
+  soNoHold <- switch
+    ( long "no-hold"
+   <> help "Hold no connection between runs: this run dials its own (one, shared by all its requests) and closes it (else SYNAPSE_NO_HOLD=1)" )
+  soHoldFor <- optional $ T.pack <$> strOption
+    ( long "hold-for" <> metavar "DURATION"
+   <> help "How long the connection holder keeps the signed-in socket open with nothing to do (10m, 90s, 1h; else SYNAPSE_HOLD_FOR, else 10m)" )
   pure SynapseOpts
     { soHost = maybe defaultHost id soHostFlag
     , soPort = maybe defaultPort id soPortFlag

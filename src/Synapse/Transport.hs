@@ -26,7 +26,10 @@ module Synapse.Transport
   ) where
 
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Except (throwError)
 import Data.IORef (newIORef, readIORef, modifyIORef')
+import qualified Data.Map.Strict as Map
+import qualified Synapse.SchemaStore as Store
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value)
 import qualified Data.ByteString.Char8 as BS8
@@ -120,8 +123,37 @@ transportErrorToCategory (PT.NetworkError _) = UnknownTransportError
 transportErrorToCategory (PT.ConnectionLost _ _) = UnknownTransportError
 
 -- | Fetch schema at a specific path
+--
+-- SYNAPSE-28: each path once a run (navigation, the deprecation check and
+-- the IR all ask for the method's activation); from the cache alone when
+-- the run sends first ('FromCache' — what it lacks is 'StaleSchema'), and
+-- kept in the cache when it is fetched.
 fetchSchemaAt :: Path -> SynapseM PluginSchema
 fetchSchemaAt path = do
+  memo <- asks seFetched
+  known <- liftIO $ Map.lookup path <$> readIORef memo
+  case known of
+    Just schema -> pure schema
+    Nothing -> do
+      src <- asks seSchemaSource
+      schema <- case src of
+        FromCache st -> do
+          cached <- liftIO $ Store.readSchema st path
+          maybe (throwError (CacheMiss ("no cached schema at " <> showPath path))) pure cached
+        FromServer st -> do
+          schema <- fetchSchemaFromServer path
+          liftIO $ mapM_ (\s -> Store.writeSchema s path schema) st
+          pure schema
+      liftIO $ modifyIORef' memo (Map.insert path schema)
+      pure schema
+
+-- | A path as a message names it.
+showPath :: Path -> Text
+showPath [] = "the root"
+showPath p = T.intercalate "." p
+
+fetchSchemaFromServer :: Path -> SynapseM PluginSchema
+fetchSchemaFromServer path = do
   logger <- getLogger
   cfg <- getConfig
   Log.logDebug logger Log.SubsystemSchema $
