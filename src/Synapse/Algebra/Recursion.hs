@@ -76,7 +76,8 @@ import System.IO (hPutStrLn, stderr)
 
 import Synapse.Schema.Types (Path, PluginSchema(..), MethodSchema(..), ChildSummary(..))
 import Synapse.Schema.Functor (SchemaF(..), Fix(..), SchemaTree)
-import Synapse.Monad (SynapseM, runSynapseM)
+import Synapse.Monad (SynapseM, SynapseError(..), runSynapseM)
+import Control.Monad.Except (throwError)
 import Synapse.Transport (fetchSchemaAt)
 
 -- ============================================================================
@@ -167,6 +168,13 @@ hyloM alg coalg = go
       fb <- traverse go fa    -- recursively process (sequential)
       alg fb                  -- fold one step
 
+-- | SYNAPSE-28: the cache has not got it, or misled the call.
+cacheCannotAnswer :: SynapseError -> Bool
+cacheCannotAnswer = \case
+  CacheMiss _ -> True
+  StaleSchema _ -> True
+  _ -> False
+
 -- | Parallel monadic hylomorphism specialized for SchemaF
 --
 -- Like hyloM but processes child schemas in parallel using mapConcurrently.
@@ -185,13 +193,18 @@ hyloMPar alg coalg = go
             (\child -> do
               result <- runSynapseM env (go child)
               case result of
+                -- SYNAPSE-28: a run sending from the cache asks the server
+                -- for what the cache lacks; it never skips it
+                Left err | cacheCannotAnswer err -> pure (Left err)
                 Left err -> do
                   hPutStrLn stderr $ "[synapse] warning: skipping plugin (fetch failed): " ++ show err
-                  pure Nothing
-                Right val -> pure (Just val)
+                  pure (Right Nothing)
+                Right val -> pure (Right (Just val))
             )
             children
-          alg (PluginF schema path (catMaybes childResults))
+          case [e | Left e <- childResults] of
+            (e : _) -> throwError e
+            [] -> alg (PluginF schema path (catMaybes [v | Right v <- childResults]))
         MethodF method ns path ->
           -- Methods are leaves, just apply algebra
           alg (MethodF method ns path)

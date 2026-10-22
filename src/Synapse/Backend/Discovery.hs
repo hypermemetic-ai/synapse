@@ -58,6 +58,8 @@ module Synapse.Backend.Discovery
   , probedInfo
   , probedInfoAt
   , probeFailureAt
+  , probedNameAt
+  , rememberInfo
 
     -- * Health Checks
   , pingBackend
@@ -312,6 +314,8 @@ probeBackendAtEp headers ep = do
           -- AUTH-8: kept for the rest of the process — the view and the
           -- auth block this connection's credential was answered with
           mapM_ (\i -> modifyIORef' infoMemo (Map.insert (addressKey ep) i)) (parseBackendInfo v)
+          -- SYNAPSE-28: and the name, so the run asks it once
+          modifyIORef' nameMemo (Map.insert (addressKey ep) name)
           pure (Right name)
         _ ->
           failed "the _info probe answered no backend name"
@@ -334,6 +338,22 @@ probedInfoAt ep = Map.lookup (addressKey ep) <$> readIORef infoMemo
 -- process (a TLS handshake's refusal, say), if it did.
 probeFailureAt :: Endpoint -> IO (Maybe Text)
 probeFailureAt ep = Map.lookup (addressKey ep) <$> readIORef failMemo
+
+-- | SYNAPSE-28: the name the _info probe at this address answered in this
+-- process, if it has been asked — the run asks once, where it asked three
+-- times (once anonymously, on a connection of its own: 0.7 s of the 0.9 s
+-- before a call to app.menger.sh began).
+probedNameAt :: Endpoint -> IO (Maybe Text)
+probedNameAt ep = Map.lookup (addressKey ep) <$> readIORef nameMemo
+
+-- | SYNAPSE-28: what a run that sends first knows of the address without
+-- asking — the _info its cache kept.
+rememberInfo :: Endpoint -> BackendInfo -> IO ()
+rememberInfo ep i = modifyIORef' infoMemo (Map.insert (addressKey ep) i)
+
+{-# NOINLINE nameMemo #-}
+nameMemo :: IORef (Map.Map Text Text)
+nameMemo = unsafePerformIO (newIORef Map.empty)
 
 {-# NOINLINE failMemo #-}
 failMemo :: IORef (Map.Map Text Text)
@@ -369,8 +389,10 @@ queryRegistryImpl ep backendName = do
 -- | Query for a specific backend by name
 queryBackend :: Endpoint -> Text -> IO (Maybe Backend)
 queryBackend ep name = do
-  -- First discover the backend name
-  maybeBackendName <- getBackendAtEp [] ep
+  -- First discover the backend name (SYNAPSE-28: as this run's probe
+  -- answered it, when it has asked; an anonymous probe of its own otherwise)
+  known <- probedNameAt ep
+  maybeBackendName <- maybe (getBackendAtEp [] ep) (pure . Just) known
   case maybeBackendName of
     Just discoveredName -> do
       -- Check if the requested name matches the discovered backend

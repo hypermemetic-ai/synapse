@@ -574,6 +574,74 @@ connection limits (429) is waited out like any outage.
 | 75 | a write went out and its answer never came — it may have happened |
 | 77 | the hub refused the call (AUTH-8) |
 
+Through the connection holder (SYNAPSE-28, below) all of this holds as it is.
+
+## One round trip a call (SYNAPSE-28, 3.16.0)
+
+A call costs one round trip and the server's time. Against app.menger.sh
+(77 ms away) `tickets health` takes **81 ms**, where it took 4.6 s.
+
+```
+$ synapse --url wss://app.menger.sh/ws --as builder menger tickets health   # the first: 2.6 s
+$ synapse --url wss://app.menger.sh/ws --as builder menger tickets health   # every one after: 81 ms
+```
+
+Two things make it so:
+
+- **A connection held between runs**, as ssh's ControlMaster holds one. The
+  first call to a backend starts a holder (`synapse _hold`, a process of
+  synapse's own) that keeps the signed-in WebSocket open and listens on a
+  unix socket: `$XDG_RUNTIME_DIR/synapse/ADDRESS@AGENT-VERSION.sock` (0600,
+  in a 0700 directory of yours). Later runs hand it their requests and read
+  the replies back, so the TCP, TLS and upgrade handshakes (about 0.3 s to a
+  hosted hub) are paid once. One holder per address and agent (`--as`), never
+  shared between agents; it exits after **10 minutes** with nothing to do
+  (`--hold-for 30m`, or `SYNAPSE_HOLD_FOR`). `--no-hold` (`SYNAPSE_NO_HOLD=1`)
+  skips it: that run dials one connection of its own and closes it. A call
+  that brings its own credential (`-t`, `--token-file`, `--cookie`,
+  `--header`, `PLEXUS_SESSION`) never uses a holder.
+- **Send first, check on failure.** synapse keeps what a call needs from the
+  backend in `~/.cache/synapse/schemas/` (`$XDG_CACHE_HOME`): where the
+  backend is, its `_info` as your agent was answered, each activation's
+  schema (`PATH@VERSION-HASH.json`, pinned by `PATH.pin`) and a **plan** per
+  method (its schema, its activation's deprecation, the types its flags parse
+  by: kilobytes, where menger's `tickets` schema is 2.6 MB). A call to a
+  method it has a plan for is built from the plan and sent: no probe, no
+  schema fetch. The probe and the fetch run, on the same connection, only
+  when that fails as the schema explains: a method or flag the cache does not
+  know, or the server refusing what the cache said (a method it does not
+  have, under the AUTH gate one only admin holds; params with a field
+  missing, unknown or of another type). Those refusals come before the
+  method runs, so the call is then sent again, a write too; the plans it
+  misled are forgotten. Help, listings, `-s`, `-i` and `_find` always read
+  the server.
+
+Everything else is as before. Outages are ridden out by the same rules, a
+read sent again and a write never resent blind (exits 69 and 75), because
+the holder reports a lost connection, and whether the request had gone out,
+exactly as a connection of the run's own would. A session that ended is made
+again from the key by the run, and the holder dials a connection with the
+new one beside the old, closing the old when idle. A run that goes away
+mid-stream (Ctrl-C) ends its call at the server. Twenty runs starting at
+once share one connection, and the reads they all ask first (the schema,
+`_info`) are asked once.
+
+Measured against app.menger.sh (ping 77 ms), 2026-10-22:
+
+| | 3.15.0 | 3.16.0 |
+| -- | -- | -- |
+| `tickets health`, warm | 4,615 ms | 81 ms |
+| `tickets queued`, warm | 7,398 ms | 84 ms |
+| 20 `tickets health` at once, warm | 31.6 s | 107 ms |
+| the first call (no holder, nothing cached) | — | 2.6 s |
+| the first call after the holder exited (cache warm) | — | 380 ms |
+| `--no-hold`, cache warm | — | 382 ms |
+| 20 at once, no holder, nothing cached | — | 3.1 s |
+
+The 0.9 s that went before every call in 3.15.0 was a second `_info` probe,
+made anonymously on a connection of its own to check the name the first
+probe had already answered; a run now probes at most once.
+
 ## Code Generation
 
 Synapse emits a structured Intermediate Representation for building typed clients:
