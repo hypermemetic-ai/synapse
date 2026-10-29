@@ -170,7 +170,7 @@ main = hspec $ do
           `shouldBe` arr [String "{\"id\":\"a\",\"kind\":\"b\"}"]
 
       it "a list of untyped values is not split" $
-        one (listParam "items" (RefArray RefAny)) "a,b" `shouldBe` strs ["a,b"]
+        one (listParam "items" (RefArray RefJson)) "a,b" `shouldBe` strs ["a,b"]
 
       it "a list of lists is not split" $
         one (listParam "rows" (RefArray (RefArray (RefPrimitive "string" Nothing)))) "a,b"
@@ -345,7 +345,7 @@ methodWith params = MethodDef
   , mdDescription = Nothing
   , mdStreaming = False
   , mdParams = params
-  , mdReturns = RefAny
+  , mdReturns = RefJson
   , mdBidirType = Nothing
   , mdBidirResponseType = Nothing
   , mdBidirResponseSchema = Nothing
@@ -353,6 +353,8 @@ methodWith params = MethodDef
   , mdGrant = Nothing
   , mdTarget = Nothing
   , mdLongDescription = Nothing
+  , mdInjected = []
+  , mdInput = Nothing
   }
 
 -- | A reference to a type in 'listIR'
@@ -427,9 +429,9 @@ dashIR :: IR
 dashIR = emptyIR
   { irTypes = Map.fromList
       [ ("t.Identifier", TypeDef "Identifier" "t" Nothing (KindEnum "type"
-          [ VariantDef "by_name" Nothing [FieldDef "name" (RefPrimitive "string" Nothing) Nothing True Nothing]
-          , VariantDef "by_id" Nothing [FieldDef "id" (RefPrimitive "string" Nothing) Nothing True Nothing]
-          ]))
+          [ VariantDef "by_name" Nothing [FieldDef "name" (RefPrimitive "string" Nothing) Nothing True Nothing] Nothing
+          , VariantDef "by_id" Nothing [FieldDef "id" (RefPrimitive "string" Nothing) Nothing True Nothing] Nothing
+          ] Internal))
       , ("t.Options", TypeDef "Options" "t" Nothing (KindStruct
           [ FieldDef "verbose" (RefPrimitive "boolean" Nothing) Nothing False Nothing
           , FieldDef "label" (RefPrimitive "string" Nothing) Nothing False Nothing

@@ -1,0 +1,444 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "await_reply",
+     "hash": "await_reply0",
+     "name": "await_reply",
+     "returns": {
+      "$defs": {
+       "Anchor": {
+        "description": "Where a comment was left: the app page, the place on it, what was there\nin words, and the ticket the element belongs to (when it belongs to one).\n\n`route`, `path` and `label` are required and not blank; `excerpt` may be\nempty (an element with no text). Each is trimmed. They are `#[serde(default)]`\nso that one left out arrives as empty and is refused *in band*, naming\nit — not as a transport error before the method runs.",
+        "properties": {
+         "excerpt": {
+          "default": "",
+          "description": "What was there, in words: its text, e.g. `DEMAND-1` (may be empty).",
+          "type": "string"
+         },
+         "label": {
+          "default": "",
+          "description": "What was there, in words: the element's name, e.g. `Parent chip`.",
+          "type": "string"
+         },
+         "path": {
+          "default": "",
+          "description": "Where on the page: the element's path, e.g.\n`[data-tag=\"ticket DEMAND-1\"]`. `list { path }` matches a prefix of it.",
+          "type": "string"
+         },
+         "route": {
+          "default": "",
+          "description": "The app page, as its route: `#/ticket/DEMAND-2`, `#/waves/RETURNS`,\n`#/` (the board) — always beginning `#/`.",
+          "type": "string"
+         },
+         "ticket": {
+          "description": "The ticket the element belongs to, e.g. `DEMAND-2` — omitted when it\nbelongs to none. It must name a ticket; kept as that ticket's id.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "version": {
+          "description": "Set by the server, never by the caller: `ticket`'s `updated_unix`\nwhen the comment was added — so a reader can tell the ticket has\nchanged since (its body may no longer hold `path`). Omitted with no\n`ticket`; a value sent is replaced.",
+          "format": "int64",
+          "type": [
+           "integer",
+           "null"
+          ]
+         }
+        },
+        "type": "object"
+       },
+       "AnswerSource": {
+        "description": "INPUT-3: who made a change to an input (INPUT-1's language) — `app`, a\nviewer's click, which the host says on its `answer`; `api`, everything\nelse (synapse, an agent). The only \"who\" until CONTEXT adds identity.",
+        "oneOf": [
+         {
+          "enum": [
+           "app",
+           "api"
+          ],
+          "type": "string"
+         },
+         {
+          "const": "system",
+          "description": "MENGER-13: the store itself — an input withdrawn because its ticket\nwas canceled, or restored when it was not any more. Never a caller's\nto say: `inputs.answer` and `inputs.clear` refuse it.",
+          "type": "string"
+         }
+        ]
+       },
+       "Comment": {
+        "description": "One comment, as kept.",
+        "properties": {
+         "anchor": {
+          "$ref": "#/$defs/Anchor"
+         },
+         "at": {
+          "description": "When it was added, unix seconds.",
+          "format": "int64",
+          "type": "integer"
+         },
+         "author": {
+          "description": "Who left it: its name (ACCESS-19: signed by the caller — its\nprincipal when it has no name; `owner` on one kept before ACCESS-24,\nwhen login could be off).",
+          "type": "string"
+         },
+         "body": {
+          "description": "What it says (markdown, as written).",
+          "type": "string"
+         },
+         "id": {
+          "$ref": "#/$defs/CommentId",
+          "description": "Its id: 1, 2, … in the order comments were added, never reused."
+         },
+         "intent": {
+          "$ref": "#/$defs/CommentIntent",
+          "description": "APP-23: `changes` for a change request; omitted for a comment."
+         },
+         "principal": {
+          "description": "IDENTITY-21: the Plexus principal of who left it, when they were\nsigned in — `author` is only the name they go by.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "reply_to": {
+          "anyOf": [
+           {
+            "$ref": "#/$defs/CommentId"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "COMMENT-8: the comment this answers — always a thread's root (a\nreply to a reply is a reply to its root); omitted for a root."
+         },
+         "state": {
+          "$ref": "#/$defs/CommentState"
+         }
+        },
+        "required": [
+         "id",
+         "state",
+         "author",
+         "at",
+         "anchor",
+         "body"
+        ],
+        "type": "object"
+       },
+       "CommentId": {
+        "description": "COMMENT-2: a comment's number, from 1 in the order kept.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+       },
+       "CommentIntent": {
+        "description": "What a comment is: a comment, or a change request (any case)",
+        "enum": [
+         "comment",
+         "changes"
+        ],
+        "type": "string"
+       },
+       "CommentState": {
+        "description": "Where a comment stands (any case)",
+        "enum": [
+         "open",
+         "resolved"
+        ],
+        "type": "string"
+       },
+       "Ending": {
+        "description": "APP-24: how a ticket ended for an agent waiting on it.",
+        "enum": [
+         "canceled",
+         "deleted"
+        ],
+        "type": "string"
+       },
+       "InputValue": {
+        "description": "INPUT-3: an answer's value, typed by its input's kind — internally\ntagged, as [`Placement`] is: `{\"type\": \"choice\", \"option\": \"archive\"}`\n(one option's `value`), `{\"type\": \"multi\", \"options\": [\"a\", \"b\"]}` (a set\nof them — stored in the order the body declares them, each once; it may\nbe empty: none ticked), `{\"type\": \"text\", \"text\": \"…\"}` (a reply, not\nblank). Through synapse, a param's fields are dotted flags:\n`--value.type choice --value.option archive`.",
+        "oneOf": [
+         {
+          "properties": {
+           "option": {
+            "type": "string"
+           },
+           "type": {
+            "const": "choice",
+            "type": "string"
+           }
+          },
+          "required": [
+           "type",
+           "option"
+          ],
+          "type": "object"
+         },
+         {
+          "properties": {
+           "options": {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           "type": {
+            "const": "multi",
+            "type": "string"
+           }
+          },
+          "required": [
+           "type",
+           "options"
+          ],
+          "type": "object"
+         },
+         {
+          "properties": {
+           "text": {
+            "type": "string"
+           },
+           "type": {
+            "const": "text",
+            "type": "string"
+           }
+          },
+          "required": [
+           "type",
+           "text"
+          ],
+          "type": "object"
+         }
+        ]
+       },
+       "QueueAction": {
+        "description": "What one queue write did — a [`QueueRecord`]'s action.",
+        "oneOf": [
+         {
+          "const": "queued",
+          "description": "Put in the queue.",
+          "type": "string"
+         },
+         {
+          "const": "raised",
+          "description": "Queued again, at a higher urgency.",
+          "type": "string"
+         },
+         {
+          "const": "requeued",
+          "description": "Queued again at the same urgency or a lower one: the urgency kept,\nthe reason (and input) the new ones.",
+          "type": "string"
+         },
+         {
+          "const": "snoozed",
+          "description": "Snoozed until `until_unix`.",
+          "type": "string"
+         },
+         {
+          "const": "unqueued",
+          "description": "Taken out — the owner done with it, or the caller withdrawing it.",
+          "type": "string"
+         },
+         {
+          "const": "closed",
+          "description": "Taken out because its named input was closed.",
+          "type": "string"
+         },
+         {
+          "const": "changes_requested",
+          "description": "APP-23: handed back — the owner requested changes (the record names\nthe comment that says which).",
+          "type": "string"
+         },
+         {
+          "const": "archived",
+          "description": "ARCHIVE-2: taken out because the ticket was archived — an archived\nticket asks nothing.",
+          "type": "string"
+         }
+        ]
+       },
+       "Reply": {
+        "description": "APP-24: what answered an agent waiting on a ticket (`tickets.await_reply`)\n— the first response on it since the call's `since`.",
+        "oneOf": [
+         {
+          "description": "An input on the ticket was answered (with `input` named: that one):\nthe value, the rationale, from where (`app` — a reader's click — or\n`api`), when.",
+          "properties": {
+           "at_unix": {
+            "format": "int64",
+            "type": "integer"
+           },
+           "input": {
+            "type": "string"
+           },
+           "kind": {
+            "const": "answered",
+            "type": "string"
+           },
+           "rationale": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "source": {
+            "$ref": "#/$defs/AnswerSource"
+           },
+           "value": {
+            "$ref": "#/$defs/InputValue"
+           }
+          },
+          "required": [
+           "kind",
+           "input",
+           "value",
+           "source",
+           "at_unix"
+          ],
+          "type": "object"
+         },
+         {
+          "description": "APP-23: the owner requested changes — the comment that says which\n(intent `changes`); the ticket is out of the queue.",
+          "properties": {
+           "comment": {
+            "$ref": "#/$defs/Comment"
+           },
+           "kind": {
+            "const": "changes_requested",
+            "type": "string"
+           }
+          },
+          "required": [
+           "kind",
+           "comment"
+          ],
+          "type": "object"
+         },
+         {
+          "description": "Someone other than the caller commented on the ticket.",
+          "properties": {
+           "comment": {
+            "$ref": "#/$defs/Comment"
+           },
+           "kind": {
+            "const": "commented",
+            "type": "string"
+           }
+          },
+          "required": [
+           "kind",
+           "comment"
+          ],
+          "type": "object"
+         },
+         {
+          "description": "Someone other than the caller took the ticket out of the queue\n(`action`: `unqueued`, or `closed` — its named input was closed).",
+          "properties": {
+           "action": {
+            "$ref": "#/$defs/QueueAction"
+           },
+           "at_unix": {
+            "format": "int64",
+            "type": "integer"
+           },
+           "by": {
+            "type": "string"
+           },
+           "kind": {
+            "const": "unqueued",
+            "type": "string"
+           }
+          },
+          "required": [
+           "kind",
+           "action",
+           "by",
+           "at_unix"
+          ],
+          "type": "object"
+         },
+         {
+          "description": "The ticket was canceled or deleted (`how`): nothing more will come.",
+          "properties": {
+           "at_unix": {
+            "format": "int64",
+            "type": "integer"
+           },
+           "by": {
+            "type": "string"
+           },
+           "how": {
+            "$ref": "#/$defs/Ending"
+           },
+           "kind": {
+            "const": "ended",
+            "type": "string"
+           }
+          },
+          "required": [
+           "kind",
+           "how",
+           "by",
+           "at_unix"
+          ],
+          "type": "object"
+         },
+         {
+          "description": "ARCHIVE-2: the ticket was archived (by `by`, itself or with an\nancestor): it asks nothing any more.",
+          "properties": {
+           "at_unix": {
+            "format": "int64",
+            "type": "integer"
+           },
+           "by": {
+            "type": "string"
+           },
+           "kind": {
+            "const": "archived",
+            "type": "string"
+           }
+          },
+          "required": [
+           "kind",
+           "by",
+           "at_unix"
+          ],
+          "type": "object"
+         }
+        ]
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "reply": {
+          "$ref": "#/$defs/Reply"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "reply"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

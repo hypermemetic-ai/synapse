@@ -146,7 +146,7 @@ method name grp params = MethodSchema
   , methodRequestType = Nothing, methodResponseType = Nothing, methodDeprecation = Nothing
   , methodParamSchemas = Nothing, methodRole = MethodRoleRpc, methodLongDescription = Nothing
   , methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False
-  , methodGroup = grp, methodExamples = [] }
+  , methodGroup = grp, methodExamples = [], methodInput = Nothing }
 
 -- | Never hang a test: a call that waits forever fails it.
 within :: Int -> IO a -> IO a

@@ -1,0 +1,69 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "thing",
+     "hash": "thing0",
+     "name": "thing",
+     "returns": {
+      "$defs": {
+       "Thing": {
+        "properties": {
+         "bare": {
+          "type": "object"
+         },
+         "list": {
+          "type": "array"
+         },
+         "mixed": {
+          "type": [
+           "object",
+           "boolean"
+          ]
+         }
+        },
+        "required": [
+         "bare",
+         "list",
+         "mixed"
+        ],
+        "type": "object"
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "thing": {
+          "$ref": "#/$defs/Thing"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "thing"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

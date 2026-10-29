@@ -232,8 +232,8 @@ checkTypeRefResolves ir methodPath paramName = \case
   RefArray inner -> checkTypeRefResolves ir methodPath paramName inner
   RefOptional inner -> checkTypeRefResolves ir methodPath paramName inner
   RefPrimitive _ _ -> pure ()
-  RefAny -> pure ()
   RefUnknown -> pure ()  -- Unknown is valid (just means schema gap)
+  _ -> pure ()
 
 -- | Check that no RefNamed references are unresolved
 checkNoUnresolvedRefs :: IR -> TypeRef -> Bool
@@ -242,8 +242,8 @@ checkNoUnresolvedRefs ir = \case
   RefArray inner -> checkNoUnresolvedRefs ir inner
   RefOptional inner -> checkNoUnresolvedRefs ir inner
   RefPrimitive _ _ -> True
-  RefAny -> True
   RefUnknown -> True
+  _ -> True
 
 -- | Get list of unresolved RefNamed names
 getUnresolvedRefs :: IR -> TypeRef -> [Text]
@@ -256,5 +256,5 @@ getUnresolvedRefs ir = \case
   RefArray inner -> getUnresolvedRefs ir inner
   RefOptional inner -> getUnresolvedRefs ir inner
   RefPrimitive _ _ -> []
-  RefAny -> []
   RefUnknown -> []
+  _ -> []

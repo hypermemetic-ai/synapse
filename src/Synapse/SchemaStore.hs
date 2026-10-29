@@ -191,8 +191,15 @@ instance FromJSON Plan where
 planKey :: [Text] -> FilePath
 planKey segs = pathName segs <> ".json"
 
+-- | SYNAPSE-CC-8: a plan whose IR another synapse wrote (an older IR
+-- version: 3.16.0's 2.0) is not this one's; it is read as no plan, so the
+-- call asks the server and writes a plan of its own.
 readPlan :: Store -> [Text] -> IO (Maybe Plan)
-readPlan st segs = readJson (storeDir st </> "plans" </> planKey segs)
+readPlan st segs = do
+  plan <- readJson (storeDir st </> "plans" </> planKey segs)
+  pure $ case plan of
+    Just p | maybe False ((/= currentIrVersion) . irVersion) (plIR p) -> Nothing
+    other -> other
 
 writePlan :: Store -> [Text] -> Plan -> IO ()
 writePlan st segs = writeJson (storeDir st </> "plans" </> planKey segs)
@@ -214,14 +221,12 @@ planIR fullPath ir = ir
     more n = maybe [] (kindNames . tdKind) (Map.lookup n (irTypes ir))
     kindNames = \case
       KindStruct fs -> concatMap (names . fdType) fs
-      KindEnum _ vs -> concatMap (concatMap (names . fdType) . vdFields) vs
+      KindEnum _ vs _ -> concatMap (\v -> concatMap (names . fdType) (vdFields v) ++ maybe [] names (vdRef v)) vs
       KindAlias t -> names t
       _ -> []
     names = \case
       RefNamed qn -> [qualifiedNameFull qn, qnLocalName qn]
-      RefArray t -> names t
-      RefOptional t -> names t
-      _ -> []
+      t -> concatMap names (typeRefChildren t)
 
 -- ---------------------------------------------------------------------------
 -- Forgetting

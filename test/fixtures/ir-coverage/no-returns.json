@@ -1,0 +1,23 @@
+[
+ {
+  "path": [
+   "x"
+  ],
+  "schema": {
+   "description": "x (fixture)",
+   "hash": "x0",
+   "methods": [
+    {
+     "description": "the schema",
+     "hash": "s0",
+     "name": "schema",
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "x",
+   "version": "1.0.0"
+  }
+ }
+]

@@ -1,0 +1,63 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "get",
+     "hash": "g0",
+     "name": "get",
+     "params": {
+      "properties": {
+       "auth": {
+        "x-plexus-source": {
+         "from": "derived"
+        }
+       },
+       "ticket": {
+        "description": "The ticket",
+        "type": "string"
+       },
+       "user": {
+        "x-plexus-source": {
+         "from": "auth",
+         "resolver": "self.access.verify"
+        }
+       }
+      },
+      "required": [
+       "ticket"
+      ],
+      "type": "object"
+     },
+     "returns": {
+      "oneOf": [
+       {
+        "properties": {
+         "type": {
+          "const": "ok",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

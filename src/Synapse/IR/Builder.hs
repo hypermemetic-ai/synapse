@@ -4,33 +4,39 @@
 -- | IR Builder - walks schema tree and constructs the IR
 --
 -- Uses the existing schema walker with a custom algebra that:
--- 1. Extracts types from $defs in methodParams and methodReturns
--- 2. Deduplicates types by content hash (prefer parent namespace, then shortest)
+-- 1. Reads types from $defs in methodParams, methodReturns and methodInput
+--    — whole, or refused by name (SYNAPSE-CC-8: "Synapse.IR.Read")
+-- 2. Deduplicates types by content hash, placing each shared type in the
+--    namespace that refers to it most (SYNAPSE-CC-8)
 -- 3. Infers streaming from return type structure
--- 4. Builds method definitions with type references
+-- 4. Builds method definitions with type references; server-injected params
+--    go to 'mdInjected', never 'mdParams'
 module Synapse.IR.Builder
   ( -- * Building IR
     buildIR
+  , buildIRRaw
+  , finalizeIR
 
     -- * Extraction (for testing)
   , extractTypesFromSchema
   , extractMethodDef
+  , extractMethodDefR
   , schemaToTypeRef
   ) where
 
-import Control.Monad (forM)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value(..))
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
-import Data.List (minimumBy)
+import Data.List (minimumBy, nub, sortOn)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, mapMaybe, catMaybes)
+import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Ord (comparing)
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
-import qualified Data.Vector as V
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (formatTime, defaultTimeLocale)
 
@@ -40,6 +46,7 @@ import Synapse.Algebra.Walk (walkSchemaPar)
 import Synapse.Monad
 import Synapse.IR.Types hiding (QualifiedName(..), qualifiedNameFull)
 import Synapse.IR.Types (QualifiedName(..), qualifiedNameFull, synapseVersion)
+import Synapse.IR.Read
 import Plexus.Schema.Recursive (DeprecationInfo, ParamSchema(..), paramValues)
 
 -- ============================================================================
@@ -88,10 +95,25 @@ buildIR generatorInfoStrs path = do
         , gmIrVersion = irVersion emptyIR
         }
 
-  pure $ deduplicateTypes raw
+  pure $ finalizeIR raw
     { irBackend = backend
     , irMetadata = Just metadata
     }
+
+-- | The walk's IR before 'finalizeIR' (for the bench: its phases apart).
+buildIRRaw :: Path -> SynapseM IR
+buildIRRaw = walkSchemaPar irAlgebra
+
+-- | SYNAPSE-CC-8: the walk's IR made whole — shared types deduplicated and
+--   placed where they are referred to most, every ref that names no type
+--   turned to 'RefUnknown' (and refused, unless the type it names was), the
+--   refusals deduplicated and sorted by site.
+finalizeIR :: IR -> IR
+finalizeIR raw =
+  let placed = deduplicateTypes raw
+      refusedTypes = Set.fromList (map rfSite (irRefusals placed))
+      (fixed, dangling) = unknownWhereUnnamed refusedTypes placed
+  in fixed { irRefusals = sortOn rfSite (nub (irRefusals placed ++ dangling)) }
 
 -- | Algebra for building IR from schema tree
 --
@@ -107,7 +129,7 @@ irAlgebra (PluginF schema path childIRs) = do
       pathPrefix = namespace  -- Same as namespace
 
   -- Extract types and methods from this plugin
-  let (localTypes, localMethods) = extractFromPlugin namespace pathPrefix schema
+  let (localTypes, localMethods, localRefusals) = extractFromPlugin namespace pathPrefix schema
 
   -- Merge with children
   let childIR = foldr mergeIR emptyIR childIRs
@@ -146,12 +168,13 @@ irAlgebra (PluginF schema path childIRs) = do
     , irPluginRoles = case (psRoles schema, irPluginRoles childIR) of
         (Nothing, childRoles) -> childRoles
         (Just roles, childRoles) -> Just (Map.insert namespace roles (fromMaybe Map.empty childRoles))
+    , irRefusals = localRefusals <> irRefusals childIR
     }
 
 irAlgebra (MethodF method namespace path) = do
   -- Single method node (shouldn't happen in normal walk, but handle it)
   let fullPath = T.intercalate "." path
-  let (types, mdef) = extractMethodDef namespace fullPath method
+  let ((types, mdef), refusals) = extractMethodDefR namespace fullPath method
   pure $ IR
     { irVersion = irVersion emptyIR  -- Use version from emptyIR
     , irBackend = irBackend emptyIR  -- Will be set by buildIR
@@ -163,10 +186,11 @@ irAlgebra (MethodF method namespace path) = do
     , irPluginHashes = Nothing  -- Methods don't have plugin-level hashes
     , irPluginRequests = Nothing  -- Methods don't carry request schemas
     , irPluginRoles = Nothing  -- Methods don't carry roles
+    , irRefusals = refusals
     }
 
 -- ============================================================================
--- Type Deduplication
+-- Type Deduplication and Placement
 -- ============================================================================
 
 -- | Deduplicate types by content hash
@@ -177,7 +201,7 @@ irAlgebra (MethodF method namespace path) = do
 -- Strategy:
 -- 1. Hash each TypeDef by its structure (name + kind, ignoring namespace)
 -- 2. Group duplicates
--- 3. Pick canonical: prefer parent namespace, then shortest namespace
+-- 3. Pick canonical: the namespace that refers to it most (SYNAPSE-CC-8)
 -- 4. Update all RefNamed references to point to canonical qualified name
 deduplicateTypes :: IR -> IR
 deduplicateTypes ir =
@@ -187,26 +211,27 @@ deduplicateTypes ir =
         | (fullName, td) <- Map.toList (irTypes ir)
         ]
 
+      -- only types with copies in several namespaces need their references counted
+      contested = Set.fromList
+        [ (tdNamespace td, tdName td) | group <- Map.elems typesByHash, length group > 1, (_, td) <- group ]
+      counts = refCounts contested ir
+
       -- Pick canonical version for each group
-      canonical = Map.fromList
-        [ (hash, selectCanonical group)
-        | (hash, group) <- Map.toList typesByHash
-        ]
+      canonical = Map.map (selectCanonical counts) typesByHash
 
       -- Build redirect map: old qualified name -> canonical qualified name
       redirects = Map.fromList
         [ (oldName, canonicalName)
-        | group <- Map.elems typesByHash
-        , let canonicalName = fst (selectCanonical group)
+        | (hash, group) <- Map.toList typesByHash
+        , let canonicalName = fst (canonical Map.! hash)
         , (oldName, _) <- group
         , oldName /= canonicalName
         ]
 
       -- Keep only canonical types and update their internal type references
-      canonicalPairs = [canon | canon <- Map.elems canonical]
       dedupedTypesWithUpdatedRefs = Map.fromList
         [ (qualName, updateTypeDefRefs redirects td)
-        | (qualName, td) <- canonicalPairs
+        | (qualName, td) <- Map.elems canonical
         ]
 
       -- Update all method references
@@ -221,49 +246,59 @@ hashTypeStructure :: TypeDef -> Text
 hashTypeStructure TypeDef{..} =
   tdName <> "::" <> T.pack (show (normalizeTypeKind tdKind))
   where
-    -- Normalize a TypeKind by stripping namespaces from all RefNamed types
-    normalizeTypeKind :: TypeKind -> TypeKind
-    normalizeTypeKind = \case
-      KindStruct fields -> KindStruct (map normalizeField fields)
-      KindEnum disc variants -> KindEnum disc (map normalizeVariant variants)
-      KindStringEnum vals -> KindStringEnum vals
-      KindAlias target -> KindAlias (normalizeTypeRef target)
-      KindPrimitive t f -> KindPrimitive t f
-
-    normalizeField :: FieldDef -> FieldDef
-    normalizeField fd = fd { fdType = normalizeTypeRef (fdType fd) }
-
-    normalizeVariant :: VariantDef -> VariantDef
-    normalizeVariant vd = vd { vdFields = map normalizeField (vdFields vd) }
-
-    normalizeTypeRef :: TypeRef -> TypeRef
-    normalizeTypeRef = \case
-      RefNamed qn ->
-        -- Strip namespace: keep only local name
-        RefNamed qn { qnNamespace = "" }
-      RefArray inner -> RefArray (normalizeTypeRef inner)
-      RefOptional inner -> RefOptional (normalizeTypeRef inner)
+    normalizeTypeKind = mapKindRefs normalizeTypeRef
+    normalizeTypeRef = mapRef $ \case
+      RefNamed qn -> RefNamed qn { qnNamespace = "" }
       other -> other
 
+-- | SYNAPSE-CC-8: how often each type is named, by full name — in every
+--   method's params, returns, input and bidirectional type, and every type's
+--   fields, before deduplication. A namespace names only its own copy, so a
+--   copy's count is how much its namespace refers to it.
+refCounts :: Set.Set (Text, Text) -> IR -> Map (Text, Text) Int
+refCounts contested ir
+  | Set.null contested = Map.empty
+  | otherwise = Map.fromListWith (+) [ (n, 1 :: Int) | n <- names, Set.member n contested ]
+  where
+    names = concatMap methodNames (Map.elems (irMethods ir))
+         ++ concatMap (kindNames . tdKind) (Map.elems (irTypes ir))
+    methodNames md = concatMap refKeys
+      (map pdType (mdParams md) ++ [mdReturns md] ++ maybe [] pure (mdInput md) ++ maybe [] pure (mdBidirType md))
+    kindNames = \case
+      KindStruct fs -> concatMap (refKeys . fdType) fs
+      KindEnum _ vs _ -> concatMap (\v -> concatMap (refKeys . fdType) (vdFields v) ++ maybe [] refKeys (vdRef v)) vs
+      KindAlias t -> refKeys t
+      KindStringEnum _ -> []
+      KindPrimitive _ _ -> []
+    refKeys = \case
+      RefNamed qn -> [(qnNamespace qn, qnLocalName qn)]
+      t -> concatMap refKeys (typeRefChildren t)
+
+-- | A name as 'irTypes' keys it (the root's types are @.Name@).
+qualifiedNameFull' :: QualifiedName -> Text
+qualifiedNameFull' qn = qnNamespace qn <> "." <> qnLocalName qn
+
 -- | Select the canonical version from a group of duplicate types
--- Strategy: prefer parent namespace, then shortest namespace
-selectCanonical :: [(Text, TypeDef)] -> (Text, TypeDef)
-selectCanonical dups =
+-- (SYNAPSE-CC-8): the copy in the namespace that refers to it most. A tie
+-- goes to the namespace that is an ancestor of every other tied one, then
+-- the shortest name, then alphabetical order. The protocol root @""@ is
+-- never chosen when a generated namespace has a copy.
+selectCanonical :: Map (Text, Text) Int -> [(Text, TypeDef)] -> (Text, TypeDef)
+selectCanonical counts dups =
   case dups of
     [] -> error "selectCanonical: empty list"
     [single] -> single
-    multiple -> minimumBy compareNamespacePreference multiple
-  where
-    -- Compare two (fullName, typedef) pairs
-    compareNamespacePreference (_, td1) (_, td2) =
-      let ns1 = tdNamespace td1
-          ns2 = tdNamespace td2
-          -- Check if one is parent of the other
-          isParent n1 n2 = n2 `T.isPrefixOf` n1 && T.length n1 > T.length n2
-      in case (isParent ns1 ns2, isParent ns2 ns1) of
-           (True, False) -> GT  -- ns2 is parent of ns1, prefer ns2
-           (False, True) -> LT  -- ns1 is parent of ns2, prefer ns1
-           _ -> compare (T.length ns1) (T.length ns2)  -- Fallback: shortest wins
+    multiple ->
+      let generated = filter ((/= "") . tdNamespace . snd) multiple
+          candidates = if null generated then multiple else generated
+          countOf (_, td) = Map.findWithDefault 0 (tdNamespace td, tdName td) counts
+          best = maximum (map countOf candidates)
+          tied = filter ((== best) . countOf) candidates
+          nsOf = tdNamespace . snd
+          ancestorOfAll c = all (\o -> nsOf o == nsOf c || (nsOf c <> ".") `T.isPrefixOf` nsOf o) tied
+      in case filter ancestorOfAll tied of
+           (c : _) -> c
+           [] -> minimumBy (comparing (\c -> (T.length (nsOf c), nsOf c))) tied
 
 -- | Parse a qualified name from a full name string (e.g., "cone.UUID" -> QualifiedName "cone" "UUID")
 parseQualifiedName :: Text -> Maybe QualifiedName
@@ -282,9 +317,8 @@ updateMethodRefs redirects md = md
   { mdParams = map (updateParamRefs redirects) (mdParams md)
   , mdReturns = updateTypeRef redirects (mdReturns md)
   , mdBidirType = fmap (updateTypeRef redirects) (mdBidirType md)
-  , mdBidirResponseType = mdBidirResponseType md  -- Preserve as-is
-  , mdBidirResponseSchema = mdBidirResponseSchema md  -- Preserve as-is
-  -- mdRole: left unchanged via record-update syntax
+  , mdInput = fmap (updateTypeRef redirects) (mdInput md)
+  -- mdRole, mdBidirResponse*: left unchanged via record-update syntax
   }
 
 -- | Update type references in a parameter
@@ -295,41 +329,94 @@ updateParamRefs redirects pd = pd
 
 -- | Recursively update a TypeRef to use canonical names
 updateTypeRef :: Map Text Text -> TypeRef -> TypeRef
-updateTypeRef redirects = \case
+updateTypeRef redirects = mapRef $ \case
   RefNamed qn ->
-    let fullName = qualifiedNameFull qn
+    let fullName = qualifiedNameFull' qn
         canonicalName = Map.findWithDefault fullName fullName redirects
     in case parseQualifiedName canonicalName of
          Just qn' -> RefNamed qn'
          Nothing -> RefNamed qn  -- Fallback if parse fails
-  RefArray inner ->
-    RefArray (updateTypeRef redirects inner)
-  RefOptional inner ->
-    RefOptional (updateTypeRef redirects inner)
   other -> other
 
 -- | Update all type references in a TypeDef
 updateTypeDefRefs :: Map Text Text -> TypeDef -> TypeDef
-updateTypeDefRefs redirects td = td { tdKind = updateTypeKind (tdKind td) }
+updateTypeDefRefs redirects td = td { tdKind = mapKindRefs (updateTypeRef redirects) (tdKind td) }
+
+-- | Apply a function to every ref, bottom up.
+mapRef :: (TypeRef -> TypeRef) -> TypeRef -> TypeRef
+mapRef f = go
   where
-    updateTypeKind :: TypeKind -> TypeKind
-    updateTypeKind = \case
-      KindStruct fields ->
-        KindStruct (map updateField fields)
-      KindEnum disc variants ->
-        KindEnum disc (map updateVariant variants)
-      KindAlias target ->
-        KindAlias (updateTypeRef redirects target)
-      KindStringEnum vals ->
-        KindStringEnum vals
-      KindPrimitive t f ->
-        KindPrimitive t f
+    go = \case
+      RefArray t -> f (RefArray (go t))
+      RefOptional t -> f (RefOptional (go t))
+      RefMap t -> f (RefMap (go t))
+      RefTuple ts -> f (RefTuple (map go ts))
+      RefRefined t r -> f (RefRefined (go t) r)
+      other -> f other
 
-    updateField :: FieldDef -> FieldDef
-    updateField fd = fd { fdType = updateTypeRef redirects (fdType fd) }
+-- | Apply a ref transformation to every ref a kind holds.
+mapKindRefs :: (TypeRef -> TypeRef) -> TypeKind -> TypeKind
+mapKindRefs g = \case
+  KindStruct fields -> KindStruct (map field fields)
+  KindEnum disc variants repr -> KindEnum disc (map variant variants) repr
+  KindAlias target -> KindAlias (g target)
+  KindStringEnum vals -> KindStringEnum vals
+  KindPrimitive t f -> KindPrimitive t f
+  where
+    field fd = fd { fdType = g (fdType fd) }
+    variant vd = vd { vdFields = map field (vdFields vd), vdRef = fmap g (vdRef vd) }
 
-    updateVariant :: VariantDef -> VariantDef
-    updateVariant vd = vd { vdFields = map updateField (vdFields vd) }
+-- ============================================================================
+-- Refs that name no type
+-- ============================================================================
+
+-- | SYNAPSE-CC-8: every 'RefNamed' that names no type becomes 'RefUnknown'.
+--   One that names a type the reader refused needs nothing more (the type's
+--   refusal names it); any other is refused at its own site.
+unknownWhereUnnamed :: Set.Set Text -> IR -> (IR, [Refusal])
+unknownWhereUnnamed refused ir =
+  let known = Map.keysSet (irTypes ir)
+      fix site t = case t of
+        RefNamed qn
+          | Set.member (qualifiedNameFull' qn) known -> (t, [])
+          | Set.member (qualifiedNameFull' qn) refused -> (RefUnknown, [])
+          | otherwise -> (RefUnknown, [Refusal site "$ref" Nothing ("names " <> qualifiedNameFull' qn <> ", which no $defs defines")])
+        RefArray i -> let (i', rs) = fix (site <> "[]") i in (RefArray i', rs)
+        RefOptional i -> let (i', rs) = fix (site <> "?") i in (RefOptional i', rs)
+        RefMap i -> let (i', rs) = fix (site <> "{}") i in (RefMap i', rs)
+        RefRefined i r -> let (i', rs) = fix site i in (RefRefined i' r, rs)
+        RefTuple ts ->
+          let rs' = zipWith (\n x -> fix (site <> "." <> T.pack (show n)) x) [0 :: Int ..] ts
+          in (RefTuple (map fst rs'), concatMap snd rs')
+        _ -> (t, [])
+      fixField site fd = let (t, rs) = fix (site <> "." <> fdName fd) (fdType fd) in (fd { fdType = t }, rs)
+      fixKind site = \case
+        KindStruct fs -> let r = map (fixField site) fs in (KindStruct (map fst r), concatMap snd r)
+        KindEnum d vs repr ->
+          let fixV v =
+                let vsite = site <> "." <> vdName v
+                    fr = map (fixField vsite) (vdFields v)
+                    (ref', rr) = case vdRef v of
+                      Nothing -> (Nothing, [])
+                      Just x -> let (x', rs) = fix vsite x in (Just x', rs)
+                in (v { vdFields = map fst fr, vdRef = ref' }, concatMap snd fr ++ rr)
+              r = map fixV vs
+          in (KindEnum d (map fst r) repr, concatMap snd r)
+        KindAlias t -> let (t', rs) = fix site t in (KindAlias t', rs)
+        k -> (k, [])
+      fixType name td = let (k, rs) = fixKind name (tdKind td) in (td { tdKind = k }, rs)
+      fixMethod md =
+        let path = mdFullPath md
+            ps = [ let (t, rs) = fix (siteParam path (pdName p)) (pdType p) in (p { pdType = t }, rs) | p <- mdParams md ]
+            (ret, rr) = fix (siteReturns path) (mdReturns md)
+            (inp, ri) = case mdInput md of
+              Nothing -> (Nothing, [])
+              Just x -> let (x', rs) = fix (siteInput path) x in (Just x', rs)
+        in (md { mdParams = map fst ps, mdReturns = ret, mdInput = inp }, concatMap snd ps ++ rr ++ ri)
+      types' = Map.mapWithKey fixType (irTypes ir)
+      methods' = Map.map fixMethod (irMethods ir)
+  in ( ir { irTypes = Map.map fst types', irMethods = Map.map fst methods' }
+     , concatMap snd (Map.elems types') ++ concatMap snd (Map.elems methods') )
 
 -- ============================================================================
 -- Extraction from Plugin
@@ -337,58 +424,67 @@ updateTypeDefRefs redirects td = td { tdKind = updateTypeKind (tdKind td) }
 
 -- | Extract all types and methods from a plugin schema
 -- Types are namespace-qualified to avoid collisions (e.g., "cone.ListResult")
-extractFromPlugin :: Text -> Text -> PluginSchema -> (Map Text TypeDef, Map Text MethodDef)
+extractFromPlugin :: Text -> Text -> PluginSchema -> (Map Text TypeDef, Map Text MethodDef, [Refusal])
 extractFromPlugin namespace pathPrefix schema =
-  let methods = psMethods schema
-      results = map (extractMethodDef namespace pathPrefix) methods
-      allTypes = Map.unions (map fst results)
-      allMethods = Map.fromList
-        [ (mdFullPath m, m)
-        | (_, m) <- results
-        ]
-  in (allTypes, allMethods)
+  let -- every method's documents share one namespace's $defs: read once
+      docs = [ o | m <- psMethods schema, Just (Object o) <- [methodParams m, methodReturns m, methodInput m] ]
+      shared = sharedDoc namespace docs
+      ((defs, results), refusals) = runRead $ do
+        ds <- readDefs shared
+        rs <- traverse (methodDefRead (Just shared) namespace pathPrefix) (psMethods schema)
+        pure (ds, rs)
+      allTypes = Map.unions (defs : map fst results)
+      allMethods = Map.fromList [ (mdFullPath m, m) | (_, m) <- results ]
+  in (allTypes, allMethods, refusals)
 
--- | Extract types and method def from a single method
+-- | Extract types and method def from a single method (its refusals dropped:
+--   'extractMethodDefR' keeps them).
 extractMethodDef :: Text -> Text -> MethodSchema -> (Map Text TypeDef, MethodDef)
-extractMethodDef namespace pathPrefix method =
+extractMethodDef namespace pathPrefix = fst . extractMethodDefR namespace pathPrefix
+
+-- | Extract types and method def from a single method, and every site the
+--   reader refused on the way.
+extractMethodDefR :: Text -> Text -> MethodSchema -> ((Map Text TypeDef, MethodDef), [Refusal])
+extractMethodDefR = extractMethodDefIn Nothing
+
+-- | 'extractMethodDefR', its $defs read from a namespace's shared document
+--   when one is given (and so not read here), else from its own documents.
+extractMethodDefIn :: Maybe Doc -> Text -> Text -> MethodSchema -> ((Map Text TypeDef, MethodDef), [Refusal])
+extractMethodDefIn shared namespace pathPrefix = runRead . methodDefRead shared namespace pathPrefix
+
+methodDefRead :: Maybe Doc -> Text -> Text -> MethodSchema -> SchemaRead (Map Text TypeDef, MethodDef)
+methodDefRead shared namespace pathPrefix method = do
   let name = methodName method
       fullPath = if T.null pathPrefix
                  then namespace <> "." <> name
                  else pathPrefix <> "." <> name
 
-      -- Extract types from params (namespace-qualified).
-      -- Also pass methodParamSchemas so per-param deprecation info
-      -- (IR-14) flows from ParamSchema.paramDeprecation onto the IR
-      -- ParamDef.pdDeprecation.
-      (paramTypes, params) =
-        extractParams namespace (methodParams method) (methodParamSchemas method)
+  -- Params: what a client sends, and what the server injects (SYNAPSE-CC-8).
+  -- Per-param deprecation (IR-14) flows from methodParamSchemas.
+  (paramTypes, params, injected) <-
+    readParams shared namespace fullPath (methodParams method) (methodParamSchemas method)
 
-      -- Extract types from returns (namespace-qualified)
-      (returnTypes, returnRef, streaming) = extractReturns namespace name (methodReturns method)
+  -- Returns: a child's is its client (SYNAPSE-CC-8's RefChild); an rpc
+  -- method's is read whole, and its absence is refused.
+  RootRead returnTypes returnRef streaming <- case methodRole method of
+    MethodRoleRpc -> case methodReturns method of
+      Just v -> readRoot shared namespace (siteReturns fullPath) (name <> "Result") v
+      Nothing -> do
+        refuse (siteReturns fullPath) "returns" Nothing "an rpc method with no returns schema"
+        pure (RootRead Map.empty RefUnknown False)
+    _child -> do
+      defs <- case (shared, methodReturns method) of
+        (Nothing, Just (Object o)) -> readDefs (docOf namespace o)
+        _ -> pure Map.empty
+      pure (RootRead defs (RefChild fullPath) False)
 
-      -- Combine all types
-      allTypes = Map.union paramTypes returnTypes
+  -- Input: reserved for BIDIR-6; read when a server says it.
+  inputRead <- traverse (readRoot shared namespace (siteInput fullPath) (name <> "Input")) (methodInput method)
 
-      -- Detect bidirectional type parameter T.
-      --
-      -- When the schema reports bidirectional: true we know the method uses a
-      -- BidirChannel.  The 'request_type' field (if present) holds the JSON
-      -- Schema for T.  We currently emit:
-      --   - Nothing           → not bidirectional
-      --   - Just RefAny       → bidirectional with T=Value (StandardBidirChannel,
-      --                         the default case; request_type is the StandardRequest schema)
-      --   - Just (RefNamed …) → bidirectional with a specific named T
-      --                         (future: when request_type references a named type)
-      --
-      -- NOTE: The substrate schema as of this implementation always uses
-      -- StandardBidirChannel (T=Value), so mdBidirType is always Nothing or
-      -- Just RefAny.  A future change to MethodSchema / hub-macro that emits a
-      -- structured "bidir_type" field (distinct from the full request_type schema)
-      -- should be handled here.
-      bidirTypeRef = inferBidirType method
-      bidirResponseSchema = methodResponseType method
-
-      mdef = MethodDef
+  let allTypes = Map.unions [paramTypes, returnTypes, maybe Map.empty rrTypes inputRead]
+  pure
+    ( allTypes
+    , MethodDef
         { mdName = name
         , mdFullPath = fullPath
         , mdNamespace = namespace
@@ -396,91 +492,58 @@ extractMethodDef namespace pathPrefix method =
         , mdStreaming = streaming
         , mdParams = params
         , mdReturns = returnRef
-        , mdBidirType = bidirTypeRef
+        , mdBidirType = inferBidirType method
         , mdBidirResponseType = Nothing  -- TODO: could extract from response_type title
-        , mdBidirResponseSchema = bidirResponseSchema
+        , mdBidirResponseSchema = methodResponseType method
         , mdRole = methodRole method
           -- IR-12: lift MethodSchema.role onto the IR so hub-codegen's
-          -- typed-handle codegen (IR-9) sees DynamicChild/StaticChild
-          -- tags. plexus-protocol defaults this to MethodRoleRpc when
-          -- the upstream schema omits the field, so pre-IR servers
-          -- continue to work with no change in behaviour.
+          -- typed-handle codegen (IR-9) sees DynamicChild/StaticChild tags.
         , mdGrant = methodGrant method
         , mdTarget = methodTarget method
         , mdLongDescription = methodLongDescription method
           -- AUTH-9: what the method requires and its doc comment, lifted
           -- for hub-codegen; Nothing from a pre-AUTH schema.
+        , mdInjected = injected
+        , mdInput = rrRef <$> inputRead
         }
-  in (allTypes, mdef)
+    )
 
 -- | Infer the bidirectional type parameter from a MethodSchema.
 --
 -- Returns:
 --   Nothing    – method is not bidirectional
---   Just RefAny – method is bidirectional with default T=Value (StandardBidirChannel)
---   Just tr    – method is bidirectional with specific T type (future)
+--   Just RefJson – method is bidirectional with default T=Value (StandardBidirChannel)
+--
+-- TODO: When the activation macro emits a structured "bidir_type", read it here.
 inferBidirType :: MethodSchema -> Maybe TypeRef
 inferBidirType method
   | not (methodBidirectional method) = Nothing
-  -- Method is bidirectional.  Inspect request_type to determine T.
-  | otherwise = case methodRequestType method of
-      Nothing ->
-        -- bidirectional: true but no request_type schema → treat as T=Value
-        Just RefAny
-      Just _ ->
-        -- request_type is present.  For now we always emit RefAny (T=Value)
-        -- because the schema emits the full StandardRequest schema rather than
-        -- a dedicated "bidir_type" field identifying T.
-        --
-        -- TODO: When the hub-macro is extended to emit a structured
-        -- "bidir_type": { "$ref": "#/$defs/MyType" } field in the schema JSON,
-        -- parse it here with schemaToTypeRef and return the resulting TypeRef.
-        Just RefAny
+  | otherwise = Just RefJson  -- StandardBidirChannel's T = serde_json::Value
 
 -- ============================================================================
 -- Parameter Extraction
 -- ============================================================================
 
--- | Extract types and param defs from method params schema.
---
--- The third argument carries optional per-parameter metadata
--- ('ParamSchema') emitted by IR-5 producers. When present, each entry's
--- 'paramDeprecation' is lifted onto the resulting 'ParamDef.pdDeprecation'
--- by matching parameter name. Absent entries (pre-IR-5 producers, or
--- non-deprecated params) leave 'pdDeprecation' as 'Nothing'.
--- Types are namespace-qualified to avoid collisions.
-extractParams
-  :: Text
+-- | The params schema read: its types, the params a client sends, and the
+--   params the server injects (@x-plexus-source@ other than rpc — they are
+--   not read as types: the server supplies them).
+readParams
+  :: Maybe Doc
+  -> Text
+  -> Text
   -> Maybe Value
   -> Maybe [ParamSchema]
-  -> (Map Text TypeDef, [ParamDef])
-extractParams _ Nothing _ = (Map.empty, [])
-extractParams namespace (Just val) paramSchemas = case val of
-  Object o -> extractParamsFromObject namespace o paramSchemas
-  _ -> (Map.empty, [])
-
-extractParamsFromObject
-  :: Text
-  -> KM.KeyMap Value
-  -> Maybe [ParamSchema]
-  -> (Map Text TypeDef, [ParamDef])
-extractParamsFromObject namespace o paramSchemas =
-  let -- Extract $defs (namespace-qualified)
-      defs = extractDefs namespace o
-
-      -- Extract properties
+  -> SchemaRead (Map Text TypeDef, [ParamDef], [InjectedParam])
+readParams shared namespace fullPath (Just (Object o)) paramSchemas = do
+  let doc = maybe (docOf namespace o) id shared
       props = case KM.lookup "properties" o of
         Just (Object p) -> KM.toList p
         _ -> []
-
-      -- Get required list
       required = case KM.lookup "required" o of
-        Just (Array arr) -> [t | String t <- V.toList arr]
+        Just (Array arr) -> [t | String t <- foldr (:) [] arr]
         _ -> []
 
-      -- Look up per-parameter deprecation by name from the structured
-      -- ParamSchema list (IR-5). 'Nothing' when either the list is absent
-      -- or the named parameter isn't in it.
+      -- IR-14: per-parameter deprecation by name from the structured list.
       lookupDeprecation :: Text -> Maybe DeprecationInfo
       lookupDeprecation pname = case paramSchemas of
         Nothing -> Nothing
@@ -488,311 +551,61 @@ extractParamsFromObject namespace o paramSchemas =
           (ps:_) -> paramDeprecation ps
           []     -> Nothing
 
-      -- REQ-6/REQ-9: extract @x-plexus-source@ from each property's schema.
-      -- Carries where the param value comes from (auth, cookie, header,
-      -- query, derived, rpc) so downstream renderers and codegen can
-      -- emit per-param annotations. Nothing means the schema had no
-      -- extension — treated as RPC.
-      extractSource :: Value -> Maybe Value
-      extractSource propSchema = case propSchema of
-        Object po -> KM.lookup "x-plexus-source" po
-        _         -> Nothing
-
-      -- Build param defs
-      params =
-        [ ParamDef
-            { pdName = K.toText k
-            , pdType = schemaToTypeRef namespace v
-            , pdDescription = extractDescription v
-            , pdRequired = K.toText k `elem` required
-            , pdDefault = extractDefault v
-            , pdDeprecation = lookupDeprecation (K.toText k)
-            , pdSource = extractSource v
-            , pdValues = paramValues v
-            }
-        | (k, v) <- props
-        ]
-  in (defs, params)
-
--- ============================================================================
--- Return Type Extraction
--- ============================================================================
-
--- | Extract types, return ref, and streaming flag from returns schema
-extractReturns :: Text -> Text -> Maybe Value -> (Map Text TypeDef, TypeRef, Bool)
-extractReturns _ _ Nothing = (Map.empty, RefUnknown, False)
-extractReturns namespace methodName (Just val) = case val of
-  Object o ->
-    let -- Extract $defs
-        defs = extractDefs namespace o
-
-        -- Get the type name from title or generate from method name
-        typeName = case KM.lookup "title" o of
-          Just (String t) -> t
-          _ -> methodName <> "Result"
-
-        -- Check for oneOf (discriminated union)
-        (typeDef, streaming) = case KM.lookup "oneOf" o of
-          Just (Array variants) ->
-            let variantDefs = mapMaybe (extractVariant namespace) (V.toList variants)
-                discriminator = inferDiscriminator variantDefs
-                nonErrorVariants = filter (\v -> vdName v /= "error") variantDefs
-                isStream = length nonErrorVariants > 1
-            in ( Just $ TypeDef
-                   { tdName = typeName
-                   , tdNamespace = namespace
-                   , tdDescription = extractDescription val
-                   , tdKind = KindEnum discriminator variantDefs
-                   }
-               , isStream
-               )
-          _ ->
-            -- Not a union, just a regular type
-            (Nothing, False)
-
-        -- Add the return type to defs if it's a union
-        allDefs = case typeDef of
-          Just td -> Map.insert (tdFullName td) td defs
-          Nothing -> defs
-
-        -- Return type reference uses QualifiedName
-        typeRef = RefNamed QualifiedName
-          { qnNamespace = namespace
-          , qnLocalName = typeName
-          }
-
-    in (allDefs, typeRef, streaming)
-  _ -> (Map.empty, RefUnknown, False)
-
--- | Extract a variant from a oneOf element
-extractVariant :: Text -> Value -> Maybe VariantDef
-extractVariant namespace (Object o) = case KM.lookup "properties" o of
-  Just (Object props) ->
-    -- Find the discriminator value (look for "type" with const)
-    let discriminatorValue = case KM.lookup "type" props of
-          Just (Object typeObj) -> case KM.lookup "const" typeObj of
-            Just (String s) -> Just s
-            _ -> Nothing
-          _ -> Nothing
-
-        -- Extract fields (excluding the discriminator)
-        fields =
-          [ FieldDef
-              { fdName = K.toText k
-              , fdType = schemaToTypeRef namespace v
-              , fdDescription = extractDescription v
-              , fdRequired = True  -- In variants, fields are typically required
-              , fdDefault = Nothing
-              }
-          | (k, v) <- KM.toList props
-          , K.toText k /= "type"  -- Exclude discriminator
-          ]
-    in case discriminatorValue of
-         Just dv -> Just $ VariantDef
-           { vdName = dv
-           , vdDescription = extractDescription (Object o)
-           , vdFields = fields
-           }
-         Nothing -> Nothing
-  _ -> Nothing
-extractVariant _ _ = Nothing
-
--- | Infer the discriminator field name from variants
-inferDiscriminator :: [VariantDef] -> Text
-inferDiscriminator _ = "type"  -- Convention: always "type"
-
--- | Extract const value from a simple string variant
--- Matches schema like: { "const": "pending", "type": "string", "description": "..." }
-extractStringConst :: Value -> Maybe Text
-extractStringConst (Object o) =
-  case (KM.lookup "const" o, KM.lookup "type" o) of
-    (Just (String c), Just (String "string")) -> Just c
-    _ -> Nothing
-extractStringConst _ = Nothing
-
--- ============================================================================
--- Type Extraction from $defs
--- ============================================================================
-
--- | Extract type definitions from $defs or definitions (draft-07 compatibility)
--- Types are namespace-qualified to avoid collisions
-extractDefs :: Text -> KM.KeyMap Value -> Map Text TypeDef
-extractDefs namespace o =
-  let defs = case KM.lookup "$defs" o of
-        Just (Object d) -> d
-        _ -> case KM.lookup "definitions" o of
-          Just (Object d) -> d
-          _ -> KM.empty
-  in Map.fromList $ mapMaybe (extractTypeDef namespace) (KM.toList defs)
-
--- | Extract a type definition from a $defs entry
-extractTypeDef :: Text -> (K.Key, Value) -> Maybe (Text, TypeDef)
-extractTypeDef namespace (k, v) = case v of
-  Object o ->
-    let name = K.toText k
-        desc = extractDescription v
-        kind = inferTypeKind namespace o
-        td = TypeDef name namespace desc kind
-    in Just (tdFullName td, td)
-  _ -> Nothing
-
--- | Infer the kind of a type from its JSON Schema
-inferTypeKind :: Text -> KM.KeyMap Value -> TypeKind
-inferTypeKind namespace o
-  -- Check for oneOf (enum)
-  | Just (Array variants) <- KM.lookup "oneOf" o =
-      -- First check if this is a simple string enum (all variants are {const: X, type: "string"})
-      let maybeStringValues = mapMaybe extractStringConst (V.toList variants)
-      in if length maybeStringValues == V.length variants && not (null maybeStringValues)
-         then KindStringEnum maybeStringValues
-         else let variantDefs = mapMaybe (extractVariant namespace) (V.toList variants)
-              in KindEnum "type" variantDefs
-
-  -- Check for enum (simple string enum)
-  | Just (Array values) <- KM.lookup "enum" o =
-      let stringValues = [ asText v | v <- V.toList values ]
-      in KindStringEnum stringValues
-
-  -- Check for object with properties (struct)
-  | Just (Object props) <- KM.lookup "properties" o =
-      let required = case KM.lookup "required" o of
-            Just (Array arr) -> [t | String t <- V.toList arr]
-            _ -> []
-          fields =
-            [ FieldDef
-                { fdName = K.toText k
-                , fdType = schemaToTypeRef namespace v
-                , fdDescription = extractDescription v
-                , fdRequired = K.toText k `elem` required
-                , fdDefault = extractDefault v
-                }
-            | (k, v) <- KM.toList props
-            ]
-      in KindStruct fields
-
-  -- Check for primitive types
-  | Just typeVal <- KM.lookup "type" o =
-      case typeVal of
-        String t -> KindPrimitive t (extractFormat o)
-        Array ts ->
-          -- Nullable type like ["string", "null"]
-          let nonNull = [t | String t <- V.toList ts, t /= "null"]
-          in case nonNull of
-               [t] -> KindPrimitive t (extractFormat o)
-               _ -> KindPrimitive "any" Nothing
-        _ -> KindPrimitive "any" Nothing
-
-  -- Default to unknown
-  | otherwise = KindPrimitive "any" Nothing
-
+  defs <- maybe (readDefs doc) (const (pure Map.empty)) shared
+  entries <- traverse (\(k, v) -> readParam doc (K.toText k) v) props
+  let params = [ p { pdRequired = pdName p `elem` required, pdDeprecation = lookupDeprecation (pdName p) } | Left p <- entries ]
+      injected = [ i | Right i <- entries ]
+  pure (defs, params, injected)
   where
-    asText (String s) = s
-    asText _ = "unknown"
+    readParam doc pname v = case sourceOf v of
+      Just src | injectedSource src -> pure $ Right InjectedParam
+        { ipName = pname, ipSource = src, ipDescription = descriptionOfValue v }
+      src -> do
+        t <- readType doc (siteParam fullPath pname) v
+        pure $ Left ParamDef
+          { pdName = pname
+          , pdType = t
+          , pdDescription = descriptionOfValue v
+          , pdRequired = False
+          , pdDefault = defaultOfValue v
+          , pdDeprecation = Nothing
+          , pdSource = src
+          , pdValues = paramValues v
+          }
+readParams _ _ _ _ _ = pure (Map.empty, [], [])
+
+-- | REQ-6/REQ-9: a param's @x-plexus-source@.
+sourceOf :: Value -> Maybe Value
+sourceOf (Object po) = KM.lookup "x-plexus-source" po
+sourceOf _ = Nothing
+
+-- | A source the server fills (as REQ-8's help reads it): an object whose
+--   @from@ is anything but @rpc@.
+injectedSource :: Value -> Bool
+injectedSource (Object src) = KM.lookup "from" src /= Just (String "rpc")
+injectedSource _ = False
+
+descriptionOfValue :: Value -> Maybe Text
+descriptionOfValue (Object o) = case KM.lookup "description" o of
+  Just (String s) -> Just s
+  _ -> Nothing
+descriptionOfValue _ = Nothing
+
+defaultOfValue :: Value -> Maybe Value
+defaultOfValue (Object o) = KM.lookup "default" o
+defaultOfValue _ = Nothing
 
 -- ============================================================================
--- Schema to TypeRef Conversion
+-- Standalone helpers
 -- ============================================================================
 
--- | Convert a JSON Schema value to a TypeRef
---
--- Distinguishes between:
--- - RefAny: Schema present but no type constraints (intentionally dynamic, e.g. serde_json::Value)
--- - RefUnknown: No schema at all (schema gap, should warn)
---
--- Type references via $ref are namespace-qualified (e.g., "cone.ConeInfo")
+-- | Convert a JSON Schema value to a TypeRef (its refusals dropped), with
+--   refs qualified by the namespace.
 schemaToTypeRef :: Text -> Value -> TypeRef
-schemaToTypeRef namespace (Object o)
-  -- Check for $ref - namespace-qualify the reference
-  | Just (String ref) <- KM.lookup "$ref" o =
-      RefNamed QualifiedName
-        { qnNamespace = namespace
-        , qnLocalName = extractRefName ref
-        }
-
-  -- Check for array
-  | Just (String "array") <- KM.lookup "type" o =
-      case KM.lookup "items" o of
-        Just items -> RefArray (schemaToTypeRef namespace items)
-        Nothing -> RefArray RefAny  -- array without items = any[]
-
-  -- Check for nullable
-  | Just (Array types) <- KM.lookup "type" o =
-      let nonNull = [t | t@(String s) <- V.toList types, s /= "null"]
-          hasNull = any (\case String "null" -> True; _ -> False) (V.toList types)
-      in case nonNull of
-           [String "array"] ->
-             -- Nullable array: type: ["array", "null"] with items
-             let inner = case KM.lookup "items" o of
-                           Just items -> RefArray (schemaToTypeRef namespace items)
-                           Nothing -> RefArray RefAny
-             in if hasNull then RefOptional inner else inner
-           [String t] ->
-             let base = RefPrimitive t (extractFormat o)
-             in if hasNull then RefOptional base else base
-           _ -> RefAny  -- Multiple non-null types = any
-
-  -- Check for anyOf (often used for optional refs) - namespace-qualify refs
-  | Just (Array options) <- KM.lookup "anyOf" o =
-      let refs = mapMaybe extractRefFromOption (V.toList options)
-      in case refs of
-           [r] -> RefOptional (RefNamed QualifiedName
-                    { qnNamespace = namespace
-                    , qnLocalName = r
-                    })
-           _ -> RefAny  -- Complex anyOf = any
-
-  -- Check for primitive type
-  | Just (String t) <- KM.lookup "type" o =
-      RefPrimitive t (extractFormat o)
-
-  -- Schema object present but no type constraint = intentionally dynamic (RefAny)
-  -- This happens with serde_json::Value which emits {"description": "...", "default": null}
-  | otherwise = RefAny
-
--- JSON Schema `true` is the "accept anything" schema - intentionally dynamic
--- This is used when schemars emits a field like `input: true` for serde_json::Value
-schemaToTypeRef _ (Bool True) = RefAny
-
--- Null, false, or non-JSON-Schema values = schema gap (should warn)
-schemaToTypeRef _ _ = RefUnknown
-
--- | Extract ref name from a $ref string like "#/$defs/Position"
-extractRefName :: Text -> Text
-extractRefName ref = case T.splitOn "/" ref of
-  parts | not (null parts) -> last parts
-  _ -> ref
-
--- | Extract ref from anyOf option (for optional types)
-extractRefFromOption :: Value -> Maybe Text
-extractRefFromOption (Object o) = case KM.lookup "$ref" o of
-  Just (String ref) -> Just (extractRefName ref)
-  _ -> Nothing
-extractRefFromOption _ = Nothing
-
--- ============================================================================
--- Helpers
--- ============================================================================
-
--- | Extract description from a schema
-extractDescription :: Value -> Maybe Text
-extractDescription (Object o) = case KM.lookup "description" o of
-  Just (String s) -> Just s
-  _ -> Nothing
-extractDescription _ = Nothing
-
--- | Extract default value from a schema
-extractDefault :: Value -> Maybe Value
-extractDefault (Object o) = KM.lookup "default" o
-extractDefault _ = Nothing
-
--- | Extract format from a schema object
-extractFormat :: KM.KeyMap Value -> Maybe Text
-extractFormat o = case KM.lookup "format" o of
-  Just (String s) -> Just s
-  _ -> Nothing
+schemaToTypeRef namespace v = fst (runRead (readType (docOf namespace KM.empty) namespace v))
 
 -- | Extract types from a full schema (for standalone use)
 -- Types are namespace-qualified
 extractTypesFromSchema :: Text -> Value -> Map Text TypeDef
-extractTypesFromSchema namespace (Object o) = extractDefs namespace o
+extractTypesFromSchema namespace (Object o) = fst (runRead (readDefs (docOf namespace o)))
 extractTypesFromSchema _ _ = Map.empty

@@ -137,8 +137,12 @@ canCLIRepresentWithReason ir = \case
   RefArray innerType -> canCLIRepresentWithReason ir innerType
 
   -- Any/Unknown require JSON
-  RefAny -> Left ReasonAny
+  RefJson -> Left ReasonAny
   RefUnknown -> Left ReasonUnknown
+  RefMap _ -> Left ReasonAny
+  RefTuple _ -> Left ReasonNested
+  RefRefined inner _ -> canCLIRepresentWithReason ir inner
+  RefChild _ -> Left ReasonUnknown
 
   -- Named types: look up and check
   RefNamed qn -> canCLIRepresentNamed ir (qualifiedNameFull qn)
@@ -167,7 +171,10 @@ canCLIRepresentTypeDef ir TypeDef{..} = case tdKind of
       _ -> Left ReasonNested
 
   -- Enums: check based on discriminator type
-  KindEnum discriminator variants
+  -- SYNAPSE-CC-8: an external or untagged union is read whole now; it was
+  -- an empty enum before, and representable as one
+  KindEnum _ _ repr | repr /= Internal -> Right ()
+  KindEnum discriminator variants _
     -- String enums (discriminator is "value") are representable
     | discriminator == "value" -> Right ()
     -- Discriminated unions: all variants must be representable
@@ -245,8 +252,12 @@ canCLIRepresentWithDepth ir depth typeRef = case typeRef of
   RefPrimitive _ _ -> True
   RefOptional inner -> canCLIRepresentWithDepth ir depth inner
   RefArray innerType -> canCLIRepresentWithDepth ir depth innerType
-  RefAny -> False
+  RefJson -> False
   RefUnknown -> False
+  RefMap _ -> False
+  RefTuple _ -> False
+  RefRefined inner _ -> canCLIRepresentWithDepth ir depth inner
+  RefChild _ -> False
   RefNamed qn -> canCLIRepresentNamedWithDepth ir (depth - 1) (qualifiedNameFull qn)
 
 -- | Check named type with depth
@@ -259,8 +270,9 @@ canCLIRepresentNamedWithDepth ir depth name
         KindPrimitive _ _ -> True
         KindAlias target -> canCLIRepresentWithDepth ir depth target
         KindStruct fields -> all (canCLIRepresentFieldWithDepth ir (depth - 1)) fields
-        KindEnum "value" _ -> True  -- String enum
-        KindEnum _ variants -> all (canCLIRepresentVariantWithDepth ir (depth - 1)) variants
+        KindEnum "value" _ _ -> True  -- String enum
+        KindEnum _ _ repr | repr /= Internal -> True
+        KindEnum _ variants _ -> all (canCLIRepresentVariantWithDepth ir (depth - 1)) variants
 
 -- | Check field with depth
 canCLIRepresentFieldWithDepth :: IR -> Int -> FieldDef -> Bool

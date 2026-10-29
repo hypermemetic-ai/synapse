@@ -48,7 +48,7 @@ baseMethodDef = MethodDef
   , mdDescription         = Just "Fetch a planet child by name."
   , mdStreaming           = False
   , mdParams              = []
-  , mdReturns             = RefAny
+  , mdReturns             = RefJson
   , mdBidirType           = Nothing
   , mdBidirResponseType   = Nothing
   , mdBidirResponseSchema = Nothing
@@ -56,6 +56,8 @@ baseMethodDef = MethodDef
   , mdGrant               = Nothing
   , mdTarget              = Nothing
   , mdLongDescription     = Nothing
+  , mdInjected            = []
+  , mdInput               = Nothing
   }
 
 -- | Build a JSON @MethodSchema@ with an optional @role@ key. Passing

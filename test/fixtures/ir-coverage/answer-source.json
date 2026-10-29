@@ -1,0 +1,64 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "answers",
+     "hash": "answers0",
+     "name": "answers",
+     "returns": {
+      "$defs": {
+       "AnswerSource": {
+        "description": "INPUT-3: who made a change to an input (INPUT-1's language) — `app`, a\nviewer's click, which the host says on its `answer`; `api`, everything\nelse (synapse, an agent). The only \"who\" until CONTEXT adds identity.",
+        "oneOf": [
+         {
+          "enum": [
+           "app",
+           "api"
+          ],
+          "type": "string"
+         },
+         {
+          "const": "system",
+          "description": "MENGER-13: the store itself — an input withdrawn because its ticket\nwas canceled, or restored when it was not any more. Never a caller's\nto say: `inputs.answer` and `inputs.clear` refuse it.",
+          "type": "string"
+         }
+        ]
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "source": {
+          "$ref": "#/$defs/AnswerSource"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "source"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

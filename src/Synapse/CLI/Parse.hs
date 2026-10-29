@@ -234,7 +234,7 @@ fieldType ir ref name = case ref of
   RefOptional inner -> fieldType ir inner name
   RefNamed qn -> case tdKind <$> Map.lookup (qualifiedNameFull qn) (irTypes ir) of
     Just (KindStruct fields) -> fdType <$> find ((== name) . fdName) fields
-    Just (KindEnum _ variants) -> fdType <$> find ((== name) . fdName) (concatMap vdFields variants)
+    Just (KindEnum _ variants _) -> fdType <$> find ((== name) . fdName) (concatMap vdFields variants)
     Just (KindAlias target) -> fieldType ir target name
     _ -> Nothing
   _ -> Nothing
@@ -382,7 +382,7 @@ buildParamValue ir param kvs = case pdType param of
          values <- concat <$> traverse elements rawValues
          Right $ Array $ V.fromList $ map (buildTypedValue ir innerType) values
 
-  RefAny ->
+  RefJson ->
     -- Dynamic type, try to parse as JSON or use as string
     case lookup "" kvs of
       Just val -> Right $ inferValue val
@@ -394,10 +394,27 @@ buildParamValue ir param kvs = case pdType param of
       Just val -> Right $ inferValue val
       Nothing -> Left $ InvalidValue (pdName param) "unknown type needs value"
 
+  -- SYNAPSE-CC-8: a map, a tuple or a child's client: the value as JSON
+  RefMap _ -> wholeJson
+  RefTuple _ -> wholeJson
+  RefChild _ -> wholeJson
+  RefRefined inner _ -> buildParamValue ir param { pdType = inner } kvs
+  where
+    wholeJson = case lookup "" kvs of
+      Just val -> Right $ inferValue val
+      Nothing -> Left $ InvalidValue (pdName param) "pass the value as JSON (or the whole params with -p)"
+
 -- | Build value from a TypeDef
 buildFromTypeDef :: IR -> Text -> TypeDef -> [(Text, Text)] -> Either ParseError Value
 buildFromTypeDef ir paramName TypeDef{..} kvs = case tdKind of
-  KindEnum discriminator variants ->
+  -- SYNAPSE-CC-8: an external or untagged union has no flag form: its value
+  -- goes as JSON (--name '{…}', or -p)
+  KindEnum _ _ repr | repr /= Internal ->
+    case lookup "" kvs of
+      Just val -> Right $ inferValue val
+      Nothing -> Left $ InvalidValue paramName "pass the value as JSON (or the whole params with -p)"
+
+  KindEnum discriminator variants _ ->
     -- Find which variant based on discriminator value
     case lookup discriminator kvs of
       Just variantName ->
@@ -476,8 +493,12 @@ buildTypedValue ir ref val = case ref of
       _ -> String val
   RefOptional inner -> buildTypedValue ir inner val
   RefArray _ -> inferValue val  -- Best effort for arrays
-  RefAny -> inferValue val
+  RefJson -> inferValue val
   RefUnknown -> String val
+  RefMap _ -> inferValue val
+  RefTuple _ -> inferValue val
+  RefRefined inner _ -> buildTypedValue ir inner val
+  RefChild _ -> String val
 
 -- ============================================================================
 -- List Values
@@ -496,8 +517,12 @@ isScalarElement ir = \case
     _ -> False
   RefOptional inner -> isScalarElement ir inner
   RefArray _ -> False
-  RefAny -> False
+  RefJson -> False
   RefUnknown -> False
+  RefMap _ -> False
+  RefTuple _ -> False
+  RefRefined inner _ -> isScalarElement ir inner
+  RefChild _ -> False
   where
     scalarTypes = ["string", "integer", "number", "boolean"]
 

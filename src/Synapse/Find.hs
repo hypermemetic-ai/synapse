@@ -127,10 +127,12 @@ loadCatalog :: Maybe IRCache -> SynapseM IR
 loadCatalog mcache = do
   root <- fetchSchemaAt []
   view <- asks seViewKey
-  let key = "find-" <> irCacheKey view (psHash root)
+  -- SYNAPSE-CC-8: the key names the IR version, so an IR an older synapse
+  -- kept (3.16.0's 2.0) is never read as this one's
+  let key = "find-ir" <> currentIrVersion <> "-" <> irCacheKey view (psHash root)
   cached <- case mcache of
     Nothing -> pure Nothing
-    Just c -> liftIO (either (const Nothing) id <$> (try (lookupIR c key) :: IO (Either SomeException (Maybe IR))))
+    Just c -> liftIO (either (const Nothing) (>>= current) <$> (try (lookupIR c key) :: IO (Either SomeException (Maybe IR))))
   case cached of
     Just ir -> pure ir
     Nothing -> do
@@ -655,3 +657,9 @@ hitJson ir h = object $
   where
     e = hitEntry h
     m = enMethod e
+
+-- | SYNAPSE-CC-8: a cached IR of this synapse's version, else none.
+current :: IR -> Maybe IR
+current ir
+  | irVersion ir == currentIrVersion = Just ir
+  | otherwise = Nothing

@@ -1,0 +1,81 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "chat",
+     "hash": "c0",
+     "input": {
+      "$defs": {
+       "Token": {
+        "properties": {
+         "text": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "text"
+        ],
+        "type": "object"
+       }
+      },
+      "$ref": "#/$defs/Token"
+     },
+     "name": "chat",
+     "returns": {
+      "oneOf": [
+       {
+        "properties": {
+         "type": {
+          "const": "ok",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    },
+    {
+     "description": "plain",
+     "hash": "p0",
+     "name": "plain",
+     "returns": {
+      "oneOf": [
+       {
+        "properties": {
+         "type": {
+          "const": "ok",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

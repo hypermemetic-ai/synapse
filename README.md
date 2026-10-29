@@ -652,7 +652,7 @@ $ synapse --emit-ir substrate > substrate.ir.json
 
 ```json
 {
-  "irVersion": "2.0",
+  "irVersion": "2.1",
   "irTypes": {
     "echo.EchoEvent": {
       "tdKind": {
@@ -681,6 +681,70 @@ $ synapse --emit-ir substrate > substrate.ir.json
 ```
 
 Types are deduplicated by content hash across namespaces. Streaming is inferred from return type structure (enum with >1 non-error variant = streaming).
+
+### IR 2.1: read whole, or refused by name (SYNAPSE-CC-8, 3.17.0)
+
+Every schema is read whole or refused; nothing is dropped. The reader
+(`src/Synapse/IR/Read.hs`) is pure: a value and the refusals met.
+
+- **Unions.** A `oneOf` / `anyOf` is a string enum (every member an `enum`
+  or a `const` of strings: `TransitionField` is `status, kind, archive`), a
+  tagged enum (`KindEnum`, `keDiscriminator` the property every member gives
+  a string `const` — `type`, `kind`, `event`, …; a newtype variant carries
+  its struct's fields), an externally tagged enum (`keRepr: "external"`,
+  `keDiscriminator: ""`: `{"browser": {…}}`), an untagged union of named
+  types (`keRepr: "untagged"`, each variant's `vdRef`), or a nullable
+  (`RefOptional`). `keRepr` is left out when internal, so 2.0's enums read
+  as before. Any other union is refused, naming the member it could not read.
+- **Refusals.** `irRefusals` lists each site the IR cannot type
+  (`rfSite`, `rfKeyword`, `rfVariant`, `rfDetail`; left out when empty).
+  Where a refused site stood the IR says `RefUnknown`; a refused type is left
+  out and its uses say `RefUnknown`. With refusals, `synapse -i` still prints
+  the IR on stdout, names each site on stderr and **exits 65**; no generator
+  may run on it. Calls, help, flags and `_find` ignore refusals.
+- **Sites** are `<ns.Type>[.<variant>].<field>`, `<method path>(<param>)`,
+  `<method path> returns`, with `[]` (element), `?` (optional), `{}` (map
+  value) and `.N` (tuple element): `tickets.Component.preview[].0`.
+- **The JSON type.** A `serde_json::Value` is a type, not a gap: `true`,
+  `{}`, annotations only, `type` naming all six JSON types (`["null",
+  "boolean", "number", "string", "array", "object"]`, as plexus-core writes
+  it since SYNAPSE-CC-9) or a `$ref` to a definition named `Json` is
+  `RefJson` (`{"tag": "RefJson"}`): `JsonValue` / `Json` /
+  `serde_json::Value` in a client. Still refused: a bare `{"type":
+  "object"}` (neither properties nor additionalProperties), an array with no
+  items, a type list that is neither one type (± null) nor all six. IR 2.0's
+  `RefAny` reads as `RefJson`.
+- **New refs.** `RefMap V` (an object with `additionalProperties: V` and no
+  properties), `RefTuple [..]` (`prefixItems` with `minItems = maxItems` =
+  its length), `RefRefined base {minimum, maxLength, …}` (only a bound the
+  format does not imply: `minimum: 0` on a `uint64` adds nothing), and
+  `RefChild "<path>"` (a static or dynamic child's return: its client). An
+  rpc method with no `returns` is refused at `<path> returns`.
+- **Injected params** (`x-plexus-source` other than `rpc`) are not in
+  `mdParams`: they are `mdInjected` (`ipName`, `ipSource` verbatim,
+  `ipDescription`; left out when empty). Help still shows them.
+- **`mdInput`** is a method's `input` schema as a type, reserved for
+  BIDIR-6; left out when absent (no server sends it yet).
+- **The closed keyword list.** A schema in a type position uses only `type
+  $ref properties required additionalProperties items prefixItems oneOf
+  anyOf enum const format minimum maximum exclusiveMinimum exclusiveMaximum
+  minLength maxLength pattern minItems maxItems default description title
+  examples deprecated $schema $defs definitions x-plexus-source
+  x-plexus-values`; any other (`allOf`, `multipleOf`, …) is
+  refused by name.
+- **Where a shared type lives.** The same type (name and structure) in
+  several namespaces is kept once, in the namespace whose methods and types
+  refer to it most; a tie goes to the namespace that is an ancestor of the
+  others, then the shortest name, then alphabetical; the protocol root `""`
+  only when no generated namespace has a copy.
+- **Caches.** A plan or a `_find` catalogue holding another IR version
+  (3.16.0's 2.0) is not read; it is built again.
+
+`bench/IRBench.hs` (`cabal bench ir-bench`) times the builder alone over
+menger's 2026-10-29 schemas (`test/fixtures/ir-coverage`), with no network;
+`ir-coverage-test` holds one fixture per construct, menger whole (21
+refusals; the IR equal to `menger-2026-10-29.ir-2.1.json`), and the guard
+that every construct 2.0 already typed serializes as before.
 
 ## Client Generation (synapse-cc)
 

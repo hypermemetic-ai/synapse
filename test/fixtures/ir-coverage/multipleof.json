@@ -1,0 +1,60 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "even",
+     "hash": "even0",
+     "name": "even",
+     "returns": {
+      "$defs": {
+       "Even": {
+        "properties": {
+         "n": {
+          "format": "int32",
+          "multipleOf": 2,
+          "type": "integer"
+         }
+        },
+        "required": [
+         "n"
+        ],
+        "type": "object"
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "even": {
+          "$ref": "#/$defs/Even"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "even"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

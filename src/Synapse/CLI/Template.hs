@@ -153,7 +153,7 @@ generateMethodBody ir method = case mdReturns method of
   RefNamed qn ->
     let name = qualifiedNameFull qn
     in case Map.lookup name (irTypes ir) of
-      Just typeDef@TypeDef{tdKind = KindEnum _ variants} ->
+      Just typeDef@TypeDef{tdKind = KindEnum _ variants _} ->
         -- Union type: generate sections for ALL variants (exhaustive)
         -- No blank lines between sections to avoid whitespace in output
         let variantNames = map vdName variants
@@ -272,8 +272,13 @@ typeRefToMustache ir indent = \case
   RefOptional inner -> typeRefToMustache ir indent inner
 
   -- Any/Unknown: fall back to current value
-  RefAny -> "{{.}}"
+  RefJson -> "{{.}}"
   RefUnknown -> "{{.}}"
+  -- SYNAPSE-CC-8: as the 2.0 IR carried them (object, array of any)
+  RefMap _ -> "{{.}}"
+  RefTuple _ -> typeRefToMustache ir indent (RefArray RefJson)
+  RefRefined inner _ -> typeRefToMustache ir indent inner
+  RefChild _ -> "{{.}}"
 
 -- ============================================================================
 -- Type Definition to Mustache
@@ -283,7 +288,7 @@ typeRefToMustache ir indent = \case
 typeDefToMustache :: IR -> Int -> TypeDef -> Text
 typeDefToMustache ir indent TypeDef{..} = case tdKind of
   -- Discriminated union: render ALL variants as sections (exhaustive)
-  KindEnum _discriminator variants ->
+  KindEnum _discriminator variants _ ->
     T.intercalate "\n" $ map (variantToMustache ir indent) variants
 
   -- Struct: render each field
@@ -376,7 +381,7 @@ generateFieldValue ir typeRef fieldName field = case typeRef of
         let displayFields = filter (not . isInternalField) fields
             fieldRefs = map (\f -> fdName f <> "={{" <> fieldName <> "." <> fdName f <> "}}") displayFields
         in T.intercalate " " fieldRefs
-      Just TypeDef{tdKind = KindEnum _ _} ->
+      Just TypeDef{tdKind = KindEnum {}} ->
         "{{{" <> fieldName <> "}}}"  -- Nested union: use triple braces for unescaped JSON
       _ ->
         "{{" <> fieldName <> "}}"
@@ -395,8 +400,17 @@ generateFieldValue ir typeRef fieldName field = case typeRef of
     -- For optional primitives, simple section
     _ -> "{{#" <> fieldName <> "}}{{.}}{{/" <> fieldName <> "}}"
 
+  -- SYNAPSE-CC-8: as the 2.0 IR carried them (object, array of arrays)
+  RefMap _ ->
+    if isContentField field
+    then "{{{" <> fieldName <> "}}}"
+    else "{{" <> fieldName <> "}}"
+  RefTuple _ -> "{{#" <> fieldName <> "}}{{.}}{{/" <> fieldName <> "}}"
+  RefRefined inner _ -> generateFieldValue ir inner fieldName field
+  RefChild _ -> "{{" <> fieldName <> "}}"
+
   -- Fallback: use triple braces for content fields
-  RefAny ->
+  RefJson ->
     if isContentField field
     then "{{{" <> fieldName <> "}}}"
     else "{{" <> fieldName <> "}}"

@@ -170,7 +170,7 @@ cliSpec :: FilePath -> Spec
 cliSpec exe = do
   it "is this build" $ do
     (_, out, _) <- readCreateProcessWithExitCode (proc exe ["--version"]) ""
-    out `shouldStartWith` "3.16"
+    out `shouldStartWith` "3.17"
 
   it "answers cold, fills the cache, and opens one connection for the probe, the schema and the call" $
     withRun $ \run _ -> do

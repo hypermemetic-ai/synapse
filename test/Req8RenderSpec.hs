@@ -55,7 +55,7 @@ fixture = PluginSchema
       , methodDeprecation   = Nothing
       , methodParamSchemas  = Nothing
       , methodRole          = defaultRole
-      , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False, methodGroup = Nothing, methodExamples = []
+      , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False, methodGroup = Nothing, methodExamples = [], methodInput = Nothing
       }
 
 -- | Stub role — renderSchema doesn't branch on role for this test.
