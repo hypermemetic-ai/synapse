@@ -3,10 +3,12 @@
 -- | Quick test to see TypeRef JSON serialization
 module Main where
 
-import Data.Aeson (encode)
+import Control.Monad (forM_, unless)
+import Data.Aeson (decode, encode)
 import Data.Aeson.Encode.Pretty (encodePretty)
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import Data.Text (Text)
+import System.Exit (exitFailure)
 
 import Synapse.IR.Types
 
@@ -64,3 +66,30 @@ main = do
         }
   putStrLn "   JSON (pretty):"
   BSL.putStrLn (encodePretty fd)
+  putStrLn ""
+
+  -- SYNAPSE-CC-8 (IR 2.1): each new constructor encodes as the contract says
+  -- and decodes back; IR 2.0's RefAny (a serde_json::Value) reads as RefJson
+  putStrLn "6. IR 2.1 constructors (SYNAPSE-CC-8):"
+  let str = RefPrimitive "string" Nothing
+      cases :: [(TypeRef, BSL.ByteString)]
+      cases =
+        [ (RefJson, "{\"tag\":\"RefJson\"}")
+        , (RefMap str, "{\"contents\":{\"contents\":[\"string\",null],\"tag\":\"RefPrimitive\"},\"tag\":\"RefMap\"}")
+        , (RefTuple [str, str], "{\"contents\":[{\"contents\":[\"string\",null],\"tag\":\"RefPrimitive\"},{\"contents\":[\"string\",null],\"tag\":\"RefPrimitive\"}],\"tag\":\"RefTuple\"}")
+        , (RefRefined (RefPrimitive "integer" (Just "uint64")) noRefinements { rnMinimum = Just 1 }, "{\"contents\":[{\"contents\":[\"integer\",\"uint64\"],\"tag\":\"RefPrimitive\"},{\"minimum\":1}],\"tag\":\"RefRefined\"}")
+        , (RefChild "tickets.inputs", "{\"contents\":\"tickets.inputs\",\"tag\":\"RefChild\"}")
+        , (RefUnknown, "{\"tag\":\"RefUnknown\"}")
+        ]
+  failures <- fmap concat $ mapM (\(t, j) -> do
+      let ok = encode t == j && decode j == Just t
+      putStrLn ("   " <> (if ok then "ok   " else "FAIL ") <> BSL.unpack j)
+      pure [ () | not ok ]) cases
+  let legacy = decode "{\"tag\":\"RefAny\"}" :: Maybe TypeRef
+  putStrLn ("   2.0's RefAny reads as " <> show legacy)
+  let refusal = Refusal "tickets.Reply" "oneOf" (Just 2) "why"
+      refusalOk = decode (encode refusal) == Just refusal
+      reprOk = encode External == "\"external\"" && decode "\"untagged\"" == Just Untagged
+  forM_ [("Refusal", refusalOk), ("EnumRepr", reprOk), ("legacy RefAny", legacy == Just RefJson)] $ \(n, ok) ->
+    putStrLn ("   " <> (if ok then "ok   " else "FAIL ") <> n)
+  unless (null failures && refusalOk && reprOk && legacy == Just RefJson) exitFailure

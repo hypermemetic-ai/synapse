@@ -12,12 +12,14 @@ module IRFixture
   , loadSchemas
   , envWithSchemas
   , buildFixtureIR
+  , fixtureIR
   ) where
 
 import qualified Codec.Compression.GZip as GZ
 import Data.Aeson (FromJSON(..), eitherDecode, withObject, (.:))
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.IORef (writeIORef)
+import Data.List (isSuffixOf)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Katip
@@ -36,12 +38,18 @@ data Row = Row Path PluginSchema
 instance FromJSON Row where
   parseJSON = withObject "Row" $ \o -> Row <$> o .: "path" <*> o .: "schema"
 
--- | Every schema of a fixture, by path (a @.gz@ is gunzipped).
+-- | Every schema of a fixture, by path: a @.jsonl.gz@ one row a line
+--   (gunzipped), a @.json@ an array of rows.
 loadSchemas :: FilePath -> IO [(Path, PluginSchema)]
 loadSchemas file = do
   raw <- BL.readFile file
-  let body = if reverse (take 3 (reverse file)) == ".gz" then GZ.decompress raw else raw
-  mapM row (filter (not . BL.null) (BL.lines body))
+  if ".json" `isSuffixOf` file
+    then case eitherDecode raw of
+      Right rows -> pure [ (p, s) | Row p s <- rows ]
+      Left e -> fail ("IRFixture: " <> file <> ": " <> e)
+    else do
+      let body = if ".gz" `isSuffixOf` file then GZ.decompress raw else raw
+      mapM row (filter (not . BL.null) (BL.lines body))
   where
     row l = case eitherDecode l of
       Right (Row p s) -> pure (p, s)
@@ -58,3 +66,10 @@ envWithSchemas backend schemas = do
 -- | The IR of the tree under a path, built from the memo alone.
 buildFixtureIR :: SynapseEnv -> Path -> IO IR
 buildFixtureIR env path = runSynapseM env (buildIR [] path) >>= either (fail . show) pure
+
+-- | The IR of a fixture file, built from the tree under a path.
+fixtureIR :: FilePath -> Path -> IO IR
+fixtureIR file path = do
+  schemas <- loadSchemas file
+  env <- envWithSchemas "menger" schemas
+  buildFixtureIR env path

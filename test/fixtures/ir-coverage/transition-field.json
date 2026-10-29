@@ -1,0 +1,64 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "history",
+     "hash": "history0",
+     "name": "history",
+     "returns": {
+      "$defs": {
+       "TransitionField": {
+        "description": "MENGER-13: which of a ticket's fields a transition moved — its status, or\nits kind (SDLC-13's `set_kind`).",
+        "oneOf": [
+         {
+          "enum": [
+           "status",
+           "kind"
+          ],
+          "type": "string"
+         },
+         {
+          "const": "archive",
+          "description": "ARCHIVE-2: the archive's mark — `from` / `to` are `live` and\n`archived` (an archive, or a restore).",
+          "type": "string"
+         }
+        ]
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "field": {
+          "$ref": "#/$defs/TransitionField"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "field"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

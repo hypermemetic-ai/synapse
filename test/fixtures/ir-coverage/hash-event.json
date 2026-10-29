@@ -1,0 +1,50 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "bidirectional": false,
+     "description": "Get plexus configuration hash (from the recursive schema)\n\n This hash changes whenever any method or child plugin changes.\n It's computed from the method hashes rolled up through the schema tree.",
+     "grant": "menger.hash",
+     "hash": "03eabdc6d88c1bba",
+     "http_method": "POST",
+     "long_description": "Get Plexus RPC server configuration hash (from the recursive schema)\n\nThis hash changes whenever any method or child activation changes.\nIt's computed from the method hashes rolled up through the schema tree.",
+     "name": "hash",
+     "returns": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "event": {
+          "const": "hash",
+          "type": "string"
+         },
+         "value": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "event",
+         "value"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "HashEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     },
+     "streaming": false
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

@@ -1,0 +1,111 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "call",
+     "hash": "call0",
+     "name": "call",
+     "returns": {
+      "$defs": {
+       "Envelope": {
+        "properties": {
+         "byref": {
+          "$ref": "#/$defs/Json"
+         },
+         "described": {
+          "description": "the payload, annotations only"
+         },
+         "empty": {},
+         "list": {
+          "items": {
+           "type": [
+            "object",
+            "array",
+            "string",
+            "number",
+            "boolean",
+            "null"
+           ]
+          },
+          "type": "array"
+         },
+         "map": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "six": {
+          "description": "as plexus-core writes it (SYNAPSE-CC-9)",
+          "type": [
+           "null",
+           "boolean",
+           "number",
+           "string",
+           "array",
+           "object"
+          ]
+         },
+         "yes": true
+        },
+        "required": [
+         "six",
+         "described",
+         "empty",
+         "yes",
+         "byref",
+         "list",
+         "map"
+        ],
+        "type": "object"
+       },
+       "Json": {
+        "type": [
+         "null",
+         "boolean",
+         "number",
+         "string",
+         "array",
+         "object"
+        ]
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "envelope": {
+          "$ref": "#/$defs/Envelope"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         },
+         "value": {
+          "description": "any value"
+         }
+        },
+        "required": [
+         "type",
+         "envelope",
+         "value"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

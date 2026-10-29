@@ -105,6 +105,7 @@ method ns name desc = MethodDef
   , mdReturns = RefUnknown, mdBidirType = Nothing, mdBidirResponseType = Nothing
   , mdBidirResponseSchema = Nothing, mdRole = MethodRoleRpc
   , mdGrant = Nothing, mdTarget = Nothing, mdLongDescription = Nothing
+  , mdInjected = [], mdInput = Nothing
   }
 
 synthetic :: IR

@@ -1,0 +1,67 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "both",
+     "hash": "both0",
+     "name": "both",
+     "returns": {
+      "$defs": {
+       "Both": {
+        "allOf": [
+         {
+          "properties": {
+           "a": {
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
+         {
+          "properties": {
+           "b": {
+            "type": "string"
+           }
+          },
+          "type": "object"
+         }
+        ]
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "both": {
+          "$ref": "#/$defs/Both"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "both"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

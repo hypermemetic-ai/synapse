@@ -1,0 +1,68 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "schema",
+     "hash": "s0",
+     "name": "schema",
+     "returns": {
+      "$defs": {
+       "MethodSchema": {
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "params": {
+          "description": "the params' JSON Schema: any JSON"
+         }
+        },
+        "required": [
+         "name"
+        ],
+        "type": "object"
+       },
+       "PluginSchema": {
+        "properties": {
+         "methods": {
+          "items": {
+           "$ref": "#/$defs/MethodSchema"
+          },
+          "type": "array"
+         },
+         "namespace": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "namespace",
+         "methods"
+        ],
+        "type": "object"
+       }
+      },
+      "anyOf": [
+       {
+        "$ref": "#/$defs/PluginSchema"
+       },
+       {
+        "$ref": "#/$defs/MethodSchema"
+       }
+      ],
+      "title": "SchemaResult"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

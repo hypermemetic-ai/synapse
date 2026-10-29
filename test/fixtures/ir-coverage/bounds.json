@@ -1,0 +1,87 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "bounds",
+     "hash": "bounds0",
+     "name": "bounds",
+     "returns": {
+      "$defs": {
+       "Bounds": {
+        "properties": {
+         "a": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+         },
+         "b": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+         },
+         "c": {
+          "format": "uint64",
+          "minimum": 1,
+          "type": "integer"
+         },
+         "d": {
+          "maxLength": 64,
+          "type": "string"
+         },
+         "e": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+           "integer",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "a",
+         "b",
+         "c",
+         "d",
+         "e"
+        ],
+        "type": "object"
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "bounds": {
+          "$ref": "#/$defs/Bounds"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "bounds"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

@@ -39,8 +39,12 @@ generateExampleValue ir typeRef = case typeRef of
     "'[" <> generateExampleValue ir inner <> "]'"
   RefOptional inner ->
     generateExampleValue ir inner
-  RefAny -> "{}"
+  RefJson -> "{}"
   RefUnknown -> "<value>"
+  RefMap _ -> "{}"
+  RefTuple ts -> "'[" <> T.intercalate "," (map (generateExampleValue ir) ts) <> "]'"
+  RefRefined inner _ -> generateExampleValue ir inner
+  RefChild _ -> "<value>"
 
 -- | Generate example for a named type definition
 generateNamedTypeExample :: IR -> TypeDef -> Text
@@ -51,7 +55,7 @@ generateNamedTypeExample ir typeDef = case tdKind typeDef of
     [] -> "\"value\""
 
   -- Discriminated unions - show first variant as JSON
-  KindEnum disc variants -> case variants of
+  KindEnum disc variants _ -> case variants of
     (v:_) -> formatVariantExample ir disc v
     [] -> "{}"
 

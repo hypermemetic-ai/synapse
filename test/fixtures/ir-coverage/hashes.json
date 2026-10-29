@@ -1,0 +1,84 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "bidirectional": false,
+     "description": "Get plugin hashes for cache validation",
+     "grant": "menger.hashes",
+     "hash": "42228a67556b0393",
+     "http_method": "POST",
+     "long_description": "(lightweight alternative to full schema)",
+     "name": "hashes",
+     "returns": {
+      "$defs": {
+       "ChildHashes": {
+        "description": "Hash information for a child plugin",
+        "properties": {
+         "hash": {
+          "type": "string"
+         },
+         "namespace": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "namespace",
+         "hash"
+        ],
+        "type": "object"
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Lightweight hash information for cache validation",
+      "properties": {
+       "children": {
+        "description": "Child plugin hashes (for recursive checking)",
+        "items": {
+         "$ref": "#/$defs/ChildHashes"
+        },
+        "type": [
+         "array",
+         "null"
+        ]
+       },
+       "children_hash": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "hash": {
+        "type": "string"
+       },
+       "namespace": {
+        "type": "string"
+       },
+       "self_hash": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "namespace",
+       "self_hash",
+       "hash"
+      ],
+      "title": "PluginHashes",
+      "type": "object"
+     },
+     "role": {
+      "kind": "rpc"
+     },
+     "streaming": false
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

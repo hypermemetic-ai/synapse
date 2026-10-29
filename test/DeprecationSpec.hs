@@ -67,7 +67,7 @@ baseMethod = MethodSchema
   , methodDeprecation    = Nothing
   , methodParamSchemas   = Nothing
   , methodRole           = MethodRoleRpc
-  , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False, methodGroup = Nothing, methodExamples = []
+  , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False, methodGroup = Nothing, methodExamples = [], methodInput = Nothing
   }
 
 deprecatedMethod :: MethodSchema

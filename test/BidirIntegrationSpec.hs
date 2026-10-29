@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -112,7 +113,7 @@ bidirIntegrationSpec ir = do
       let bidirMethods = filter (isJust . mdBidirType) (Map.elems $ irMethods ir)
       forM_ bidirMethods $ \method ->
         case mdBidirType method of
-          Just RefAny -> pure ()  -- Standard bidir with T=Value
+          Just RefJson -> pure ()  -- Standard bidir with T=Value
           Just other ->
             -- Future: when custom bidir types are supported, this is valid
             putStrLn $ "  Note: " <> T.unpack (mdFullPath method) <>
@@ -145,7 +146,7 @@ bidirIntegrationSpec ir = do
       forM_ bidirMethods $ \method ->
         case mdBidirType method of
           Nothing -> pure ()
-          Just RefAny -> pure ()  -- RefAny doesn't need resolution
+          Just RefJson -> pure ()  -- RefAny doesn't need resolution
           Just (RefNamed qn) -> do
             let typeName = qualifiedNameFull qn
             case Map.lookup typeName (irTypes ir) of
@@ -261,7 +262,7 @@ testBidirMethod ir methodPath =
         isJust (mdBidirType method) `shouldBe` True
 
       it (T.unpack methodPath <> " has standard bidir type (RefAny)") $
-        mdBidirType method `shouldBe` Just RefAny
+        mdBidirType method `shouldSatisfy` (\case { Just RefJson -> True; _ -> False })
 
       it (T.unpack methodPath <> " is a streaming method") $
         mdStreaming method `shouldBe` True

@@ -1,0 +1,452 @@
+[
+ {
+  "path": [],
+  "schema": {
+   "children": [
+    {
+     "description": "notes",
+     "hash": "notes0",
+     "namespace": "notes"
+    },
+    {
+     "description": "tickets",
+     "hash": "tickets0",
+     "namespace": "tickets"
+    },
+    {
+     "description": "chats",
+     "hash": "chats0",
+     "namespace": "chats"
+    }
+   ],
+   "description": "service (fixture)",
+   "hash": "service0",
+   "methods": [
+    {
+     "description": "ping",
+     "hash": "ping0",
+     "name": "ping",
+     "returns": {
+      "$defs": {
+       "Shared": {
+        "properties": {
+         "a": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "a"
+        ],
+        "type": "object"
+       }
+      },
+      "oneOf": [
+       {
+        "properties": {
+         "r0": {
+          "$ref": "#/$defs/Shared"
+         },
+         "r1": {
+          "$ref": "#/$defs/Shared"
+         },
+         "r2": {
+          "$ref": "#/$defs/Shared"
+         },
+         "type": {
+          "const": "e",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "r0",
+         "r1",
+         "r2"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "PingEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "service",
+   "version": "1.0.0"
+  }
+ },
+ {
+  "path": [
+   "chats"
+  ],
+  "schema": {
+   "description": "chats (fixture)",
+   "hash": "chats0",
+   "methods": [
+    {
+     "description": "tie",
+     "hash": "tie0",
+     "name": "tie",
+     "returns": {
+      "$defs": {
+       "Tied": {
+        "properties": {
+         "a": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "a"
+        ],
+        "type": "object"
+       }
+      },
+      "oneOf": [
+       {
+        "properties": {
+         "r0": {
+          "$ref": "#/$defs/Tied"
+         },
+         "type": {
+          "const": "e",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "r0"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "ChatsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "chats",
+   "version": "1.0.0"
+  }
+ },
+ {
+  "path": [
+   "notes"
+  ],
+  "schema": {
+   "description": "notes (fixture)",
+   "hash": "notes0",
+   "methods": [
+    {
+     "description": "add",
+     "hash": "add0",
+     "name": "add",
+     "returns": {
+      "$defs": {
+       "TicketRef": {
+        "description": "A ticket's id, e.g. APP-21.",
+        "type": "string"
+       }
+      },
+      "oneOf": [
+       {
+        "properties": {
+         "r0": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "type": {
+          "const": "e",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "r0"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "NotesEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "notes",
+   "version": "1.0.0"
+  }
+ },
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "children": [
+    {
+     "description": "inputs",
+     "hash": "inputs0",
+     "namespace": "inputs"
+    }
+   ],
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "get",
+     "hash": "get0",
+     "name": "get",
+     "returns": {
+      "$defs": {
+       "TicketRef": {
+        "description": "A ticket's id, e.g. APP-21.",
+        "type": "string"
+       }
+      },
+      "oneOf": [
+       {
+        "properties": {
+         "r0": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "r1": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "r2": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "r3": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "r4": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "r5": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "r6": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "r7": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "r8": {
+          "$ref": "#/$defs/TicketRef"
+         },
+         "type": {
+          "const": "e",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "r0",
+         "r1",
+         "r2",
+         "r3",
+         "r4",
+         "r5",
+         "r6",
+         "r7",
+         "r8"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    },
+    {
+     "description": "tie",
+     "hash": "tie0",
+     "name": "tie",
+     "returns": {
+      "$defs": {
+       "Tied": {
+        "properties": {
+         "a": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "a"
+        ],
+        "type": "object"
+       }
+      },
+      "oneOf": [
+       {
+        "properties": {
+         "r0": {
+          "$ref": "#/$defs/Tied"
+         },
+         "type": {
+          "const": "e",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "r0"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent2"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    },
+    {
+     "description": "anc",
+     "hash": "anc0",
+     "name": "anc",
+     "returns": {
+      "$defs": {
+       "Anc": {
+        "properties": {
+         "a": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "a"
+        ],
+        "type": "object"
+       }
+      },
+      "oneOf": [
+       {
+        "properties": {
+         "r0": {
+          "$ref": "#/$defs/Anc"
+         },
+         "type": {
+          "const": "e",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "r0"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent3"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    },
+    {
+     "description": "shared",
+     "hash": "shared0",
+     "name": "shared",
+     "returns": {
+      "$defs": {
+       "Shared": {
+        "properties": {
+         "a": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "a"
+        ],
+        "type": "object"
+       }
+      },
+      "oneOf": [
+       {
+        "properties": {
+         "r0": {
+          "$ref": "#/$defs/Shared"
+         },
+         "type": {
+          "const": "e",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "r0"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent4"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ },
+ {
+  "path": [
+   "tickets",
+   "inputs"
+  ],
+  "schema": {
+   "description": "inputs (fixture)",
+   "hash": "inputs0",
+   "methods": [
+    {
+     "description": "anc",
+     "hash": "anc0",
+     "name": "anc",
+     "returns": {
+      "$defs": {
+       "Anc": {
+        "properties": {
+         "a": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "a"
+        ],
+        "type": "object"
+       }
+      },
+      "oneOf": [
+       {
+        "properties": {
+         "r0": {
+          "$ref": "#/$defs/Anc"
+         },
+         "type": {
+          "const": "e",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "r0"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "InputsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "inputs",
+   "version": "1.0.0"
+  }
+ }
+]

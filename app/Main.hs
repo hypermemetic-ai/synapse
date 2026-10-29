@@ -15,7 +15,7 @@
 -- is passed through for method invocation.
 module Main where
 
-import Control.Monad (filterM, when)
+import Control.Monad (filterM, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson
@@ -69,7 +69,8 @@ import Control.Monad.Except (catchError, throwError)
 import Synapse.CLI.Help (MethodPage(..), renderMethodPage)
 import Synapse.CLI.Parse (parseParams, parsePathAndParams, pairFlags)
 import qualified Synapse.CLI.Parse as Parse
-import Synapse.IR.Types (IR, irMethods, MethodDef)
+import Synapse.IR.Types (IR, irMethods, irRefusals, MethodDef)
+import qualified Synapse.IR.Types as IRT
 import Plexus.Schema.Recursive (DeprecationInfo)
 import qualified Data.Map.Strict as Map
 import qualified Synapse.CLI.Template as TemplateIR
@@ -1137,6 +1138,19 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                 then do
                   ir <- buildIR soGeneratorInfo pathSegs
                   liftIO $ LBS.putStrLn $ encode ir
+                  -- SYNAPSE-CC-8: a site the IR cannot type is named on
+                  -- stderr, and the run exits 65 (EX_DATAERR): no generator
+                  -- may run on it. The IR is still on stdout.
+                  let refusals = irRefusals ir
+                  unless (null refusals) $ liftIO $ do
+                    TIO.hPutStrLn stderr $ "synapse: refused \x2014 " <> T.pack (show (length refusals))
+                      <> " site" <> (if length refusals == 1 then "" else "s")
+                      <> " the IR cannot type (irRefusals); nothing was dropped:"
+                    let w = maximum (map (T.length . irSite) refusals)
+                        kw = maximum (map (T.length . irKeyword) refusals)
+                    mapM_ (\r -> TIO.hPutStrLn stderr $ "  " <> T.justifyLeft w ' ' (irSite r) <> "  "
+                                  <> T.justifyLeft kw ' ' (irKeyword r) <> "  " <> irDetail r) refusals
+                    exitWith (ExitFailure 65)
 
                 else do
                   -- Mode 5: Normal navigation
@@ -2076,3 +2090,9 @@ parseKv s =
             '=':vv -> vv
             _      -> ""
   in (T.pack k, T.pack v)
+
+-- | SYNAPSE-CC-8: a refusal's parts, as @-i@ prints them.
+irSite, irKeyword, irDetail :: IRT.Refusal -> T.Text
+irSite = IRT.rfSite
+irKeyword = IRT.rfKeyword
+irDetail = IRT.rfDetail

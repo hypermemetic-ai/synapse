@@ -1,0 +1,70 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "weird",
+     "hash": "weird0",
+     "name": "weird",
+     "returns": {
+      "$defs": {
+       "Weird": {
+        "oneOf": [
+         {
+          "properties": {
+           "kind": {
+            "const": "a",
+            "type": "string"
+           },
+           "x": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "kind",
+           "x"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "number"
+         }
+        ]
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "type": {
+          "const": "got",
+          "type": "string"
+         },
+         "w": {
+          "$ref": "#/$defs/Weird"
+         }
+        },
+        "required": [
+         "type",
+         "w"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

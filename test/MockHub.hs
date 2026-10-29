@@ -27,6 +27,8 @@ module MockHub
   , infoCalls
   , unsubscribes
   , renamedGet
+    -- * SYNAPSE-CC-8: a service serving schemas a test gives it
+  , schemaOverride
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -94,6 +96,12 @@ unsubscribes = unsafePerformIO (newIORef [])
 {-# NOINLINE renamedGet #-}
 renamedGet :: IORef Bool
 renamedGet = unsafePerformIO (newIORef False)
+
+-- | SYNAPSE-CC-8: when set, @<ns>.schema@ (@menger.schema@ for the root,
+-- keyed @""@) answers these schemas, by dotted path, before anything else.
+{-# NOINLINE schemaOverride #-}
+schemaOverride :: IORef (Maybe [(Text, Value)])
+schemaOverride = unsafePerformIO (newIORef Nothing)
 
 mockCode, mockState :: Text
 mockCode = "c_19ab"
@@ -235,8 +243,17 @@ infoFor sc = case scView sc of
 
 callMethod :: Scenario -> Bool -> Text -> Object
            -> (Text -> Value -> IO ()) -> (Text -> [(K.Key, Value)] -> IO ()) -> IO ()
-callMethod sc _signedIn inner args dat err = do
+callMethod sc signedIn inner args dat err = do
  if ".schema" `T.isSuffixOf` inner then atomicModifyIORef' schemaCalls (\n -> (n + 1, ())) else pure ()
+ override <- readIORef schemaOverride
+ let ns = if inner == "menger.schema" then "" else T.dropEnd (T.length ".schema") inner
+ case override >>= lookup ns of
+  Just v | ".schema" `T.isSuffixOf` inner -> dat inner v
+  _ -> callMethod' sc signedIn inner args dat err
+
+callMethod' :: Scenario -> Bool -> Text -> Object
+            -> (Text -> Value -> IO ()) -> (Text -> [(K.Key, Value)] -> IO ()) -> IO ()
+callMethod' sc _signedIn inner args dat err =
  case inner of
   "menger.schema" -> dat "menger.schema" (rootSchema sc)
   "tickets.schema" | scCatalog sc -> do

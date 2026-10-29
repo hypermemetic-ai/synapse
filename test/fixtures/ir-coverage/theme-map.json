@@ -1,0 +1,628 @@
+[
+ {
+  "path": [
+   "themes"
+  ],
+  "schema": {
+   "description": "themes (fixture)",
+   "hash": "themes0",
+   "methods": [
+    {
+     "bidirectional": false,
+     "description": "Define (or redefine) a theme: its token overrides for light and dark; yields the theme",
+     "examples": [
+      {
+       "note": "an ocean theme",
+       "params": {
+        "dark": {
+         "--accent": "#4db6ac"
+        },
+        "light": {
+         "--accent": "#00796b",
+         "--bg": "#f3f8f8"
+        },
+        "name": "ocean"
+       }
+      }
+     ],
+     "grant": "themes.define",
+     "group": "write",
+     "hash": "db25477a702afd8e",
+     "held_on": [
+      "*"
+     ],
+     "http_method": "POST",
+     "long_description": "THEME-3: the authoring path is a ticket's ` ```theme name\n[extends=parent] ` block (`tickets.create` / `amend` / `update`\nregister it, owned by that ticket); `define` stays for admin and\ntests — an ownerless theme, refused for a name a block owns.\n\nDefines the theme `name` — its token overrides for `light` and for\n`dark`, each a map from a token (`--accent`, or `accent`) to its\nvalue, replacing whatever it overrode before (THEME-8: a theme is a\nname and a map over today's tokens; `default` overrides nothing and\ncannot be defined). A token not in the contract, or a value that\ncould escape its declaration, is refused, naming each; nothing is\nkept. Yields exactly one event: `theme`, as kept — or an in-band\n`error`. `watch` carries it too. Under login: an editor on `*`.",
+     "name": "define",
+     "params": {
+      "$defs": {
+       "Takeover": {
+        "description": "Whether a level takes the themes from above (any case; true/yes, false/no too)",
+        "enum": [
+         "on",
+         "off"
+        ],
+        "type": "string"
+       },
+       "ThemeName": {
+        "description": "THEME-8: a theme's name — lower case letters, digits and `-`,\nstarting with a letter, at most 40 (`ocean`): [`crate::themes::name_of`].",
+        "type": "string"
+       },
+       "ThemeReach": {
+        "description": "How far a theme's adoption reaches (any case)",
+        "enum": [
+         "frame",
+         "ticket",
+         "site"
+        ],
+        "type": "string"
+       },
+       "ThemeScope": {
+        "description": "THEME-4: where a theme is adopted — `site`, or a shortcode by any\nname [`ShortcodeRef`] takes.",
+        "type": "string"
+       },
+       "TicketRef": {
+        "description": "A ticket as a call names it (ORG-3): its key (`MNG-1`, a namesake's\n`THEME.62-3`), any short form of its address (`MENGER/THEME-3`,\n`hypermemetic:THEME-3`) or a path address (`PLEXUS/_MENGER/board`),\nits codes folded to upper case — `mng-1` is `MNG-1`. The store\nresolves it to the one ticket it names in the caller's reach.",
+        "type": "string"
+       },
+       "TokenValue": {
+        "description": "THEME-8: what a theme sets a token to (`#00796b`) — not blank, at\nmost 200 bytes, nothing that could end its declaration:\n[`crate::themes::value_ok`].",
+        "type": "string"
+       }
+      },
+      "properties": {
+       "dark": {
+        "additionalProperties": {
+         "$ref": "#/$defs/TokenValue"
+        },
+        "default": null,
+        "description": "Token overrides in dark (optional; a face set for light holds in dark too)",
+        "type": [
+         "object",
+         "null"
+        ]
+       },
+       "light": {
+        "additionalProperties": {
+         "$ref": "#/$defs/TokenValue"
+        },
+        "default": null,
+        "description": "Token overrides in light, e.g. {\"--accent\": \"#0a7\"} (optional)",
+        "type": [
+         "object",
+         "null"
+        ]
+       },
+       "name": {
+        "$ref": "#/$defs/ThemeName",
+        "description": "The theme's name: lowercase letters, digits and -, e.g. ocean"
+       }
+      },
+      "required": [
+       "name"
+      ],
+      "type": "object"
+     },
+     "returns": {
+      "$defs": {
+       "Levels": {
+        "description": "Everything the levels say for one ticket, the reader aside — what\n[`resolve`] decides from.",
+        "properties": {
+         "frame": {
+          "$ref": "#/$defs/Said",
+          "description": "What it says of its frame alone."
+         },
+         "shortcode": {
+          "anyOf": [
+           {
+            "$ref": "#/$defs/ThemeSetting"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "The nearest shortcode that says anything — the ticket's own, else\nthe nearest hosting it (THEME-4) — and what it says."
+         },
+         "site": {
+          "description": "The site's theme (`None`: default).",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "ticket": {
+          "$ref": "#/$defs/Said",
+          "description": "What the ticket's frontmatter says of its view."
+         }
+        },
+        "required": [
+         "ticket",
+         "frame"
+        ],
+        "type": "object"
+       },
+       "Regions": {
+        "description": "Who wears what: the site, the ticket view, the frame.",
+        "properties": {
+         "frame": {
+          "$ref": "#/$defs/Worn"
+         },
+         "site": {
+          "$ref": "#/$defs/Worn"
+         },
+         "ticket": {
+          "$ref": "#/$defs/Worn"
+         }
+        },
+        "required": [
+         "site",
+         "ticket",
+         "frame"
+        ],
+        "type": "object"
+       },
+       "Said": {
+        "description": "What one level says.",
+        "properties": {
+         "reach": {
+          "$ref": "#/$defs/ThemeReach"
+         },
+         "takeover": {
+          "$ref": "#/$defs/Takeover"
+         },
+         "theme": {
+          "description": "The theme it adopts, if any.",
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "reach",
+         "takeover"
+        ],
+        "type": "object"
+       },
+       "Takeover": {
+        "description": "Whether a level takes the themes from above (any case; true/yes, false/no too)",
+        "enum": [
+         "on",
+         "off"
+        ],
+        "type": "string"
+       },
+       "Theme": {
+        "description": "A theme as the server keeps it: its name and its overrides, by token\nname (`--accent`), for light and for dark — what it says itself; the\nrest comes from the theme it `extends` ([`flatten`]). THEME-3: a theme\nis a ticket's ` ```theme ` block ([`crate::theme_block`]), owned as a\ncomponent is (COMP-3's rules).",
+        "properties": {
+         "dark": {
+          "additionalProperties": {
+           "type": "string"
+          },
+          "type": "object"
+         },
+         "extends": {
+          "description": "THEME-3: the theme it states its differences from (`None`: `default`).",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "imports": {
+          "description": "THEME-3: the https stylesheets it imports (a font's).",
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "light": {
+          "additionalProperties": {
+           "type": "string"
+          },
+          "type": "object"
+         },
+         "name": {
+          "type": "string"
+         },
+         "orphan": {
+          "default": false,
+          "description": "THEME-3: its block is gone from its owner's body; it is kept,\nread-only, while something uses it (a setting, a ticket's\nfrontmatter, a live theme extending it), and a block naming it adopts it.",
+          "type": "boolean"
+         },
+         "owner": {
+          "description": "THEME-3: the ticket whose body's block defines it — `None` for one\n`themes.define` made, or an orphan.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "rules": {
+          "description": "THEME-3: its `@font-face` and `m-*::part(…)` rules, as validated.",
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "updated_unix": {
+          "description": "When it was last defined, unix seconds (0 for `default`).",
+          "format": "int64",
+          "type": "integer"
+         }
+        },
+        "required": [
+         "name",
+         "light",
+         "dark",
+         "updated_unix"
+        ],
+        "type": "object"
+       },
+       "ThemeLevel": {
+        "description": "The level a region's theme came from.",
+        "oneOf": [
+         {
+          "enum": [
+           "reader",
+           "site",
+           "shortcode",
+           "ticket",
+           "frame"
+          ],
+          "type": "string"
+         },
+         {
+          "const": "none",
+          "description": "Nothing says anything: `default`.",
+          "type": "string"
+         }
+        ]
+       },
+       "ThemeReach": {
+        "description": "How far a theme's adoption reaches (any case)",
+        "enum": [
+         "frame",
+         "ticket",
+         "site"
+        ],
+        "type": "string"
+       },
+       "ThemeSetting": {
+        "description": "What the site or a shortcode says, as `themes.set` keeps it.",
+        "properties": {
+         "reach": {
+          "$ref": "#/$defs/ThemeReach"
+         },
+         "scope": {
+          "description": "`site`, or a shortcode (upper case).",
+          "type": "string"
+         },
+         "takeover": {
+          "$ref": "#/$defs/Takeover"
+         },
+         "theme": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "scope",
+         "reach",
+         "takeover"
+        ],
+        "type": "object"
+       },
+       "WatchEnd": {
+        "description": "ACCESS-12: why an open watch ended — its caller verified again when the\ngrants moved (or its sign-in ended), and refused. Every watch (`tickets`,\n`comments`, `themes`, `deployments`) ends with one `watch_closed { reason,\nmessage }` and nothing after it.",
+        "oneOf": [
+         {
+          "const": "signed_out",
+          "description": "Its session was signed out.",
+          "type": "string"
+         },
+         {
+          "const": "expired",
+          "description": "Its sign-in's expiry passed.",
+          "type": "string"
+         },
+         {
+          "const": "revoked",
+          "description": "Its grants changed: it holds the watch's grant nowhere any more, or\nwhat it holds reaches nothing.",
+          "type": "string"
+         },
+         {
+          "const": "refused",
+          "description": "Verified again, it was refused for another reason (named in `message`).",
+          "type": "string"
+         }
+        ]
+       },
+       "Worn": {
+        "description": "What a region wears, and the level it came from.",
+        "properties": {
+         "from": {
+          "description": "The shortcode, for a shortcode's theme.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "level": {
+          "$ref": "#/$defs/ThemeLevel"
+         },
+         "theme": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "theme",
+         "level"
+        ],
+        "type": "object"
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "What the `themes` activation streams. Every method returns\n`impl Stream<Item = ThemesEvent>`; a refusal is the in-band `Error`.",
+      "oneOf": [
+       {
+        "description": "A theme, as it is now (`define`, `get`, `list`).",
+        "properties": {
+         "theme": {
+          "$ref": "#/$defs/Theme"
+         },
+         "type": {
+          "const": "theme",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "theme"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "THEME-3 (`watch`): a theme defined, its block written or amended,\norphaned or adopted — as it is now.",
+        "properties": {
+         "theme": {
+          "$ref": "#/$defs/Theme"
+         },
+         "type": {
+          "const": "theme_changed",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "theme"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "THEME-3 (`watch`): a theme left the registry — an orphan nothing\nuses any more.",
+        "properties": {
+         "name": {
+          "type": "string"
+         },
+         "type": {
+          "const": "theme_removed",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "name"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "What the site or a shortcode says, as it is now (`set`, `list`;\n`watch` when it moves). Saying nothing — no theme, takeover on — is\nthe setting cleared.",
+        "properties": {
+         "setting": {
+          "$ref": "#/$defs/ThemeSetting"
+         },
+         "type": {
+          "const": "setting",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "setting"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`theme_for`'s answer: each region's theme and the level it came\nfrom, and what every level said.",
+        "properties": {
+         "id": {
+          "type": "string"
+         },
+         "levels": {
+          "$ref": "#/$defs/Levels"
+         },
+         "regions": {
+          "$ref": "#/$defs/Regions"
+         },
+         "type": {
+          "const": "regions",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "id",
+         "regions",
+         "levels"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "A slow `watch` lost `missed` changes: `list` again.",
+        "properties": {
+         "missed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+         },
+         "type": {
+          "const": "lagged",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "missed"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "ACCESS-12 (`watch`): the watch ended — its caller, verified again\nwhen the grants moved or its sign-in ended, was refused. Last.",
+        "properties": {
+         "message": {
+          "type": "string"
+         },
+         "reason": {
+          "$ref": "#/$defs/WatchEnd"
+         },
+         "type": {
+          "const": "watch_closed",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "reason",
+         "message"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "In-band refusal, naming the problem; nothing was written.",
+        "properties": {
+         "message": {
+          "type": "string"
+         },
+         "type": {
+          "const": "error",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "message"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "ThemesEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     },
+     "streaming": false
+    },
+    {
+     "description": "get",
+     "hash": "get0",
+     "name": "get",
+     "returns": {
+      "$defs": {
+       "Theme": {
+        "description": "A theme as the server keeps it: its name and its overrides, by token\nname (`--accent`), for light and for dark — what it says itself; the\nrest comes from the theme it `extends` ([`flatten`]). THEME-3: a theme\nis a ticket's ` ```theme ` block ([`crate::theme_block`]), owned as a\ncomponent is (COMP-3's rules).",
+        "properties": {
+         "dark": {
+          "additionalProperties": {
+           "type": "string"
+          },
+          "type": "object"
+         },
+         "extends": {
+          "description": "THEME-3: the theme it states its differences from (`None`: `default`).",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "imports": {
+          "description": "THEME-3: the https stylesheets it imports (a font's).",
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "light": {
+          "additionalProperties": {
+           "type": "string"
+          },
+          "type": "object"
+         },
+         "name": {
+          "type": "string"
+         },
+         "orphan": {
+          "default": false,
+          "description": "THEME-3: its block is gone from its owner's body; it is kept,\nread-only, while something uses it (a setting, a ticket's\nfrontmatter, a live theme extending it), and a block naming it adopts it.",
+          "type": "boolean"
+         },
+         "owner": {
+          "description": "THEME-3: the ticket whose body's block defines it — `None` for one\n`themes.define` made, or an orphan.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "rules": {
+          "description": "THEME-3: its `@font-face` and `m-*::part(…)` rules, as validated.",
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "updated_unix": {
+          "description": "When it was last defined, unix seconds (0 for `default`).",
+          "format": "int64",
+          "type": "integer"
+         }
+        },
+        "required": [
+         "name",
+         "light",
+         "dark",
+         "updated_unix"
+        ],
+        "type": "object"
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "theme": {
+          "$ref": "#/$defs/Theme"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "theme"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "ThemesEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "themes",
+   "version": "1.0.0"
+  }
+ }
+]

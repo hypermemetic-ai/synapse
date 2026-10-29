@@ -186,7 +186,11 @@ renderMethodPage MethodPage{..} ir md = T.unlines (dropTrailing body)
     (callerParams, serverParams) =
       ( [p | p <- params, not (serverSourced p)]
       , [p | p <- params, serverSourced p] )
-    params = sortOn (not . pdRequired) (mdParams md)
+    -- SYNAPSE-CC-8: what the server injects is in mdInjected, shown as before
+    params = sortOn (not . pdRequired) (mdParams md ++ map injectedRow (mdInjected md))
+    injectedRow ip = ParamDef
+      { pdName = ipName ip, pdType = RefUnknown, pdDescription = ipDescription ip, pdRequired = False
+      , pdDefault = Nothing, pdDeprecation = Nothing, pdSource = Just (ipSource ip), pdValues = Nothing }
     required = [p | p <- callerParams, pdRequired p]
     optional = [p | p <- callerParams, not (pdRequired p)]
 
@@ -537,9 +541,20 @@ renderTypeRef ir = \case
 
   RefOptional inner -> renderTypeRef ir inner <> "?"
 
-  RefAny -> "any"
+  RefJson -> "any"
 
   RefUnknown -> "unknown"
+
+  -- SYNAPSE-CC-8: help says what it said of these under IR 2.0 (a map was
+  -- an object, a tuple an array of any, a child's return unknown), so every
+  -- help page is unchanged
+  RefMap _ -> "object"
+
+  RefTuple _ -> "any[]"
+
+  RefRefined inner _ -> renderTypeRef ir inner
+
+  RefChild _ -> "unknown"
 
 -- | Expand a type into CLI flag examples
 --
@@ -570,9 +585,12 @@ expandNamedType ir prefix typeName =
 expandTypeDef :: IR -> Text -> TypeDef -> [Text]
 expandTypeDef ir prefix TypeDef{..} = case tdKind of
   -- Discriminated union: show each variant
-  KindEnum discriminator variants
+  KindEnum discriminator variants Internal
     | length variants > 1 -> expandEnum ir prefix discriminator variants
     | otherwise -> []
+
+  -- SYNAPSE-CC-8: an external or untagged union has no flag form
+  KindEnum {} -> []
 
   -- Struct: could expand fields, but typically too verbose
   KindStruct _fields -> []
@@ -619,7 +637,7 @@ getStringEnumValues :: IR -> TypeRef -> Maybe [Text]
 getStringEnumValues ir (RefNamed qn) =
   let name = qualifiedNameFull qn
   in case Map.lookup name (irTypes ir) of
-    Just TypeDef{tdKind = KindEnum "value" variants} ->
+    Just TypeDef{tdKind = KindEnum "value" variants _} ->
       Just $ map vdName variants
     _ -> Nothing
 getStringEnumValues _ _ = Nothing

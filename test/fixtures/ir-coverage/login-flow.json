@@ -1,0 +1,580 @@
+[
+ {
+  "path": [
+   "auth"
+  ],
+  "schema": {
+   "description": "auth (fixture)",
+   "hash": "auth0",
+   "methods": [
+    {
+     "bidirectional": false,
+     "description": "Sign in — a person through the browser, an agent with its key",
+     "grant": "auth.login",
+     "group": "sign in",
+     "hash": "4899b182520d5d8f",
+     "http_method": "POST",
+     "long_description": "Sign in — a person through the browser (`{browser: {redirect}}`,\nthen `{code: {code, state}}`), a password, or an agent's session on\na key-proved connection (`{session: {ttl_secs, ceiling}}`).",
+     "name": "login",
+     "params": {
+      "$defs": {
+       "GrantName": {
+        "description": "One entry of a role's grants: a grant (`tickets.get`) or a role\nwhose grants it includes (`viewer`). No `@`, no whitespace.",
+        "type": "string"
+       },
+       "LoginFlow": {
+        "description": "How a caller signs in (`auth.login {flow: …}`). On the wire, externally\ntagged: `{\"browser\": {\"redirect\": …}}`, `{\"code\": {\"code\", \"state\"}}`,\n`{\"password\": {\"username\", \"password\"}}`, `{\"session\": {\"ttl_secs\",\n\"ceiling\"}}`.",
+        "oneOf": [
+         {
+          "additionalProperties": false,
+          "description": "A person, from a client with a browser: answered with the URL to\nopen (`login_url {url, state}`); the browser comes back to\n`redirect` (a loopback address the client listens on) with a\none-time code.",
+          "properties": {
+           "browser": {
+            "properties": {
+             "redirect": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "redirect"
+            ],
+            "type": "object"
+           }
+          },
+          "required": [
+           "browser"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "description": "The browser came back: trade the code for a session. Single-use,\nbound to the state.",
+          "properties": {
+           "code": {
+            "properties": {
+             "code": {
+              "type": "string"
+             },
+             "state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "code",
+             "state"
+            ],
+            "type": "object"
+           }
+          },
+          "required": [
+           "code"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "description": "Where a provider takes a password.",
+          "properties": {
+           "password": {
+            "properties": {
+             "password": {
+              "type": "string"
+             },
+             "username": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "username",
+             "password"
+            ],
+            "type": "object"
+           }
+          },
+          "required": [
+           "password"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "description": "A session on a connection that is already someone — a key proof at\nthe upgrade (IDENTITY-40), or a session — bounded by `ceiling`\n(`role@SCOPE` / `grant@SCOPE` entries) and lasting `ttl_secs`.",
+          "properties": {
+           "session": {
+            "properties": {
+             "ceiling": {
+              "default": null,
+              "items": {
+               "type": "string"
+              },
+              "type": [
+               "array",
+               "null"
+              ]
+             },
+             "ttl_secs": {
+              "default": null,
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+               "integer",
+               "null"
+              ]
+             }
+            },
+            "type": "object"
+           }
+          },
+          "required": [
+           "session"
+          ],
+          "type": "object"
+         }
+        ]
+       },
+       "MethodPath": {
+        "description": "A method, as `<activation>.<method>` — `tickets.set_status`. Two\nor more dot-separated segments, none empty, no whitespace.",
+        "type": "string"
+       },
+       "Principal": {
+        "description": "A Plexus principal: `key:<hex>`, `oidc:<issuer>/<subject>`,\n`idp:<subject>`, … — the identity layer's grammar, checked here;\n[`Principal::principal`] is the parsed value.",
+        "type": "string"
+       },
+       "ProviderName": {
+        "description": "A sign-in provider's name, as `auth.providers` lists it\n(`workos`, `plexus-idp`). One word.",
+        "type": "string"
+       },
+       "RoleName": {
+        "description": "A role's name — `editor`. One word: no `.` (that is a grant), no\n`@` (that is a ceiling entry), no whitespace.",
+        "type": "string"
+       },
+       "ScopeName": {
+        "description": "Where a role is held: a scope name (`MENGER`) or `*`, everywhere.\nWhat a name means is the service's; it is not blank.",
+        "type": "string"
+       }
+      },
+      "properties": {
+       "flow": {
+        "$ref": "#/$defs/LoginFlow",
+        "description": "browser {redirect} | code {code, state} | password {username, password} | session {ttl_secs?, ceiling?}"
+       }
+      },
+      "required": [
+       "flow"
+      ],
+      "type": "object"
+     },
+     "public": true,
+     "returns": {
+      "$defs": {
+       "MembershipEntry": {
+        "description": "A membership as `whoami` says it.",
+        "properties": {
+         "role": {
+          "type": "string"
+         },
+         "scope": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "role",
+         "scope"
+        ],
+        "type": "object"
+       },
+       "ProviderKind": {
+        "description": "How a provider signs someone in.",
+        "oneOf": [
+         {
+          "const": "browser",
+          "description": "A person, through the browser (OIDC, WorkOS, …): `login {flow:\n{browser}}` then `{code}`.",
+          "type": "string"
+         },
+         {
+          "const": "password",
+          "description": "A username and password (`login {flow: {password}}`).",
+          "type": "string"
+         },
+         {
+          "const": "key",
+          "description": "An agent's key: a proof at the upgrade, then `login {flow: {session}}`.",
+          "type": "string"
+         }
+        ]
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "Every event the `auth` activation sends (`{\"type\": …}`).",
+      "oneOf": [
+       {
+        "description": "`providers`: one way in.",
+        "properties": {
+         "kind": {
+          "$ref": "#/$defs/ProviderKind"
+         },
+         "label": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "name": {
+          "type": "string"
+         },
+         "type": {
+          "const": "provider",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "name",
+         "kind"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`login {browser}` / `signup`: open this URL.",
+        "properties": {
+         "state": {
+          "type": "string"
+         },
+         "type": {
+          "const": "login_url",
+          "type": "string"
+         },
+         "url": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "url",
+         "state"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`login`: signed in.",
+        "properties": {
+         "agent": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "ceiling": {
+          "default": [],
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "expires_at": {
+          "format": "int64",
+          "type": "integer"
+         },
+         "name": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "principal": {
+          "type": "string"
+         },
+         "token": {
+          "type": "string"
+         },
+         "type": {
+          "const": "session",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "token",
+         "principal",
+         "expires_at"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`signup` (asking for access) / `waiting` (an admin's list).",
+        "properties": {
+         "name": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "principal": {
+          "type": "string"
+         },
+         "provider": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "since": {
+          "format": "int64",
+          "type": "integer"
+         },
+         "type": {
+          "const": "waiting",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "principal",
+         "since"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`whoami`.",
+        "properties": {
+         "agent": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "ceiling": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "memberships": {
+          "items": {
+           "$ref": "#/$defs/MembershipEntry"
+          },
+          "type": "array"
+         },
+         "name": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "principal": {
+          "type": "string"
+         },
+         "type": {
+          "const": "whoami",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "principal",
+         "memberships",
+         "ceiling"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`logout`.",
+        "properties": {
+         "principal": {
+          "type": "string"
+         },
+         "type": {
+          "const": "logged_out",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "principal"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`requires {method}`: its grant, its target, the roles that list it.",
+        "properties": {
+         "grant": {
+          "type": "string"
+         },
+         "method": {
+          "type": "string"
+         },
+         "public": {
+          "type": "boolean"
+         },
+         "roles": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "target": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "type": {
+          "const": "requires",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "method",
+         "grant",
+         "roles"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`roles` / `role_set`: a role and its grants (`all`: every grant —\nadmin).",
+        "properties": {
+         "all": {
+          "type": "boolean"
+         },
+         "grants": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "role": {
+          "type": "string"
+         },
+         "type": {
+          "const": "role",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "role",
+         "grants"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`grant`.",
+        "properties": {
+         "principal": {
+          "type": "string"
+         },
+         "role": {
+          "type": "string"
+         },
+         "scope": {
+          "type": "string"
+         },
+         "type": {
+          "const": "granted",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "principal",
+         "role",
+         "scope"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "`revoke`: the roles it removed there.",
+        "properties": {
+         "principal": {
+          "type": "string"
+         },
+         "roles": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "scope": {
+          "type": "string"
+         },
+         "type": {
+          "const": "revoked",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "principal",
+         "scope",
+         "roles"
+        ],
+        "type": "object"
+       },
+       {
+        "description": "Anything refused or failed. A refusal (`error_kind: \"forbidden\"`)\ncarries AUTH-2's fields.",
+        "properties": {
+         "error_kind": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "grant": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "held_on": {
+          "items": {
+           "type": "string"
+          },
+          "type": [
+           "array",
+           "null"
+          ]
+         },
+         "message": {
+          "type": "string"
+         },
+         "roles": {
+          "items": {
+           "type": "string"
+          },
+          "type": [
+           "array",
+           "null"
+          ]
+         },
+         "scope": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "type": {
+          "const": "error",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "message"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "AuthEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     },
+     "streaming": false
+    }
+   ],
+   "namespace": "auth",
+   "version": "1.0.0"
+  }
+ }
+]

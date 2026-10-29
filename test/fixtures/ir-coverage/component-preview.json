@@ -1,0 +1,293 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "components",
+     "hash": "components0",
+     "name": "components",
+     "returns": {
+      "$defs": {
+       "AttrDoc": {
+        "description": "COMP-8: one declared attribute — `<attr name=\"board\" type=\"shortcode\"\nrequired>The shortcode to count.</attr>`. `name` is lowercased (HTML\nfolds attribute names); `kind` is the `type` (`string` when omitted);\n`required` is whether the `required` attribute is present;\n`description` the element's text, as [`ComponentDocs::summary`] is.",
+        "properties": {
+         "description": {
+          "type": "string"
+         },
+         "kind": {
+          "$ref": "#/$defs/AttrKind"
+         },
+         "name": {
+          "type": "string"
+         },
+         "required": {
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "name",
+         "kind",
+         "required",
+         "description"
+        ],
+        "type": "object"
+       },
+       "AttrKind": {
+        "description": "COMP-8: what an attribute's value must be — an `<attr type=…>`, written\n`string` (the default), `number`, `boolean`, `shortcode` (an existing\nshortcode, e.g. `RETURNS`), `ticket` (an existing ticket id) or\n`enum(a|b|c)` (one of those words). Internally tagged on the wire, as\n[`Placement`] is: `{\"type\": \"shortcode\"}`, `{\"type\": \"enum\", \"values\":\n[\"a\", \"b\"]}`. [`FromStr`] reads the written form and [`fmt::Display`]\nwrites it back.",
+        "oneOf": [
+         {
+          "properties": {
+           "type": {
+            "const": "string",
+            "type": "string"
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "type": "object"
+         },
+         {
+          "properties": {
+           "type": {
+            "const": "number",
+            "type": "string"
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "type": "object"
+         },
+         {
+          "properties": {
+           "type": {
+            "const": "boolean",
+            "type": "string"
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "type": "object"
+         },
+         {
+          "properties": {
+           "type": {
+            "const": "shortcode",
+            "type": "string"
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "type": "object"
+         },
+         {
+          "properties": {
+           "type": {
+            "const": "ticket",
+            "type": "string"
+           }
+          },
+          "required": [
+           "type"
+          ],
+          "type": "object"
+         },
+         {
+          "properties": {
+           "type": {
+            "const": "enum",
+            "type": "string"
+           },
+           "values": {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           }
+          },
+          "required": [
+           "type",
+           "values"
+          ],
+          "type": "object"
+         }
+        ]
+       },
+       "Component": {
+        "description": "COMP-3: one entry of the **component registry** — a custom element some\nticket defined in a ` ```component <name> ` block (COMP-1 decisions 2, 3,\npins 6–8), as the server keeps it.\n\n- `name` — the tag: a custom element's name, lowercase, with a hyphen\n  (`m-wave-summary`).\n- `source` — the block's content, exactly as written between its fences\n  (a `<template>`, an optional `<style>`, an optional `<script>`).\n- `owner` — the ticket whose body defines it; `null` for an **orphan**: a\n  component whose definition left its ticket while something still\n  references it. An orphan is read-only; a ticket that defines its name\n  again **adopts** it.\n- `references` — what uses it: each ticket whose body holds `<name` as an\n  HTML tag (outside code spans and fences, once per ticket), in the\n  store's `(epic, seq)` order, then each component whose source holds it,\n  by name.\n\n- `docs` (COMP-8) — the source's `<docs>` element, parsed\n  ([`ComponentDocs`]); `null` when the source holds none.\n- `preview` (COMP-8) — the attributes written after the tag on the\n  block's opening line (` ```component m-x board=RETURNS label=\"Platform\" `),\n  `[name, value]` in the order written; a value may be double-quoted, and\n  a bare name's value is `\"\"`. What a live preview of the definition is\n  rendered with.\n\nUnlike [`Ticket`], `owner` and `docs` are written out as `null` rather\nthan skipped: every component has the same keys, and `null` is what\n\"orphan\" (or \"no docs yet\") looks like.",
+        "properties": {
+         "docs": {
+          "anyOf": [
+           {
+            "$ref": "#/$defs/ComponentDocs"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "name": {
+          "type": "string"
+         },
+         "owner": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "preview": {
+          "items": {
+           "maxItems": 2,
+           "minItems": 2,
+           "prefixItems": [
+            {
+             "type": "string"
+            },
+            {
+             "type": "string"
+            }
+           ],
+           "type": "array"
+          },
+          "type": "array"
+         },
+         "references": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "source": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "name",
+         "source",
+         "references",
+         "preview"
+        ],
+        "type": "object"
+       },
+       "ComponentDocs": {
+        "description": "COMP-8: a component's help — its source's one `<docs>` element, parsed.\n\n```html\n<docs>\n  <summary>How many of a board's tickets are workable now.</summary>\n  <attr name=\"board\" type=\"shortcode\" required>The shortcode to count.</attr>\n  <slot name=\"title\">Optional title markup.</slot>\n  <example><m-wave-summary board=\"RETURNS\"></m-wave-summary></example>\n  Longer help, as markdown prose.\n</docs>\n```\n\n- `summary` — the `<summary>`'s text, tags dropped, whitespace collapsed,\n  trimmed (`\"\"` when there is none).\n- `attrs` — one [`AttrDoc`] per `<attr>`, in the order written.\n- `slots` — one [`SlotDoc`] per `<slot>`, in the order written.\n- `parts` — THEME-5: one [`PartDoc`] per `<part>`, in the order written:\n  what a theme may skin with `m-name::part(name)`. Each names a `part`\n  the component's `<template>` carries (or, marked `scripted`, one its\n  script makes) — a documented part the template lacks is refused.\n- `examples` — each `<example>`'s inner HTML as written, its common\n  indentation and the blank lines around it removed.\n- `help` — everything else inside `<docs>`, as markdown: the lines the\n  elements above stood on removed, the rest de-indented and trimmed.",
+        "properties": {
+         "attrs": {
+          "items": {
+           "$ref": "#/$defs/AttrDoc"
+          },
+          "type": "array"
+         },
+         "examples": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "help": {
+          "type": "string"
+         },
+         "parts": {
+          "default": [],
+          "items": {
+           "$ref": "#/$defs/PartDoc"
+          },
+          "type": "array"
+         },
+         "slots": {
+          "items": {
+           "$ref": "#/$defs/SlotDoc"
+          },
+          "type": "array"
+         },
+         "summary": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "summary",
+         "attrs",
+         "slots",
+         "examples",
+         "help"
+        ],
+        "type": "object"
+       },
+       "PartDoc": {
+        "description": "THEME-5: one declared part — `<part name=\"label\">The field's\nlabel.</part>` — a piece of the component's shadow tree that a theme may\nskin with `m-name::part(label)` (looks only, THEME-1's `skins`).\n`scripted`: the component's script makes it (`el.part = …`), so the\ntemplate is not asked for it.",
+        "properties": {
+         "description": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "scripted": {
+          "default": false,
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "name",
+         "description"
+        ],
+        "type": "object"
+       },
+       "SlotDoc": {
+        "description": "COMP-8: one declared slot — `<slot name=\"title\">Optional title\nmarkup.</slot>`; `name` is `null` for the default slot.",
+        "properties": {
+         "description": {
+          "type": "string"
+         },
+         "name": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "description"
+        ],
+        "type": "object"
+       }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+       {
+        "properties": {
+         "component": {
+          "$ref": "#/$defs/Component"
+         },
+         "type": {
+          "const": "got",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "component"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]

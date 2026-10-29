@@ -5,7 +5,8 @@
 -- The gzipped fixture is decoded once; then the IR is built @N@ times
 -- (default 20) from the in-memory schemas — 'buildIR''s fold, no network —
 -- and each build is forced by encoding it. Prints the median and p90 per
--- build and the bytes allocated per build, for the whole tree (7.1 MB of
+-- build, the CPU time per build (every thread) and the bytes allocated
+-- per build, for the whole tree (7.1 MB of
 -- schema) and for @tickets@ alone (its 2.68 MB schema and its children).
 --
 -- > cabal bench ir-bench                       # 20 runs
@@ -21,6 +22,7 @@ import Data.List (sort)
 import GHC.Clock (getMonotonicTime)
 import GHC.Stats (getRTSStats, getRTSStatsEnabled, RTSStats(..))
 import System.Environment (getArgs)
+import System.CPUTime (getCPUTime)
 import System.Mem (performMajorGC)
 import Text.Printf (printf)
 
@@ -48,17 +50,20 @@ bench env n label path = do
   stats <- getRTSStatsEnabled
   performMajorGC
   a0 <- if stats then allocated_bytes <$> getRTSStats else pure 0
+  c0 <- getCPUTime
   times <- forM [1 .. n] $ \_ -> do
     t0 <- getMonotonicTime
     _ <- buildOnce
     t1 <- getMonotonicTime
     pure (t1 - t0)
+  c1 <- getCPUTime
   a1 <- if stats then allocated_bytes <$> getRTSStats else pure 0
+  let cpuMs = fromIntegral (c1 - c0) / 1e9 / fromIntegral n :: Double
   let sorted = sort times
       at q = sorted !! min (n - 1) (floor (q * fromIntegral n :: Double))
       perBuild = fromIntegral (a1 - a0) / fromIntegral n / (1024 * 1024) :: Double
-  printf "%s median %7.1f ms  p90 %7.1f ms  min %7.1f ms  alloc %8.1f MB/build\n"
-    label (1000 * at 0.5) (1000 * at 0.9) (1000 * head sorted) perBuild
+  printf "%s median %7.1f ms  p90 %7.1f ms  min %7.1f ms  cpu %7.1f ms  alloc %8.1f MB/build\n"
+    label (1000 * at 0.5) (1000 * at 0.9) (1000 * head sorted) cpuMs perBuild
   when (not stats) $ putStrLn "  (allocation: run with +RTS -T)"
   where
     buildOnce = buildFixtureIR env path >>= evaluate . BL.length . encode

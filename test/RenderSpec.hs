@@ -35,7 +35,7 @@ method name desc params = MethodSchema
   , methodRequestType = Nothing, methodResponseType = Nothing, methodDeprecation = Nothing
   , methodParamSchemas = Nothing, methodRole = MethodRoleRpc
   , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False
-  , methodGroup = Nothing, methodExamples = [] }
+  , methodGroup = Nothing, methodExamples = [], methodInput = Nothing }
 
 grouped :: Text -> MethodSchema -> MethodSchema
 grouped g m = m { methodGroup = Just g }

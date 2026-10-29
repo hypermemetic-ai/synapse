@@ -1,0 +1,62 @@
+[
+ {
+  "path": [
+   "tickets"
+  ],
+  "schema": {
+   "description": "tickets (fixture)",
+   "hash": "tickets0",
+   "methods": [
+    {
+     "description": "page",
+     "hash": "p0",
+     "name": "page",
+     "returns": {
+      "oneOf": [
+       {
+        "properties": {
+         "limit": {
+          "default": 1000,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+         },
+         "type": {
+          "const": "page",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type"
+        ],
+        "type": "object"
+       },
+       {
+        "properties": {
+         "message": {
+          "type": "string"
+         },
+         "type": {
+          "const": "error",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "message"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    }
+   ],
+   "namespace": "tickets",
+   "version": "1.0.0"
+  }
+ }
+]
