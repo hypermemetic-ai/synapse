@@ -5,15 +5,15 @@
 --
 -- * The multiplexer: every call of a process on one connection, in
 --   sequence and twenty at once; a stream it abandons is unsubscribed.
--- * The holder: runs hand it their requests; however many, the hub sees
+-- * The holder: runs hand it their requests; however many, the service sees
 --   one connection; a run that goes away mid-stream ends its call; the
 --   holder exits when idle and removes its socket.
--- * The CLI, end to end against the mock hub (the built synapse, with a
+-- * The CLI, end to end against the mock service (the built synapse, with a
 --   home, a cache and a runtime directory of the test's own): a cold call
 --   answers and fills the cache, on one connection; a warm call opens no
 --   connection, probes nothing and fetches no schema; @--no-hold@ opens
---   exactly one; a method the hub renamed falls back to the probe and the
---   fetch, then answers; a method the hub no longer has is refused after
+--   exactly one; a method the service renamed falls back to the probe and the
+--   fetch, then answers; a method the service no longer has is refused after
 --   the fallback, as it always was.
 module Main (main) where
 
@@ -38,16 +38,16 @@ import Plexus.Client (SubstrateConfig(..), LostConnection(..), defaultConfig)
 import Plexus.Types (PlexusStreamItem(..))
 import qualified Synapse.Hold as Hold
 
-import MockHub
+import MockService
 
 main :: IO ()
 main = hspec $ do
   describe "the multiplexer" $ do
     it "carries every call of a process on one connection, in sequence and twenty at once" $
-      withMockHub todaysHub $ \port -> do
+      withMockService todaysService $ \port -> do
         before <- readIORef connectionsAccepted
         mux <- Hold.newMux
-        let cfg = hubAt port
+        let cfg = serviceAt port
         replicateM_ 5 $ do
           items <- collect (Hold.muxCall mux cfg) "menger.call" (getTicket "MENGER-12")
           items `shouldSatisfy` any isTicket
@@ -58,10 +58,10 @@ main = hspec $ do
         Hold.muxConnections mux `shouldReturn` 1
 
     it "asks a schema once however many wait for it, and gives each the answer" $
-      withMockHub todaysHub $ \port -> do
+      withMockService todaysService $ \port -> do
         mux <- Hold.newMux
         s0 <- readIORef schemaCalls
-        rs <- mapConcurrently (\_ -> collect (Hold.muxCall mux (hubAt port)) "menger.call"
+        rs <- mapConcurrently (\_ -> collect (Hold.muxCall mux (serviceAt port)) "menger.call"
                 (Object (KM.fromList [("method", String "tickets.schema")]))) [1 .. 20 :: Int]
         s1 <- readIORef schemaCalls
         (s1 - s0) `shouldSatisfy` (< 20)
@@ -69,11 +69,11 @@ main = hspec $ do
         all (any isSchema) rs `shouldBe` True
 
     it "unsubscribes a stream it abandons" $
-      withMockHub todaysHub $ \port -> do
+      withMockService todaysService $ \port -> do
         writeIORef unsubscribes []
         mux <- Hold.newMux
         got <- newEmptyFlag
-        a <- async $ Hold.muxCall mux (hubAt port) (pure ()) "menger.call" (watch) (\_ -> setFlag got)
+        a <- async $ Hold.muxCall mux (serviceAt port) (pure ()) "menger.call" (watch) (\_ -> setFlag got)
         waitFlag got
         cancel a
         threadDelay 200000
@@ -82,36 +82,36 @@ main = hspec $ do
 
   describe "the holder" $ do
     it "serves many runs' requests on one connection" $
-      withSystemTempDirectory "hold" $ \dir -> withMockHub todaysHub $ \port -> do
+      withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         let sock = dir </> "h.sock"
         _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
         before <- readIORef connectionsAccepted
-        let call = collect (Hold.holderCall sock (hubAt port)) "menger.call" (getTicket "MENGER-12")
+        let call = collect (Hold.holderCall sock (serviceAt port)) "menger.call" (getTicket "MENGER-12")
         replicateM_ 3 (call >>= (`shouldSatisfy` any isTicket))
         rs <- mapConcurrently (const call) [1 .. 20 :: Int]
         all (any isTicket) rs `shouldBe` True
         after <- readIORef connectionsAccepted
         (after - before) `shouldBe` 1
 
-    it "relays each item as the hub sent it, and the end" $
-      withSystemTempDirectory "hold" $ \dir -> withMockHub todaysHub $ \port -> do
+    it "relays each item as the service sent it, and the end" $
+      withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         let sock = dir </> "h.sock"
         _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
         direct <- Hold.newMux
-        viaMux <- collect (Hold.muxCall direct (hubAt port)) "menger.call" (getTicket "MENGER-12")
-        viaHolder <- collect (Hold.holderCall sock (hubAt port)) "menger.call" (getTicket "MENGER-12")
+        viaMux <- collect (Hold.muxCall direct (serviceAt port)) "menger.call" (getTicket "MENGER-12")
+        viaHolder <- collect (Hold.holderCall sock (serviceAt port)) "menger.call" (getTicket "MENGER-12")
         viaHolder `shouldBe` viaMux
 
     it "ends the call of a run that goes away mid-stream" $
-      withSystemTempDirectory "hold" $ \dir -> withMockHub todaysHub $ \port -> do
+      withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         writeIORef unsubscribes []
         let sock = dir </> "h.sock"
         _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
         got <- newEmptyFlag
-        a <- async $ Hold.holderCall sock (hubAt port) (pure ()) "menger.call" watch (\_ -> setFlag got)
+        a <- async $ Hold.holderCall sock (serviceAt port) (pure ()) "menger.call" watch (\_ -> setFlag got)
         waitFlag got
         cancel a
         waitFor ((== 1) . length <$> readIORef unsubscribes)
@@ -121,7 +121,7 @@ main = hspec $ do
         let sock = dir </> "h.sock"
         _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
-        r <- try (collect (Hold.holderCall sock (hubAt 1)) "menger.call" (getTicket "X"))
+        r <- try (collect (Hold.holderCall sock (serviceAt 1)) "menger.call" (getTicket "X"))
         case r of
           Left (e :: SomeException) -> do
             show e `shouldContain` "Connection failed"
@@ -129,18 +129,18 @@ main = hspec $ do
           Right _ -> expectationFailure "a call to a closed port answered"
 
     it "carries a bidirectional request and its answer" $
-      withSystemTempDirectory "hold" $ \dir -> withMockHub todaysHub $ \port -> do
+      withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         let sock = dir </> "h.sock"
         _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
         answered <- newIORef Nothing
         let onItem i = case i of
-              StreamRequest {} -> void $ collect (Hold.holderCall sock (hubAt port)) "menger.respond"
+              StreamRequest {} -> void $ collect (Hold.holderCall sock (serviceAt port)) "menger.respond"
                 (Object (KM.fromList [ ("request_id", String "req-1")
                                      , ("response_data", Object (KM.fromList [("type", String "confirmed"), ("value", Bool True)])) ]))
               StreamData _ _ "tickets.ask" v -> writeIORef answered (Just v)
               _ -> pure ()
-        Hold.holderCall sock (hubAt port) (pure ()) "menger.call" (Object (KM.fromList [("method", String "tickets.ask")])) onItem
+        Hold.holderCall sock (serviceAt port) (pure ()) "menger.call" (Object (KM.fromList [("method", String "tickets.ask")])) onItem
         readIORef answered >>= (`shouldSatisfy` isJust)
 
     it "exits when idle, and takes its socket with it" $
@@ -152,12 +152,12 @@ main = hspec $ do
 
   describe "a socket per address and agent" $ do
     it "names the address, the agent and the version" $ do
-      p <- Hold.socketPathFor "3.16.0" "wss_app.menger.sh_443_ws" "builder"
-      p `shouldContain` "wss_app.menger.sh_443_ws@builder-3.16.0.sock"
-      q <- Hold.socketPathFor "3.16.0" "wss_app.menger.sh_443_ws" "pipeline"
+      p <- Hold.socketPathFor "3.17.1" "wss_app.menger.sh_443_ws" "builder"
+      p `shouldContain` "wss_app.menger.sh_443_ws@builder-3.17.1.sock"
+      q <- Hold.socketPathFor "3.17.1" "wss_app.menger.sh_443_ws" "pipeline"
       q `shouldNotBe` p
     it "stays short enough for a unix socket" $ do
-      p <- Hold.socketPathFor "3.16.0" (replicate 120 'h') "builder"
+      p <- Hold.socketPathFor "3.17.1" (replicate 120 'h') "builder"
       length p `shouldSatisfy` (< 108)
 
   describe "the CLI, sending first" $ do
@@ -206,7 +206,7 @@ cliSpec exe = do
       c1 <- readIORef connectionsAccepted
       (c1 - c0) `shouldBe` 1
 
-  it "falls back to the probe and the fetch for a method the hub renamed, then answers" $
+  it "falls back to the probe and the fetch for a method the service renamed, then answers" $
     withRun $ \run _ -> do
       _ <- run ["tickets", "get", "--id", "MENGER-12"]
       writeIORef renamedGet True
@@ -227,7 +227,7 @@ cliSpec exe = do
       code `shouldBe` ExitFailure 1
       err `shouldContain` "Command not found: 'get'"
       out `shouldNotContain` "Method not found"
-      -- and the call after it is warm again, for what the hub has now
+      -- and the call after it is warm again, for what the service has now
       writeIORef renamedGet True
       (code', out', _) <- run ["tickets", "fetch", "--id", "MENGER-12"]
       writeIORef renamedGet False
@@ -247,10 +247,10 @@ cliSpec exe = do
       i1 <- readIORef infoCalls
       (s1 - s0, i1 - i0) `shouldBe` (0, 0)
   where
-    withRun = withRunOn todaysHub
-    -- a run of the built synapse against a fresh mock hub, with a home,
+    withRun = withRunOn todaysService
+    -- a run of the built synapse against a fresh mock service, with a home,
     -- cache and runtime directory of its own (no keychain, a short hold)
-    withRunOn sc act = withSystemTempDirectory "synapse28" $ \dir -> withMockHub sc $ \port -> do
+    withRunOn sc act = withSystemTempDirectory "synapse28" $ \dir -> withMockService sc $ \port -> do
       forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
       env0 <- getEnvironment
       let env = [ (k, v) | (k, v) <- env0, k `notElem` ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION"] ]
@@ -263,8 +263,8 @@ cliSpec exe = do
 
 -- ---------------------------------------------------------------------------
 
-hubAt :: Int -> SubstrateConfig
-hubAt port = (defaultConfig "menger") { substratePort = port, substratePath = "/ws" }
+serviceAt :: Int -> SubstrateConfig
+serviceAt port = (defaultConfig "menger") { substratePort = port, substratePath = "/ws" }
 
 getTicket :: T.Text -> Value
 getTicket i = Object (KM.fromList [("method", String "tickets.get"), ("params", Object (KM.fromList [("id", String i)]))])

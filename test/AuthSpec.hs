@@ -5,16 +5,16 @@
 -- | AUTH-8: synapse shows each caller its own server.
 --
 -- * plexus-protocol parses AUTH-2..5's new shapes — and their absence:
---   every field is optional, today's hubs answer none of it;
+--   every field is optional, today's services answer none of it;
 -- * the renders: the anonymous page, the caller's header and the grant
 --   columns, the refusal block — each pinned to the ticket's transcript;
 -- * the loopback's request parsing and state check, and the listener
 --   itself on 127.0.0.1;
--- * the flows end to end against 'MockHub' (a hub in miniature on a port
+-- * the flows end to end against 'MockService' (a service in miniature on a port
 --   of its own): a person's browser sign-in, an agent's auth.login and its
---   fallback to session.login on a hub without auth, whoami.
+--   fallback to session.login on a service without auth, whoami.
 --
--- @SYNAPSE_MOCK_HUB=today|anonymous|caller@ runs the mock hub instead of
+-- @SYNAPSE_MOCK_SERVICE=today|anonymous|caller@ runs the mock service instead of
 -- the tests (it prints its port), for transcripts by hand.
 module Main (main) where
 
@@ -45,15 +45,15 @@ import Synapse.Identity.Proof (generateSeed)
 import qualified Synapse.Identity.Session as Session
 import qualified Synapse.Log as Log
 
-import MockHub
+import MockService
 
 main :: IO ()
 main = do
-  serve <- lookupEnv "SYNAPSE_MOCK_HUB"
+  serve <- lookupEnv "SYNAPSE_MOCK_SERVICE"
   case serve of
-    Just "today" -> serveMockHub todaysHub
-    Just "anonymous" -> serveMockHub (Scenario AnonymousView True False mockState False)
-    Just "caller" -> serveMockHub (Scenario CallerView True False mockState False)
+    Just "today" -> serveMockService todaysService
+    Just "anonymous" -> serveMockService (Scenario AnonymousView True False mockState False)
+    Just "caller" -> serveMockService (Scenario CallerView True False mockState False)
     _ -> do
       setEnv "SYNAPSE_NO_BROWSER" "1"
       hspec spec
@@ -314,9 +314,9 @@ spec = do
     it "gives up after its time" $ withLoopback $ \lb ->
       awaitCallback lb "s_ok" 1 `shouldReturn` Left "no answer from the browser within 1 second"
 
-  describe "against a hub (MockHub)" $ do
+  describe "against a service (MockService)" $ do
     it "a person signs in through the browser: login_url, the loopback, the code, a session" $
-      withMockHub (Scenario AnonymousView True False mockState False) $ \port -> do
+      withMockService (Scenario AnonymousView True False mockState False) $ \port -> do
         lg <- logger
         r <- Session.loginPerson lg (plainAt "127.0.0.1" port) "menger" 10 (const (pure ()))
         fmap (\g -> (sgToken g, sgName g, sgPrincipal g)) r
@@ -324,32 +324,32 @@ spec = do
         fmap (fmap renderCallerHeader . sgWhoami) r
           `shouldBe` Right (Just "you are Ada Lovelace (oidc:workos/user_01M4\x2026) \x00B7 admin on *")
     it "a browser that comes back with another state signs no one in" $
-      withMockHub (Scenario AnonymousView True False "s_forged" False) $ \port -> do
+      withMockService (Scenario AnonymousView True False "s_forged" False) $ \port -> do
         lg <- logger
         r <- Session.loginPerson lg (plainAt "127.0.0.1" port) "menger" 10 (const (pure ()))
         either ("state" `T.isInfixOf`) (const False) r `shouldBe` True
-    it "a hub with no auth activation says so for a person" $
-      withMockHub todaysHub $ \port -> do
+    it "a service with no auth activation says so for a person" $
+      withMockService todaysService $ \port -> do
         lg <- logger
         r <- Session.loginPerson lg (plainAt "127.0.0.1" port) "menger" 10 (const (pure ()))
         either ("no auth activation" `T.isInfixOf`) (const False) r `shouldBe` True
-    it "an agent asks auth.login for a session where the hub has auth" $
-      withMockHub (Scenario CallerView True False mockState False) $ \port -> do
+    it "an agent asks auth.login for a session where the service has auth" $
+      withMockService (Scenario CallerView True False mockState False) $ \port -> do
         lg <- logger
         seed <- generateSeed
         r <- Session.loginWithKey lg (plainAt "127.0.0.1" port) "menger" seed "worker-1" ["editor@MENGER-12"] (Just 3600)
         fmap (\l -> (Session.lrToken l, Session.lrScope l)) r `shouldBe` Right ("mgs_agent_auth", ["editor@MENGER-12"])
-    it "an agent falls back to session.login on today's hub" $
-      withMockHub todaysHub $ \port -> do
+    it "an agent falls back to session.login on today's service" $
+      withMockService todaysService $ \port -> do
         lg <- logger
         seed <- generateSeed
         r <- Session.loginWithKey lg (plainAt "127.0.0.1" port) "menger" seed "worker-1" ["editor@MENGER-12"] Nothing
         fmap (\l -> (Session.lrToken l, Session.lrScope l)) r `shouldBe` Right ("mgs_agent_session", ["editor@MENGER-12"])
     it "whoami: auth.whoami where there is one, nothing where neither answers" $ do
-      withMockHub (Scenario CallerView True False mockState False) $ \port -> do
+      withMockService (Scenario CallerView True False mockState False) $ \port -> do
         lg <- logger
         Session.whoamiWith lg (plainAt "127.0.0.1" port) "menger" "mgs_x" `shouldReturn` Just worker
-      withMockHub todaysHub $ \port -> do
+      withMockService todaysService $ \port -> do
         lg <- logger
         w <- Session.whoamiWith lg (plainAt "127.0.0.1" port) "menger" "mgs_x"
         isJust w `shouldBe` False

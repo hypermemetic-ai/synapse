@@ -206,7 +206,7 @@ The structured format makes this logic clear and type-safe.
    - Updated version check from "1.0" to "2.0"
    - Added aeson and bytestring dependencies
 
-3. `/Users/user/dev/controlflow/hypermemetic/synapse/hub-synapse.cabal`
+3. `/Users/user/dev/controlflow/hypermemetic/synapse/plexus-synapse.cabal`
    - Added aeson, aeson-pretty, and bytestring to test dependencies
    - Added new test-suite: typeref-json
 

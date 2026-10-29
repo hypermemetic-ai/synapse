@@ -16,7 +16,7 @@ This document provides a detailed analysis of Substrate's current error handling
 
 ### 1. Core Error Types
 
-**`PlexusError` Enum** (`hub-core/src/plexus/plexus.rs`)
+**`PlexusError` Enum** (`plexus-core/src/plexus/plexus.rs`)
 
 ```rust
 #[derive(Debug, Clone)]
@@ -46,7 +46,7 @@ pub enum PlexusError {
 
 ### 2. Stream Error Format
 
-**`PlexusStreamItem::Error`** (`hub-core/src/plexus/types.rs`)
+**`PlexusStreamItem::Error`** (`plexus-core/src/plexus/types.rs`)
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -92,7 +92,7 @@ pub enum PlexusStreamItem {
 
 ### 3. Helper Functions
 
-**Error Stream Constructors** (`hub-core/src/plexus/streaming.rs`)
+**Error Stream Constructors** (`plexus-core/src/plexus/streaming.rs`)
 
 ```rust
 pub fn error_stream(
@@ -138,7 +138,7 @@ if handle.meta.is_empty() {
 
 #### 1.1 Enhanced PlexusStreamItem::Error
 
-**File:** `hub-core/src/plexus/types.rs`
+**File:** `plexus-core/src/plexus/types.rs`
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -217,7 +217,7 @@ pub enum ErrorCategory {
 
 #### 1.2 Structured Error Codes
 
-**File:** `hub-core/src/plexus/error_codes.rs` (new)
+**File:** `plexus-core/src/plexus/error_codes.rs` (new)
 
 ```rust
 use serde::{Deserialize, Serialize};
@@ -308,7 +308,7 @@ impl ErrorCode {
 
 #### 1.3 Enhanced PlexusError
 
-**File:** `hub-core/src/plexus/plexus.rs`
+**File:** `plexus-core/src/plexus/plexus.rs`
 
 ```rust
 use super::error_codes::{ErrorCode, ErrorCategory};
@@ -460,7 +460,7 @@ impl PlexusError {
 
 #### 2.1 Validator Trait
 
-**File:** `hub-core/src/plexus/validation.rs` (new)
+**File:** `plexus-core/src/plexus/validation.rs` (new)
 
 ```rust
 use serde_json::Value;
@@ -612,7 +612,7 @@ impl ValidationErrors {
 
 #### 2.2 Validation Helper Functions
 
-**File:** `hub-core/src/plexus/validation.rs` (continued)
+**File:** `plexus-core/src/plexus/validation.rs` (continued)
 
 ```rust
 /// Common validators
@@ -736,9 +736,9 @@ pub mod validators {
 **File:** `substrate/src/activations/cone/activation.rs`
 
 ```rust
-use hub_core::plexus::validation::{ValidationErrors, validators};
-use hub_core::plexus::types::ErrorDetails;
-use hub_core::plexus::error_codes::{ErrorCode, ErrorCategory};
+use plexus_core::plexus::validation::{ValidationErrors, validators};
+use plexus_core::plexus::types::ErrorDetails;
+use plexus_core::plexus::error_codes::{ErrorCode, ErrorCategory};
 
 impl ConeActivation {
     pub async fn create(&self, params: CreateParams) -> Result<PlexusStream, PlexusError> {
@@ -887,7 +887,7 @@ impl BashActivation {
 
 #### 4.1 Rich Error Stream Constructors
 
-**File:** `hub-core/src/plexus/streaming.rs`
+**File:** `plexus-core/src/plexus/streaming.rs`
 
 ```rust
 use super::error_codes::ErrorCode;
@@ -976,7 +976,7 @@ pub fn not_found_stream(
 
 #### 5.1 Enhanced Guidance Stream Item
 
-**File:** `hub-core/src/plexus/types.rs`
+**File:** `plexus-core/src/plexus/types.rs`
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1015,7 +1015,7 @@ pub enum GuidanceSeverity {
 
 #### 5.2 Guidance Helper Functions
 
-**File:** `hub-core/src/plexus/streaming.rs`
+**File:** `plexus-core/src/plexus/streaming.rs`
 
 ```rust
 /// Create guidance stream item

@@ -5,7 +5,7 @@
 
 -- | SCAFFOLD-21: synapse speaks wss. A TLS terminator of the test's own —
 -- a CA and a certificate for @localhost@ made with openssl for this run,
--- in front of the mock hub, as the edge sits in front of a hosted app —
+-- in front of the mock service, as the edge sits in front of a hosted app —
 -- and against it: the probe, a call and a key login over wss at a path,
 -- with the request's path and Host as the edge would see them; a server
 -- the trust store does not vouch for, and a certificate for another name,
@@ -34,14 +34,14 @@ import System.Process (readProcessWithExitCode)
 import Test.Hspec
 
 import qualified Katip
-import MockHub (todaysHub, withMockHub)
+import MockService (todaysService, withMockService)
 import Synapse.Backend.Discovery (probeBackendAtEp)
 import Synapse.Endpoint (Endpoint(..))
 import qualified Synapse.Identity.Proof as Proof
 import qualified Synapse.Identity.Session as Session
 import qualified Synapse.Log as Log
 import Synapse.Monad (initEnvAt, runSynapseM)
-import Synapse.Schema.Types (pattern HubData)
+import Synapse.Schema.Types (pattern ServiceData)
 import Synapse.Transport (invoke, invokeStreamingWithBidir)
 import Synapse.Reconnect (CallShape(..))
 import Plexus.Types (Response(..))
@@ -82,7 +82,7 @@ withPki act = withSystemTempDirectory "synapse-tls" $ \dir -> do
 type Heads = IORef [BS.ByteString]
 
 -- | A TLS terminator on 127.0.0.1 (a port the OS picks) forwarding each
--- connection to the plain hub at @backend@, as the edge does.
+-- connection to the plain service at @backend@, as the edge does.
 withTerminator :: Pki -> Int -> (Int -> Heads -> IO a) -> IO a
 withTerminator pki backend act = do
   cred <- TLS.credentialLoadX509 (pkiCert pki) (pkiKey pki) >>= either fail pure
@@ -110,7 +110,7 @@ withTerminator pki backend act = do
         seen <- newIORef False
         let down = forever $ do
               b <- NB.recv up 65536
-              if BS.null b then fail "hub closed" else TLS.sendData ctx (LBS.fromStrict b)
+              if BS.null b then fail "service closed" else TLS.sendData ctx (LBS.fromStrict b)
         t <- forkIO (void (try @SomeException down) >> TLS.bye ctx)
         flip finally (killThread t) $ forever $ do
           b <- TLS.recvData ctx
@@ -126,7 +126,7 @@ specs :: SpecWith Pki
 specs = do
   describe "wss through a TLS terminator, the CA given with --cacert" $ do
     it "answers the _info probe, dialing the path with the Host the certificate names" $ \pki ->
-      withMockHub todaysHub $ \hub -> withTerminator pki hub $ \port heads -> do
+      withMockService todaysService $ \service -> withTerminator pki service $ \port heads -> do
         let ep = Endpoint "localhost" port True "/ws" [pkiCa pki]
         probeBackendAtEp [] ep `shouldReturn` Right "menger"
         hs <- readIORef heads
@@ -137,17 +137,17 @@ specs = do
         BS8.lines h `shouldSatisfy` any (== BS8.pack ("Host: localhost:" <> show port <> "\r"))
 
     it "carries a call and its answer" $ \pki ->
-      withMockHub todaysHub $ \hub -> withTerminator pki hub $ \port _ -> do
+      withMockService todaysService $ \service -> withTerminator pki service $ \port _ -> do
         lg <- logger
         env <- initEnvAt (Endpoint "localhost" port True "/ws" [pkiCa pki]) "menger" lg Nothing
         r <- runSynapseM env (invoke ["tickets"] "get" (object [("id", String "MENGER-12")]))
         case r of
-          Right items -> [v | HubData _ _ _ (Object v) <- items, KM.lookup "id" v == Just (String "MENGER-12")]
+          Right items -> [v | ServiceData _ _ _ (Object v) <- items, KM.lookup "id" v == Just (String "MENGER-12")]
                            `shouldSatisfy` (not . null)
           Left e -> expectationFailure (show e)
 
     it "logs in from a key, the proof's audience the server's wss origin" $ \pki ->
-      withMockHub todaysHub $ \hub -> withTerminator pki hub $ \port heads -> do
+      withMockService todaysService $ \service -> withTerminator pki service $ \port heads -> do
         lg <- logger
         let ep = Endpoint "localhost" port True "/ws" [pkiCa pki]
             seed = either (error . T.unpack) id (Proof.seedFromBytes (BS.pack [1 .. 32]))
@@ -161,7 +161,7 @@ specs = do
         mapM_ (\p -> KM.lookup "aud" p `shouldBe` Just (String ("wss://localhost:" <> T.pack (show port)))) proofs
 
     it "carries a bidirectional request and its answer (respond goes over wss too)" $ \pki ->
-      withMockHub todaysHub $ \hub -> withTerminator pki hub $ \port heads -> do
+      withMockService todaysService $ \service -> withTerminator pki service $ \port heads -> do
         lg <- logger
         env <- initEnvAt (Endpoint "localhost" port True "/ws" [pkiCa pki]) "menger" lg Nothing
         seen <- newIORef []
@@ -174,7 +174,7 @@ specs = do
         r `shouldSatisfy` either (const False) (const True)
         readIORef asked `shouldReturn` ["req-1"]
         items <- readIORef seen
-        [v | HubData _ _ _ (Object v) <- items, KM.lookup "type" v == Just (String "answered")]
+        [v | ServiceData _ _ _ (Object v) <- items, KM.lookup "type" v == Just (String "answered")]
           `shouldBe` [KM.fromList [("type", String "answered"), ("response", object [("type", String "confirmed"), ("value", Bool True)])]]
         -- the call and the respond: two upgrades, both through TLS at the path
         hs <- readIORef heads
@@ -182,19 +182,19 @@ specs = do
 
   describe "refusing what it cannot verify" $ do
     it "refuses a certificate the trust store does not vouch for — nothing is sent" $ \pki ->
-      withMockHub todaysHub $ \hub -> withTerminator pki hub $ \port heads -> do
+      withMockService todaysService $ \service -> withTerminator pki service $ \port heads -> do
         r <- probeBackendAtEp [] (Endpoint "localhost" port True "/ws" [pkiOtherCa pki])
         r `shouldSatisfy` either (const True) (const False)
         readIORef heads `shouldReturn` []
 
     it "refuses a certificate for another name (127.0.0.1 is not localhost)" $ \pki ->
-      withMockHub todaysHub $ \hub -> withTerminator pki hub $ \port heads -> do
+      withMockService todaysService $ \service -> withTerminator pki service $ \port heads -> do
         r <- probeBackendAtEp [] (Endpoint "127.0.0.1" port True "/ws" [pkiCa pki])
         r `shouldSatisfy` either (const True) (const False)
         readIORef heads `shouldReturn` []
 
     it "refuses a CA file that holds no certificate" $ \pki ->
-      withMockHub todaysHub $ \hub -> withTerminator pki hub $ \port _ -> do
+      withMockService todaysService $ \service -> withTerminator pki service $ \port _ -> do
         r <- probeBackendAtEp [] (Endpoint "localhost" port True "/ws" [pkiKey pki])
         either T.unpack (const "") r `shouldContain` "holds no PEM certificate"
 

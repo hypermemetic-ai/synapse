@@ -9,7 +9,7 @@
 
 TypeScript clients fail because parameter names are sent as `camelCase` over RPC, but Plexus expects `snake_case`.
 
-**Root cause**: `hub-codegen/src/generator/namespaces.rs:295` uses JavaScript shorthand property syntax `{ modelId }` instead of explicit mapping `{ model_id: modelId }`.
+**Root cause**: `service-codegen/src/generator/namespaces.rs:295` uses JavaScript shorthand property syntax `{ modelId }` instead of explicit mapping `{ model_id: modelId }`.
 
 ## Architecture Principle
 
@@ -38,7 +38,7 @@ system_prompt: Opt  →    systemPrompt?: string  →     { system_prompt: "..."
 
 ### Bug Location
 
-**File**: `hub-codegen/src/generator/namespaces.rs`
+**File**: `service-codegen/src/generator/namespaces.rs`
 **Function**: `generate_params_object()` (lines 284-302)
 
 ```rust
@@ -167,14 +167,14 @@ const result = await cone.create(
 
 ## Files to Modify
 
-1. **hub-codegen/src/generator/namespaces.rs**
+1. **service-codegen/src/generator/namespaces.rs**
    - Line 284-302: Update `generate_params_object()`
    - Change from shorthand to explicit property mapping
 
 2. **Test the fix**:
    ```bash
    # Regenerate TypeScript clients
-   synapse plexus -i | cargo run --manifest-path ../hub-codegen/Cargo.toml -- -o /tmp/test-client
+   synapse plexus -i | cargo run --manifest-path ../service-codegen/Cargo.toml -- -o /tmp/test-client
 
    # Verify generated code has explicit mappings
    cat /tmp/test-client/cone/client.ts | grep "model_id:"

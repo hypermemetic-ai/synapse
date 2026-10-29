@@ -1,4 +1,4 @@
--- | SCAFFOLD-21: where a hub is reached — a host and port, and, for a hub
+-- | SCAFFOLD-21: where a service is reached — a host and port, and, for a service
 -- behind TLS (every hosted app: @wss://<app>.menger.sh/ws@), the scheme
 -- and the path its socket answers at.
 --
@@ -37,7 +37,7 @@ import Numeric (showHex)
 
 import Plexus.Client (SubstrateConfig(..), TlsOptions(..))
 
--- | A hub's address.
+-- | A service's address.
 data Endpoint = Endpoint
   { epHost    :: !Text
   , epPort    :: !Int
@@ -154,7 +154,7 @@ dirName ep
 -- | A key proof's audience (IDENTITY-40's @aud@): the server's socket
 -- origin, as the server lists the URLs it is dialed at — @ws://HOST:PORT@
 -- for a plain address (unchanged), @wss://HOST@ (@:PORT@ when not 443)
--- behind TLS, which is what a hub run with @--public-url https://HOST@
+-- behind TLS, which is what a service run with @--public-url https://HOST@
 -- accepts (plexus-login's @socket_urls@). The path is not part of it.
 audience :: Endpoint -> Text
 audience ep

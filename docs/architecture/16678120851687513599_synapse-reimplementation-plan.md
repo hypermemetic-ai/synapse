@@ -41,13 +41,13 @@ Currently, backends are hardcoded as optparse subcommands. We want to support dy
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   synapse   │────▶│  Hub Directory   │────▶│  Backend Hubs   │
+│   synapse   │────▶│  Service Directory   │────▶│  Backend Services   │
 │   (CLI)     │     │  (port 4444)     │     │  (discovered)   │
 └─────────────┘     └──────────────────┘     └─────────────────┘
                             │
                             ▼
                     Returns list of:
-                    - Hub name
+                    - Service name
                     - Connection info (host:port or https URL)
                     - Description
                     - Schema hash
@@ -77,10 +77,10 @@ data BackendDiscovery = BackendDiscovery
 stubDiscovery :: BackendDiscovery
 stubDiscovery = BackendDiscovery
   { discoverBackends = pure
-      [ Backend "plexus" "Plexus Hub" "127.0.0.1" 4444 Nothing ]
+      [ Backend "plexus" "Plexus Service" "127.0.0.1" 4444 Nothing ]
   , getBackendInfo = \name ->
       if name == "plexus"
-        then pure $ Just $ Backend "plexus" "Plexus Hub" "127.0.0.1" 4444 Nothing
+        then pure $ Just $ Backend "plexus" "Plexus Service" "127.0.0.1" 4444 Nothing
         else pure Nothing
   }
 
@@ -127,7 +127,7 @@ synapse - Multi-backend CLI
 Usage: synapse <backend> [command] [options]
 
 Available backends:
-  plexus     Plexus Hub (127.0.0.1:4444)
+  plexus     Plexus Service (127.0.0.1:4444)
 
 Run 'synapse <backend>' for backend-specific options.
 ```
@@ -198,7 +198,7 @@ invokeMethod
 ### Files Changed
 
 - `src/Synapse/CLI/Transform.hs`: Restored from reverted commit
-- `hub-synapse.cabal`: Added `Synapse.CLI.Transform` to exposed modules
+- `plexus-synapse.cabal`: Added `Synapse.CLI.Transform` to exposed modules
 - `app/Main.hs`:
   - Added import for Transform module
   - Integrated `transformParams` after `parsePathAndParams`
@@ -247,7 +247,7 @@ Added 3 fields to `SubstrateConfig`:
 ### Correct Approach
 
 The protocol defines conventions:
-- `{backend}.call` - routing method (exists on hubs)
+- `{backend}.call` - routing method (exists on services)
 - `{backend}.schema` - schema method (exists on everything)
 
 If we need configurability, add only:
@@ -282,7 +282,7 @@ Defer until we actually have multiple backends. Current hardcoded "plexus" is fi
 | `src/Synapse/CLI/Transform.hs` | Restored from reverted commit |
 | `src/Synapse/CLI/Parse.hs` | Added `KindStringEnum` handling |
 | `src/Synapse/Backend/Discovery.hs` | New: Backend discovery abstraction |
-| `hub-synapse.cabal` | Added `Synapse.CLI.Transform` and `Synapse.Backend.Discovery` modules |
+| `plexus-synapse.cabal` | Added `Synapse.CLI.Transform` and `Synapse.Backend.Discovery` modules |
 | `docs/architecture/...` | This document |
 
 ---

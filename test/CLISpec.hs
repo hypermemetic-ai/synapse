@@ -18,7 +18,7 @@ main = hspec $ do
     it "substrate"            $ ["substrate"]                              `has` ["echo", "solar", "health"]
     it "echo"              $ ["substrate", "echo"]                      `has` ["echo", "Echo messages back"]
     it "solar"             $ ["substrate", "solar"]                     `has` ["solar", "Solar system model"]
-    it "health"            $ ["substrate", "health"]                    `has` ["health", "Check hub health"]
+    it "health"            $ ["substrate", "health"]                    `has` ["health", "health and uptime"]
     it "solar earth"       $ ["substrate", "solar", "earth"]            `has` ["earth", "planet"]
     it "solar earth luna"  $ ["substrate", "solar", "earth", "luna"]    `has` ["luna", "Moon"]
 

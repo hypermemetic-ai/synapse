@@ -5,12 +5,12 @@
 -- | AUTH-8: a person signing in from synapse — the loopback flow (AUTH-1,
 -- "Settled to start", Q3).
 --
--- synapse listens on @127.0.0.1:<a port the OS picks>@, asks the hub for a
+-- synapse listens on @127.0.0.1:<a port the OS picks>@, asks the service for a
 -- sign-in URL that returns there (@auth.login {flow: {browser: {redirect}}}@),
 -- opens it, and waits — at most five minutes — for the browser to come
--- back with @GET /cb?code=…&state=…@. The state must be the one the hub
+-- back with @GET /cb?code=…&state=…@. The state must be the one the service
 -- handed out with the URL; anything else is refused and ends the wait.
--- The code then goes back to the hub (@auth.login {flow: {code: …}}@).
+-- The code then goes back to the service (@auth.login {flow: {code: …}}@).
 --
 -- The parsing and the state check are pure ('parseRequestLine',
 -- 'checkCallback') and tested; the socket is only 127.0.0.1, accepts one
@@ -60,7 +60,7 @@ data Loopback = Loopback
 loopbackPort :: Loopback -> Int
 loopbackPort = lbPort
 
--- | Where the hub sends the browser back: @http://127.0.0.1:<port>/cb@.
+-- | Where the service sends the browser back: @http://127.0.0.1:<port>/cb@.
 loopbackRedirect :: Loopback -> Text
 loopbackRedirect lb = "http://127.0.0.1:" <> T.pack (show (lbPort lb)) <> "/cb"
 

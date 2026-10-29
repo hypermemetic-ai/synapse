@@ -230,7 +230,7 @@ extractDiscriminator (Object o) =
 
 - Plexus MCP bridge validates `type: "object"` at root (minimal)
 - Plexus serde does runtime type checking (backend-side)
-- `hub-macro` generates complete schemas from Rust types
+- `plexus-macros` generates complete schemas from Rust types
 - Schema hashing enables client-side cache invalidation
 
 ## Questions

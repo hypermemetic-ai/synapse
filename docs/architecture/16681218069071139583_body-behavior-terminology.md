@@ -12,9 +12,9 @@ The substrate codebase uses biological metaphor for its core abstractions:
 
 ## Rationale
 
-### Why "Body" instead of "Hub"
+### Why "Body" instead of the routing-device name
 
-"Hub" is a network topology term—it implies a passive routing device. The substrate is more than a router; it's the **living infrastructure** on which behaviors operate.
+The routing-device name is a network topology term—it implies a passive routing device. The substrate is more than a router; it's the **living infrastructure** on which behaviors operate.
 
 A body:
 - Has behaviors (not plugins)
@@ -51,15 +51,15 @@ This tells you:
 
 | Old | New |
 |-----|-----|
-| `Hub` | `Body` |
+| `Service` | `Body` |
 | `Plugin` | `Behavior` (trait) |
-| `HubError` | `BodyError` |
-| `HubStream` | `BodyStream` |
-| `HubStreamItem` | `BodyStreamItem` |
+| `ServiceError` | `BodyError` |
+| `ServiceStream` | `BodyStream` |
+| `ServiceStreamItem` | `BodyStreamItem` |
 | `PluginPath` | `Provenance` |
 | `PluginStreamItem` | `BehaviorStreamItem` |
-| `into_hub_stream` | `into_body_stream` |
-| `into_hub_item` | `into_body_item` |
+| `into_service_stream` | `into_body_stream` |
+| `into_service_item` | `into_body_item` |
 | `HealthPlugin` | `HealthBehavior` |
 | `BashPlugin` | `BashBehavior` |
 | `LoomPlugin` | `LoomBehavior` |

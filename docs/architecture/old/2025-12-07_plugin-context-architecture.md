@@ -5,16 +5,16 @@
 
 ## Vision
 
-A pluggable agent context management system with external JSON-RPC access, operating as a hub-and-spoke model where plugins manage their own internal context while returning type-safe streaming responses with full path tracking for nested plugin calls.
+A pluggable agent context management system with external JSON-RPC access, operating as a star-shaped model (one router, many spokes) where plugins manage their own internal context while returning type-safe streaming responses with full path tracking for nested plugin calls.
 
 ## Core Architecture
 
-### Hub-and-Spoke Model
+### Star Model (one router, many spokes)
 
 ```
                          ┌─────────────────┐
                          │                 │
-                         │   JSON-RPC Hub  │
+                         │   JSON-RPC Service  │
                          │                 │
                          └────────┬────────┘
                                   │
@@ -33,11 +33,11 @@ A pluggable agent context management system with external JSON-RPC access, opera
 ```
 
 **Key Principles**:
-- Hub receives JSON-RPC requests
-- Hub routes to appropriate plugin based on method name
+- Service receives JSON-RPC requests
+- Service routes to appropriate plugin based on method name
 - Each plugin has full access to the underlying system context
 - Each plugin manages its own internal state (SQLite database)
-- Plugins return streams that can be converted to hub's stream type
+- Plugins return streams that can be converted to service's stream type
 - All streams carry plugin path metadata for nested call tracking
 
 ### System Context
@@ -87,11 +87,11 @@ pub struct PluginStreamItem {
 /// Marker trait for plugin stream data
 pub trait StreamItemData: Send + Sync {
     fn as_any(&self) -> &dyn Any;
-    fn to_hub_item(&self) -> HubStreamItem;
+    fn to_service_item(&self) -> ServiceStreamItem;
 }
 
-/// Hub-level stream item (unified across all plugins)
-pub enum HubStreamItem {
+/// Service-level stream item (unified across all plugins)
+pub enum ServiceStreamItem {
     /// Progress update
     Progress {
         plugin_path: PluginPath,
@@ -119,9 +119,9 @@ pub enum HubStreamItem {
     },
 }
 
-impl<T: StreamItemData> From<PluginStreamItem> for HubStreamItem {
+impl<T: StreamItemData> From<PluginStreamItem> for ServiceStreamItem {
     fn from(item: PluginStreamItem) -> Self {
-        item.data.to_hub_item()
+        item.data.to_service_item()
     }
 }
 ```
@@ -195,20 +195,20 @@ pub enum AgentDbMethods {
 /// - Tool descriptors for `tools/list`
 ```
 
-### Hub Routing Logic
+### Service Routing Logic
 
 ```rust
-pub struct PluginHub {
+pub struct PluginService {
     plugins: HashMap<String, Arc<dyn Plugin>>,
     context: Arc<SystemContext>,
 }
 
-impl PluginHub {
+impl PluginService {
     pub async fn handle_request(
         &self,
         method: &str,
         params: serde_json::Value,
-    ) -> Result<impl Stream<Item = HubStreamItem>, Error> {
+    ) -> Result<impl Stream<Item = ServiceStreamItem>, Error> {
         // Parse method name: "plugin_name.method_name"
         let (plugin_name, plugin_method) = method
             .split_once('.')
@@ -225,10 +225,10 @@ impl PluginHub {
         // Call plugin and convert stream
         let plugin_stream = plugin.call(&self.context, plugin_method, params, path);
 
-        // Convert PluginStreamItem -> HubStreamItem
-        let hub_stream = plugin_stream.map(|item| item.into());
+        // Convert PluginStreamItem -> ServiceStreamItem
+        let service_stream = plugin_stream.map(|item| item.into());
 
-        Ok(hub_stream)
+        Ok(service_stream)
     }
 }
 ```
@@ -337,7 +337,7 @@ pub struct TrackedStreamItem {
     pub plugin_path: PluginPath,
 
     /// The actual stream data
-    pub item: HubStreamItem,
+    pub item: ServiceStreamItem,
 }
 
 impl AgentPluginImpl {
@@ -353,7 +353,7 @@ impl AgentPluginImpl {
         Ok(stream! {
             yield TrackedStreamItem {
                 plugin_path: path.clone(),
-                item: HubStreamItem::Progress {
+                item: ServiceStreamItem::Progress {
                     plugin_path: path.clone(),
                     message: "Starting chat...".to_string(),
                     percentage: None,
@@ -365,7 +365,7 @@ impl AgentPluginImpl {
 
             yield TrackedStreamItem {
                 plugin_path: path.clone(),
-                item: HubStreamItem::Data {
+                item: ServiceStreamItem::Data {
                     plugin_path: path.clone(),
                     content_type: "AgentResponse".to_string(),
                     data: serde_json::to_value(response)?,
@@ -374,7 +374,7 @@ impl AgentPluginImpl {
 
             yield TrackedStreamItem {
                 plugin_path: path.clone(),
-                item: HubStreamItem::Done {
+                item: ServiceStreamItem::Done {
                     plugin_path: path,
                 },
             };
@@ -457,9 +457,9 @@ pub struct SystemContext {
 ```
 User Request: "agent.chat"
   ↓
-Hub receives: method="agent.chat", params={...}
+Service receives: method="agent.chat", params={...}
   ↓
-Hub routes to: AgentPlugin
+Service routes to: AgentPlugin
   path = ["agent"]
   ↓
 AgentPlugin calls: mcp_client.execute_tool
@@ -495,13 +495,13 @@ impl SystemContext {
         plugin_name: &str,
         method: &str,
         params: serde_json::Value,
-    ) -> Result<impl Stream<Item = HubStreamItem>, Error> {
-        let hub = self.hub.read().await;
+    ) -> Result<impl Stream<Item = ServiceStreamItem>, Error> {
+        let service = self.service.read().await;
         let full_method = format!("{}.{}", plugin_name, method);
         let nested_path = current_path.extend(plugin_name);
 
-        // Hub handles the routing with the extended path
-        hub.handle_request_with_path(&full_method, params, nested_path).await
+        // Service handles the routing with the extended path
+        service.handle_request_with_path(&full_method, params, nested_path).await
     }
 }
 ```
@@ -559,8 +559,8 @@ data: {"plugin_path":"agent"}
 ### Phase 1: Core Infrastructure
 - [ ] Define `Plugin` trait
 - [ ] Implement `PluginPath` type
-- [ ] Create `HubStreamItem` enum
-- [ ] Build `PluginHub` router
+- [ ] Create `ServiceStreamItem` enum
+- [ ] Build `PluginService` router
 - [ ] Set up `SystemContext` structure
 
 ### Phase 2: Proc Macro Development

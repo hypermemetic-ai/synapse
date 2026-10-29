@@ -727,7 +727,7 @@ printBackend ep b = do
              else " - " <> backendDescription b
   TIO.putStrLn $ "  " <> nameField <> hostPort <> status <> desc
 
--- | Run a Hub command with backend discovery
+-- | Run a Service command with backend discovery
 runWithDiscovery :: BackendDiscovery -> Text -> Args -> IO ()
 runWithDiscovery discovery backendName args = do
   let opts = argOpts args
@@ -834,7 +834,7 @@ data RunMode
     -- again from the server, for when the cache could not answer or the
     -- server refused what it said (it exits)
 
--- | Run a Hub command with specified backend and connection details
+-- | Run a Service command with specified backend and connection details
 run :: RunMode -> Text -> Endpoint -> Args -> IO ()
 run mode backend ep args = do
   let opts = argOpts args
@@ -985,11 +985,11 @@ takeStale = do
   writeIORef staleRef False
   pure v
 
-isStaleItem :: HubStreamItem -> Bool
+isStaleItem :: ServiceStreamItem -> Bool
 isStaleItem item = case itemRefusal item of
   Just r -> refusalRoles r == ["admin"]
   Nothing -> case item of
-    HubError _ _ msg _ -> any (`T.isInfixOf` msg)
+    ServiceError _ _ msg _ -> any (`T.isInfixOf` msg)
       [ "Method not found", "Activation not found", "Unknown method", "method not found"
       , "errCode = -32601", "missing field", "unknown field", "invalid type", "unknown variant" ]
     _ -> False
@@ -1051,7 +1051,7 @@ runHold rest = case rest of
     hPutStrLn stderr "synapse _hold --socket PATH --hold-for SECS (started by synapse itself)"
     exitWith (ExitFailure 2)
 
--- | AUTH-8: the exit status of a call the hub refused (sysexits' EX_NOPERM).
+-- | AUTH-8: the exit status of a call the service refused (sysexits' EX_NOPERM).
 refusedExit :: Int
 refusedExit = 77
 
@@ -1471,7 +1471,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
               then Session.markSessionEnded (endedMessage item)
               else do
                 case item of
-                  HubData{} -> Session.notePrinted
+                  ServiceData{} -> Session.notePrinted
                   _ -> pure ()
                 printResult soJson soRaw rendererCfg' item
       -- SYNAPSE-20: a stream that resumed after a gap says so — on -j as a
@@ -1512,8 +1512,8 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
         (handleBidirRequest bidirMode Nothing)
 
     endedMessage item = case item of
-      HubData _ _ _ (Object o) | Just (String m) <- KM.lookup "message" o -> m
-      HubError _ _ e _ -> e
+      ServiceData _ _ _ (Object o) | Just (String m) <- KM.lookup "message" o -> m
+      ServiceError _ _ e _ -> e
       _ -> "your session has ended"
 
     -- Extract default values from JSON Schema properties
@@ -1561,7 +1561,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
           pure $ Right $ toJSON detailedMethod
 
     -- Invoke raw JSON-RPC request
-    invokeRawRpc :: Value -> SynapseM [HubStreamItem]
+    invokeRawRpc :: Value -> SynapseM [ServiceStreamItem]
     invokeRawRpc rpcReq = do
       case rpcReq of
         Object o -> case (KM.lookup "method" o, KM.lookup "params" o) of
@@ -1633,9 +1633,9 @@ metaCommands =
       , "                      same way. No argument then carries the value, so a body"
       , "                      can be as large as the backend accepts"
       , ""
-      , "Where the hub is (before the backend):"
+      , "Where the service is (before the backend):"
       , "  -P PORT / -H HOST   plain ws://HOST:PORT/ (default 127.0.0.1:4444, the registry)"
-      , "  --url wss://HOST/ws a hub behind TLS (every hosted app), or ws://HOST:PORT/PATH;"
+      , "  --url wss://HOST/ws a service behind TLS (every hosted app), or ws://HOST:PORT/PATH;"
       , "                      the same as -H HOST --tls --path /ws (443 unless -P). The"
       , "                      certificate is checked against the system's trust store;"
       , "                      --cacert FILE trusts a local CA too. Sessions are kept per"
@@ -1881,7 +1881,7 @@ encodeDryRun backend namespacePath method params =
 -- soJson: output raw JSON stream items
 -- soRaw: skip template rendering, just output content JSON
 -- otherwise: try template rendering, fall back to content JSON
-printResult :: Bool -> Bool -> RendererConfig -> HubStreamItem -> IO ()
+printResult :: Bool -> Bool -> RendererConfig -> ServiceStreamItem -> IO ()
 printResult json raw cfg item = case itemRefusal item of
   -- AUTH-8: a refusal says what it needed (and the call exits non-zero)
   Just r -> do
@@ -1891,18 +1891,18 @@ printResult json raw cfg item = case itemRefusal item of
       TIO.hPutStr stderr (renderRefusal ceiling' r)
   Nothing -> printResult' json raw cfg item
 
-printResult' :: Bool -> Bool -> RendererConfig -> HubStreamItem -> IO ()
+printResult' :: Bool -> Bool -> RendererConfig -> ServiceStreamItem -> IO ()
 printResult' True _ _ item = LBS.putStrLn $ encode item
 printResult' _ True _ item = case item of
   -- Raw mode: just output the content
-  HubData _ _ _ dat -> do
+  ServiceData _ _ _ dat -> do
     LBS.putStrLn $ encode dat
     hFlush stdout
-  HubProgress _ _ msg _ -> do
+  ServiceProgress _ _ msg _ -> do
     TIO.putStr msg
     TIO.putStr "\r"
     hFlush stdout
-  HubError _ _ err _ ->
+  ServiceError _ _ err _ ->
     hPutStrLn stderr $ "Error: " <> T.unpack err
   _ -> pure ()
 printResult' _ _ cfg item = do
@@ -1916,14 +1916,14 @@ printResult' _ _ cfg item = do
           hFlush stdout
     Nothing -> case item of
       -- Fallback to pretty-printed content
-      HubData _ _ _ dat -> do
+      ServiceData _ _ _ dat -> do
         TIO.putStrLn $ prettyValue dat
         hFlush stdout
-      HubProgress _ _ msg _ -> do
+      ServiceProgress _ _ msg _ -> do
         TIO.putStr msg
         TIO.putStr "\r"
         hFlush stdout
-      HubError _ _ err _ ->
+      ServiceError _ _ err _ ->
         hPutStrLn stderr $ "Error: " <> T.unpack err
       _ -> pure ()
 
@@ -1936,7 +1936,7 @@ printResult' _ _ cfg item = do
 argsInfo :: ParserInfo Args
 argsInfo = info (argsParser <**> versionOption <**> helper)
   ( fullDesc
- <> header "synapse - Algebraic CLI for Hub"
+ <> header "synapse - Algebraic CLI for Service"
  <> progDesc "synapse [OPTIONS] <backend> <path...> [--param value ...]"
  <> noIntersperse  -- Stop option parsing at first positional arg
  <> footerDoc (Just (Pretty.vsep (map (Pretty.pretty . T.unpack) (drop 1 metaCommands))))
@@ -1950,7 +1950,7 @@ argsParser = Args <$> optsParser <*> backendParser <*> restParser <*> pure Nothi
   where
     backendParser = optional $ T.pack <$> argument str
       ( metavar "BACKEND"
-     <> help "Backend name (e.g., plexus, registry-hub)" )
+     <> help "Backend name (e.g., plexus, menger)" )
 
     restParser = many $ T.pack <$> argument str
       ( metavar "PATH... [--param value ...]"
@@ -1966,7 +1966,7 @@ optsParser = do
    <> help "Registry/discovery port (default: 4444; 443 with --tls)" )
   soUrl <- optional $ T.pack <$> strOption
     ( long "url" <> metavar "URL"
-   <> help "The hub's socket as a URL: ws://HOST[:PORT][/PATH] or wss://HOST[:PORT][/PATH] (e.g. wss://app.menger.sh/ws); in place of -H/-P/--tls/--path" )
+   <> help "The service's socket as a URL: ws://HOST[:PORT][/PATH] or wss://HOST[:PORT][/PATH] (e.g. wss://app.menger.sh/ws); in place of -H/-P/--tls/--path" )
   soTls <- switch
     ( long "tls"
    <> help "Dial wss:// (TLS; the certificate checked against the system's trust store) at -H/-P" )

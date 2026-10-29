@@ -379,7 +379,7 @@ data SessionRec = SessionRec
   , srKey       :: Text           -- ^ the key's name in the key store
   , srScope     :: [Text]         -- ^ as asked at login (empty: the key's own)
   , srTtl       :: Maybe Integer  -- ^ as asked at login
-  , srBackend   :: Text           -- ^ the hub's name (its @<name>.call@)
+  , srBackend   :: Text           -- ^ the service's name (its @<name>.call@)
   } deriving (Eq, Show)
 
 instance ToJSON SessionRec where

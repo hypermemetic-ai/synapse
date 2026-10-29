@@ -135,9 +135,9 @@ substrate/src/
 
 ## Why These Names
 
-### Why "Plexus" not "Hub" or "Body"
+### Why "Plexus" not the routing-device name or "Body"
 
-- **Hub** is a network topology term—passive routing
+- **The routing-device name** is a network topology term—passive routing
 - **Body** implies the whole organism, but this is just the coordinator inside substrate
 - **Plexus** is precisely what this is: a nerve network that coordinates and routes signals
 

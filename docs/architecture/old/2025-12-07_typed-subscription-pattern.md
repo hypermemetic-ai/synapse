@@ -7,12 +7,12 @@
 
 We want plugins to:
 1. Return **tightly-typed, specific stream types** (e.g., `Stream<AgentChatItem>`)
-2. Have the hub **uniformly handle all plugins as subscriptions**
+2. Have the service **uniformly handle all plugins as subscriptions**
 3. **Enforce at compile-time** that plugin return types are convertible to `SubscriptionResult`
 
 This gives us:
 - Type safety in plugin implementations
-- Uniform subscription-based hub interface
+- Uniform subscription-based service interface
 - Compile-time verification that all plugins fit the model
 
 ## Solution: Trait Bounds + Conversion Layer
@@ -243,18 +243,18 @@ async fn bad(&self, ...) -> Result<impl Stream<Item = MyType>, Error>;
 // Error: MyType doesn't implement Serialize, required by IntoSubscription
 ```
 
-### Hub Can Treat Everything Uniformly
+### Service Can Treat Everything Uniformly
 
 ```rust
-pub struct PluginHub {
+pub struct PluginService {
     plugins: HashMap<String, Arc<dyn RpcModule>>,
 }
 
-impl PluginHub {
+impl PluginService {
     pub async fn call_plugin(&self, method: &str, params: Value) -> SubscriptionResult {
         // All plugins expose jsonrpsee RPC modules
         // All streaming methods return SubscriptionResult
-        // Hub doesn't need to know about specific types
+        // Service doesn't need to know about specific types
         let module = self.plugins.get(method)?;
         module.call_subscription(method, params).await
     }
@@ -396,7 +396,7 @@ impl AgentPluginServer for AgentPluginImpl {
 ## Benefits
 
 ✅ **Type Safety**: Plugin methods return specific types
-✅ **Uniform Hub**: Everything is a subscription at the RPC layer
+✅ **Uniform Service**: Everything is a subscription at the RPC layer
 ✅ **Compile-Time Checks**: `IntoSubscription` bound enforced by compiler
 ✅ **Inter-Plugin Calls**: Generated clients provide typed interfaces
 ✅ **Path Tracking**: Automatic wrapping with `TrackedStreamItem`

@@ -78,7 +78,7 @@ import qualified Katip
 
 -- | Environment for Synapse operations
 data SynapseEnv = SynapseEnv
-  { seEndpoint :: !Endpoint                   -- ^ Where the hub is reached (SCAFFOLD-21: ws or wss, its path)
+  { seEndpoint :: !Endpoint                   -- ^ Where the service is reached (SCAFFOLD-21: ws or wss, its path)
   , seBackend :: !Text                        -- ^ Backend name (first CLI argument)
   , seCache   :: !(IORef (HashMap PluginHash PluginSchema))  -- ^ Schema cache
   , seVisited :: !(IORef (HashSet PluginHash))               -- ^ Cycle detection
@@ -175,22 +175,22 @@ runSynapseM' backend action = do
   env <- defaultEnv backend logger
   runSynapseM env action
 
--- | The hub's host.
+-- | The service's host.
 seHost :: SynapseEnv -> Text
 seHost = epHost . seEndpoint
 
--- | The hub's port.
+-- | The service's port.
 sePort :: SynapseEnv -> Int
 sePort = epPort . seEndpoint
 
 -- | Initialize environment with given host/port/backend/logger/token, for a
--- hub at plain @ws://HOST:PORT/@ ('initEnvAt' for any address).
+-- service at plain @ws://HOST:PORT/@ ('initEnvAt' for any address).
 -- Extra cookies/headers default to empty; use 'withRequestContext' to add
 -- them after construction (SAFE-S04/REQ-5).
 initEnv :: Text -> Int -> Text -> Log.Logger -> Maybe Text -> IO SynapseEnv
 initEnv host port = initEnvAt (plainAt host port)
 
--- | SCAFFOLD-21: 'initEnv' for a hub at any address (@wss://…/ws@ too).
+-- | SCAFFOLD-21: 'initEnv' for a service at any address (@wss://…/ws@ too).
 initEnvAt :: Endpoint -> Text -> Log.Logger -> Maybe Text -> IO SynapseEnv
 initEnvAt ep backend logger token = do
   cache <- newIORef HM.empty
@@ -288,8 +288,8 @@ insertCache hash schema = do
   liftIO $ modifyIORef' cacheRef (HM.insert key schema)
 
 -- | AUTH-8: a cache key under the caller's view — @VIEW/HASH@, or the hash
--- alone on a hub with no view (as before AUTH). Two callers' views of one
--- hub never share an entry, even where the hub gave a schema one hash in
+-- alone on a service with no view (as before AUTH). Two callers' views of one
+-- service never share an entry, even where the service gave a schema one hash in
 -- both.
 viewQualified :: Maybe Text -> Text -> Text
 viewQualified Nothing hash = hash

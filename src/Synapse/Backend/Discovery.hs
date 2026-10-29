@@ -13,13 +13,13 @@
 --
 -- @
 -- ┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
--- │   synapse   │────▶│  Hub Directory   │────▶│  Backend Hubs   │
+-- │   synapse   │────▶│  Service Directory   │────▶│  Backend Services   │
 -- │   (CLI)     │     │  (port 4444)     │     │  (discovered)   │
 -- └─────────────┘     └──────────────────┘     └─────────────────┘
 --                             │
 --                             ▼
 --                     Returns list of:
---                     - Hub name
+--                     - Service name
 --                     - Connection info (host:port or https URL)
 --                     - Description
 --                     - Schema hash
@@ -104,7 +104,7 @@ import System.Environment (lookupEnv)
 -- Backend Type
 -- ============================================================================
 
--- | A discovered backend hub
+-- | A discovered backend service
 data Backend = Backend
   { backendName        :: Text       -- ^ e.g., "plexus"
   , backendDescription :: Text       -- ^ Human-readable description
@@ -207,7 +207,7 @@ registryDiscovery :: Text -> Int -> BackendDiscovery
 registryDiscovery registryHost registryPort = registryDiscoveryAt (plainAt registryHost registryPort)
 
 -- | SCAFFOLD-21: 'registryDiscovery' through a connection point at any
--- address (a hub behind TLS, on a path). The backends a registry lists
+-- address (a service behind TLS, on a path). The backends a registry lists
 -- are plain @ws://HOST:PORT/@, as it records them; the connection point
 -- itself is reached as it was named ('endpointFor').
 registryDiscoveryAt :: Endpoint -> BackendDiscovery
@@ -259,7 +259,7 @@ endpointFor ep b
   | otherwise = plainAt (backendHost b) (backendPort b)
 
 -- | Get the backend name at a given host/port via _info
--- Returns whatever backend is running there (e.g., "registry-hub", "plexus")
+-- Returns whatever backend is running there (e.g., "menger", "plexus")
 -- If that backend has a registry plugin, it can be used to discover other backends
 getBackendAt :: Text -> Int -> IO (Maybe Text)
 getBackendAt host port = getBackendAtEp [] (plainAt host port)

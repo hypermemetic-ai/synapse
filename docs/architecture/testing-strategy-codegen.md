@@ -75,11 +75,11 @@ describe "Namespace paths" $ do
 
 ---
 
-### Layer 2: Unit Tests (Rust - hub-codegen)
+### Layer 2: Unit Tests (Rust - service-codegen)
 
 **Purpose:** Validate TypeScript generation logic
 
-**Location:** `hub-codegen/tests/`
+**Location:** `service-codegen/tests/`
 
 #### 2.1 TypeRef Import Generation Tests
 ```rust
@@ -187,7 +187,7 @@ fn accepts_current_ir_version() {
 
 **Purpose:** Test the full Haskell → Rust pipeline
 
-**Location:** `synapse/test/integration/` or `hub-codegen/tests/integration/`
+**Location:** `synapse/test/integration/` or `service-codegen/tests/integration/`
 
 #### 3.1 Golden File Tests
 ```bash
@@ -198,7 +198,7 @@ fn accepts_current_ir_version() {
 cabal run synapse -- -i > /tmp/test-ir-current.json
 
 # Generate TypeScript
-cargo run --manifest-path ../hub-codegen/Cargo.toml -- \
+cargo run --manifest-path ../service-codegen/Cargo.toml -- \
   /tmp/test-ir-current.json -o /tmp/test-codegen-output
 
 # Compare against golden files (known good structure)
@@ -254,7 +254,7 @@ describe('Generated TypeScript compilation', () => {
 
 #### 3.3 Snapshot Tests
 ```rust
-// hub-codegen/tests/snapshots.rs
+// service-codegen/tests/snapshots.rs
 use insta::assert_snapshot;
 
 #[test]
@@ -322,7 +322,7 @@ describe('Generated client smoke tests', () => {
 
 # Generate from current IR
 cabal run synapse -- -i > /tmp/ir-current.json
-cargo run --manifest-path ../hub-codegen/Cargo.toml -- \
+cargo run --manifest-path ../service-codegen/Cargo.toml -- \
   /tmp/ir-current.json -o /tmp/codegen-current
 
 # Count files generated
@@ -371,7 +371,7 @@ echo "Running pre-commit checks..."
 cabal test || exit 1
 
 # 2. Rust tests
-(cd ../hub-codegen && cargo test) || exit 1
+(cd ../service-codegen && cargo test) || exit 1
 
 # 3. IR generation test
 cabal run synapse -- -i > /tmp/pre-commit-ir.json
@@ -404,7 +404,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
       - run: cargo test
-        working-directory: hub-codegen
+        working-directory: service-codegen
 
   test-e2e:
     runs-on: ubuntu-latest
@@ -417,7 +417,7 @@ jobs:
         run: cabal run synapse -- -i > /tmp/ir.json
 
       - name: Generate TypeScript
-        run: cargo run --manifest-path hub-codegen/Cargo.toml -- /tmp/ir.json -o /tmp/generated
+        run: cargo run --manifest-path service-codegen/Cargo.toml -- /tmp/ir.json -o /tmp/generated
 
       - name: Validate structure
         run: test/integration/golden_test.sh
@@ -500,7 +500,7 @@ echo "→ Running Haskell tests..."
 cabal test
 
 echo "→ Running Rust tests..."
-(cd ../hub-codegen && cargo test)
+(cd ../service-codegen && cargo test)
 
 # 3. Generate fresh IR
 echo "→ Generating IR..."
@@ -514,7 +514,7 @@ jq -e '.irMethods | length > 0' /tmp/validation-test/ir.json
 
 # 5. Generate TypeScript
 echo "→ Generating TypeScript..."
-cargo run --manifest-path ../hub-codegen/Cargo.toml --release -- \
+cargo run --manifest-path ../service-codegen/Cargo.toml --release -- \
   /tmp/validation-test/ir.json -o /tmp/validation-test/generated
 
 # 6. Check file structure

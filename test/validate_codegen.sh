@@ -34,7 +34,7 @@ fi
 echo
 
 echo "${YELLOW}→ Running Rust tests...${NC}"
-if (cd ../hub-codegen && cargo test 2>&1 | tail -10); then
+if (cd ../service-codegen && cargo test 2>&1 | tail -10); then
   echo "${GREEN}✓ Rust tests passed${NC}"
 else
   echo "${RED}✗ Rust tests failed${NC}"
@@ -110,7 +110,7 @@ echo
 echo "${YELLOW}→ Generating TypeScript...${NC}"
 GEN_DIR="$TEST_DIR/generated"
 
-if ! cargo run --manifest-path ../hub-codegen/Cargo.toml --release -- "$IR_FILE" -o "$GEN_DIR" 2>&1 | tail -20; then
+if ! cargo run --manifest-path ../service-codegen/Cargo.toml --release -- "$IR_FILE" -o "$GEN_DIR" 2>&1 | tail -20; then
   echo "${RED}✗ TypeScript generation failed${NC}"
   exit 1
 fi

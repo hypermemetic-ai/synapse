@@ -2,27 +2,27 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | AUTH-8: a Plexus hub in miniature, speaking the wire synapse speaks
+-- | AUTH-8: a Plexus service in miniature, speaking the wire synapse speaks
 -- (JSON-RPC over a WebSocket; @_info@, @<backend>.call@, subscription
 -- notifications ending in @done@), answering AUTH-2..5's shapes as the
 -- tickets write them. It listens on 127.0.0.1, a port the OS picks.
 --
--- A 'Scenario' says which hub it is: today's (no view, no auth activation),
+-- A 'Scenario' says which service it is: today's (no view, no auth activation),
 -- an anonymous caller's, or a signed-in caller's. The person flow's
--- browser is played by the hub itself: answering @auth.login {flow:
+-- browser is played by the service itself: answering @auth.login {flow:
 -- {browser: {redirect}}}@ it also, a moment later, sends the GET the
 -- provider's redirect would — to @redirect?code=…&state=…@.
-module MockHub
+module MockService
   ( Scenario(..)
   , ViewMode(..)
-  , todaysHub
-  , withMockHub
-  , serveMockHub
+  , todaysService
+  , withMockService
+  , serveMockService
   , mockCode
   , mockState
-  , catalogHub
+  , catalogService
   , schemaCalls
-    -- * SYNAPSE-28: what a run cost the hub
+    -- * SYNAPSE-28: what a run cost the service
   , connectionsAccepted
   , infoCalls
   , unsubscribes
@@ -62,21 +62,21 @@ data Scenario = Scenario
   , scCatalog       :: Bool   -- ^ SYNAPSE-17: serve menger's tickets and deployments as they were (test/fixtures)
   } deriving (Eq, Show)
 
-todaysHub :: Scenario
-todaysHub = Scenario NoView False True mockState False
+todaysService :: Scenario
+todaysService = Scenario NoView False True mockState False
 
--- | SYNAPSE-17: a hub with a catalog to search — menger's tickets (17 of
+-- | SYNAPSE-17: a service with a catalog to search — menger's tickets (17 of
 -- its methods) and deployments (3), as its schema had them on 2026-10-15;
 -- in a caller's view, tickets.delete (admin only) is not in it.
-catalogHub :: ViewMode -> Scenario
-catalogHub v = Scenario v False False mockState True
+catalogService :: ViewMode -> Scenario
+catalogService v = Scenario v False False mockState True
 
--- | How many schema calls the mock hubs have answered (this process).
+-- | How many schema calls the mock services have answered (this process).
 {-# NOINLINE schemaCalls #-}
 schemaCalls :: IORef Int
 schemaCalls = unsafePerformIO (newIORef 0)
 
--- | SYNAPSE-28: WebSocket connections the mock hubs have accepted (this process).
+-- | SYNAPSE-28: WebSocket connections the mock services have accepted (this process).
 {-# NOINLINE connectionsAccepted #-}
 connectionsAccepted :: IORef Int
 connectionsAccepted = unsafePerformIO (newIORef 0)
@@ -91,7 +91,7 @@ infoCalls = unsafePerformIO (newIORef 0)
 unsubscribes :: IORef [Value]
 unsubscribes = unsafePerformIO (newIORef [])
 
--- | SYNAPSE-28: the hub renamed @tickets.get@ to @tickets.fetch@ (its schema
+-- | SYNAPSE-28: the service renamed @tickets.get@ to @tickets.fetch@ (its schema
 -- says @fetch@, and @get@ is not found).
 {-# NOINLINE renamedGet #-}
 renamedGet :: IORef Bool
@@ -107,9 +107,9 @@ mockCode, mockState :: Text
 mockCode = "c_19ab"
 mockState = "s_7f2c"
 
--- | Run an action against a hub on a fresh port; the port is passed in.
-withMockHub :: Scenario -> (Int -> IO a) -> IO a
-withMockHub sc act = bracket open (N.close . fst) (\(_, port) -> act port)
+-- | Run an action against a service on a fresh port; the port is passed in.
+withMockService :: Scenario -> (Int -> IO a) -> IO a
+withMockService sc act = bracket open (N.close . fst) (\(_, port) -> act port)
   where
     open = do
       sock <- N.socket N.AF_INET N.Stream N.defaultProtocol
@@ -121,8 +121,8 @@ withMockHub sc act = bracket open (N.close . fst) (\(_, port) -> act port)
       pure (sock, port)
 
 -- | Serve until killed, printing the port (for transcripts by hand).
-serveMockHub :: Scenario -> IO ()
-serveMockHub sc = withMockHub sc $ \port -> do
+serveMockService :: Scenario -> IO ()
+serveMockService sc = withMockService sc $ \port -> do
   putStrLn (show port)
   hFlush stdout
   forever (threadDelay 1000000)
@@ -131,7 +131,7 @@ acceptLoop :: Scenario -> N.Socket -> IO ()
 acceptLoop sc sock = do
   r <- try (N.accept sock)
   case r of
-    Left (_ :: SomeException) -> pure ()   -- the hub was closed
+    Left (_ :: SomeException) -> pure ()   -- the service was closed
     Right (conn, _) -> do
       void $ forkIO $ do
         _ <- try (session conn) :: IO (Either SomeException ())
@@ -191,7 +191,7 @@ handleCall sc c next signedIn _o rid method params = do
           args = case KM.lookup "params" params of { Just (Object a) -> a; _ -> KM.empty }
       renamed <- readIORef renamedGet
       case inner of
-        -- waits for its answer off the connection's loop, as a real hub
+        -- waits for its answer off the connection's loop, as a real service
         -- runs calls side by side (SYNAPSE-28: the answer may come on this
         -- very connection)
         "tickets.ask" -> void $ forkIO (askBack emit meta dat err >> done)

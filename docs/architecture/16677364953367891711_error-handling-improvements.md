@@ -265,7 +265,7 @@ synapse --debug cone chat ...    # Show full RPC traces
 **File:** `src/Synapse/Renderer.hs`
 
 ```haskell
-renderItem :: SynapseConfig -> HubStreamItem -> IO (Maybe Text)
+renderItem :: SynapseConfig -> ServiceStreamItem -> IO (Maybe Text)
 renderItem cfg item = do
   result <- runExceptT $ renderWithTemplate cfg item
   case result of
@@ -690,7 +690,7 @@ impl ConePlugin {
 **Synapse Side:**
 ```haskell
 -- Generate request ID for each RPC call
-invokeWithId :: Path -> Text -> Value -> SynapseM ([HubStreamItem], Text)
+invokeWithId :: Path -> Text -> Value -> SynapseM ([ServiceStreamItem], Text)
 invokeWithId path method params = do
   requestId <- liftIO randomRequestId
   cfg <- getConfig
@@ -700,7 +700,7 @@ invokeWithId path method params = do
     Right items -> pure (items, requestId)
 
 -- Include in debug output
-debugTrace :: Text -> [HubStreamItem] -> String
+debugTrace :: Text -> [ServiceStreamItem] -> String
 debugTrace requestId items =
   "Request ID: " <> T.unpack requestId <> "\n"
   <> "Response items: " <> show (length items) <> "\n"
@@ -768,8 +768,8 @@ impl ClaudeCodePlugin {
 **Frontend:** Parse and display suggestions prominently:
 
 ```haskell
-renderHubError :: HubStreamItem -> String
-renderHubError (HubError _ _ err recoverable) =
+renderServiceError :: ServiceStreamItem -> String
+renderServiceError (ServiceError _ _ err recoverable) =
   case parseStructuredError err of
     Just structured ->
       "Error: " <> seMessage structured <> "\n\n"

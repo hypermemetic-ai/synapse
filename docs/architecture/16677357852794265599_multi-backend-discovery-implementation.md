@@ -6,9 +6,9 @@
 
 ## Overview
 
-Implemented a dynamic backend discovery system that enables Synapse to discover and connect to multiple Plexus hubs without manual configuration. The system uses the `_info` endpoint for auto-discovery and optionally queries a registry activation for additional backends.
+Implemented a dynamic backend discovery system that enables Synapse to discover and connect to multiple Plexus services without manual configuration. The system uses the `_info` endpoint for auto-discovery and optionally queries a registry activation for additional backends.
 
-**Key Achievement**: Zero-config backend discovery that "just works" while supporting multi-hub environments.
+**Key Achievement**: Zero-config backend discovery that "just works" while supporting multi-service environments.
 
 ## Architecture
 
@@ -52,7 +52,7 @@ backends = dedup(_info.backend + registry.list)
 ```
 Available backends:
   substrate      127.0.0.1:4444 ✗ - Main substrate instance
-  hub2           192.168.1.100:4444 ✗
+  service2           192.168.1.100:4444 ✗
 ```
 All backends showing as unreachable despite working correctly.
 
@@ -127,7 +127,7 @@ watchdog = do
 Available backends:
   substrate      127.0.0.1:4444 ✓ - Backend discovered via _info
   substrate      127.0.0.1:4444 ✓ - Main substrate instance
-  hub2           192.168.1.100:4444 ✗
+  service2           192.168.1.100:4444 ✗
 ```
 
 **Root Cause**: Discovery flow unconditionally added both:
@@ -151,7 +151,7 @@ let matchesDiscovered b = backendName b == discoveredName
 ```
 Available backends:
   substrate      127.0.0.1:4444 ✓ - Main substrate instance
-  hub2           192.168.1.100:4444 ✗
+  service2           192.168.1.100:4444 ✗
 ```
 
 **Lesson**: Always deduplicate discovered data from multiple sources.
@@ -245,7 +245,7 @@ synapse -P 4447 lforge hyperforge status
 **Scenario 1: Default Port (4444) with Registry**
 ```bash
 synapse
-# Shows: substrate (from registry) + hub2 (from registry)
+# Shows: substrate (from registry) + service2 (from registry)
 # Deduplicated: No duplicate substrate entries
 ```
 
@@ -328,7 +328,7 @@ forkIO $ do
 -- User sees:
 Available backends:
   substrate      127.0.0.1:4444 ? - Main substrate instance  -- Checking...
-  hub2           192.168.1.100:4444 ?
+  service2           192.168.1.100:4444 ?
 ```
 
 **Trade-off**: Health status might be stale but CLI starts instantly.
@@ -602,7 +602,7 @@ Auto-discover backends on local network:
 ```
 _plexus._tcp.local.
   → substrate.local:4444
-  → hub2.local:4444
+  → service2.local:4444
 ```
 
 No manual registration needed for local development.
@@ -651,7 +651,7 @@ CLI can route commands to backends based on capability version.
 
 - [Schema to CLI Pipeline](./16680606527890548735_schema-to-cli-pipeline.md) - How discovered schemas become CLI commands
 - [Introspective RPC Protocol](./16680807091363337727_introspective-rpc-protocol.md) - The `_info` and schema endpoints
-- [Multi-Hub Transport Envelope](./16679517135570018559_multi-hub-transport-envelope.md) - Original multi-backend design
+- [Multi-Service Transport Envelope](./16679517135570018559_multi-service-transport-envelope.md) - Original multi-backend design
 
 ## References
 

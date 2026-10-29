@@ -6,7 +6,7 @@ Synapse is the command-line frontend for [Plexus RPC](../plexus-protocol/) — a
 
 ```
                   ┌─────────────┐
-                  │  Substrate   │  Rust backend hub
+                  │  Substrate   │  Rust backend service
                   │  (Plexus)    │  hosts activations
                   └──────┬──────┘
                          │ WebSocket JSON-RPC 2.0
@@ -44,13 +44,13 @@ pub enum EchoEvent {
 // The activation
 pub struct Echo;
 
-#[plexus_macros::hub_methods(
+#[plexus_macros::activation(
     namespace = "echo",
     version = "1.0.0",
     description = "Echo messages back"
 )]
 impl Echo {
-    #[plexus_macros::hub_method(
+    #[plexus_macros::method(
         description = "Echo a message back the specified number of times",
         params(
             message = "The message to echo",
@@ -72,7 +72,7 @@ impl Echo {
         }
     }
 
-    #[plexus_macros::hub_method(
+    #[plexus_macros::method(
         description = "Echo a message once",
         params(message = "The message to echo")
     )]
@@ -87,10 +87,10 @@ impl Echo {
 }
 ```
 
-The macro generates the JSON-RPC server, `Activation` trait impl, method enum, and JSON Schemas — all from the function signatures and `JsonSchema` derives. Register it with the hub:
+The macro generates the JSON-RPC server, `Activation` trait impl, method enum, and JSON Schemas — all from the function signatures and `JsonSchema` derives. Register it with the service:
 
 ```rust
-let hub = DynamicHub::new("substrate")
+let service = DynamicService::new("substrate")
     .register(Echo::new())
     .register(Health::new())
     .register(Cone::new());
@@ -172,7 +172,7 @@ synapse lforge hyperforge repos_list --org juggernaut
 
 The key mental model: **don't think in terms of hosts and ports.** Register your backends, then use them by name. The registry is the source of truth.
 
-## A hub behind TLS: `--url wss://…` (SCAFFOLD-21, 3.15.0)
+## A service behind TLS: `--url wss://…` (SCAFFOLD-21, 3.15.0)
 
 A hosted app sits behind a proxy that terminates TLS and routes its socket
 at a path — every app on the house's edge is `wss://<app>.menger.sh/ws`.
@@ -223,7 +223,7 @@ synapse --url wss://app.example/ws app tickets health     # carries builder's se
 
 An agent's key proof names the server's socket origin as its audience:
 `ws://HOST:PORT` on a plain address (as before), `wss://HOST` (`:PORT` when
-not 443) behind TLS — what a hub run with `--public-url https://HOST` accepts
+not 443) behind TLS — what a service run with `--public-url https://HOST` accepts
 (plexus-login's `socket_urls`). The path is not part of it.
 
 ## Progressive Discovery
@@ -572,7 +572,7 @@ connection limits (429) is waited out like any outage.
 | -- | -- |
 | 69 | the backend stayed unreachable for the whole window |
 | 75 | a write went out and its answer never came — it may have happened |
-| 77 | the hub refused the call (AUTH-8) |
+| 77 | the service refused the call (AUTH-8) |
 
 Through the connection holder (SYNAPSE-28, below) all of this holds as it is.
 
@@ -594,7 +594,7 @@ Two things make it so:
   unix socket: `$XDG_RUNTIME_DIR/synapse/ADDRESS@AGENT-VERSION.sock` (0600,
   in a 0700 directory of yours). Later runs hand it their requests and read
   the replies back, so the TCP, TLS and upgrade handshakes (about 0.3 s to a
-  hosted hub) are paid once. One holder per address and agent (`--as`), never
+  hosted service) are paid once. One holder per address and agent (`--as`), never
   shared between agents; it exits after **10 minutes** with nothing to do
   (`--hold-for 30m`, or `SYNAPSE_HOLD_FOR`). `--no-hold` (`SYNAPSE_NO_HOLD=1`)
   skips it: that run dials one connection of its own and closes it. A call
@@ -748,7 +748,7 @@ that every construct 2.0 already typed serializes as before.
 
 ## Client Generation (synapse-cc)
 
-[**synapse-cc**](../synapse-cc/) (Synapse Compiler Collection) is a separate project that consumes Synapse's IR to produce typed client libraries. It imports plexus-synapse as a library, generates IR from a live backend, pipes it through [hub-codegen](../hub-codegen/) (a stateless Rust code generator), then handles merging, dependencies, building, and testing.
+[**synapse-cc**](../synapse-cc/) (Synapse Compiler Collection) is a separate project that consumes Synapse's IR to produce typed client libraries. It imports plexus-synapse as a library, generates IR from a live backend, pipes it through [service-codegen](../service-codegen/) (a stateless Rust code generator), then handles merging, dependencies, building, and testing.
 
 ```bash
 synapse-cc init                    # scaffold synapse.config.json
@@ -974,7 +974,12 @@ cabal build                        # Build
 cabal test                         # Run tests (needs backend on localhost:4444)
 cabal install                      # Install synapse binary
 cabal build -f build-examples      # Build optional examples
+scripts/naming-gate.sh             # The naming gate: each line that says the retired word (-c: the count)
 ```
+
+A Plexus backend is a *service* (NAMING-9; `~/AGENTS.md` "Naming"):
+`test-suite naming-gate` runs the gate, so `cabal test` fails the day the
+retired word is written again.
 
 ## License
 

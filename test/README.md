@@ -74,7 +74,7 @@ Tests for schema-driven bidirectional communication features.
 - Schema-driven dispatch assumptions
 - Statistical reporting of bidirectional coverage
 
-**Requires:** Running Hub backend (default: localhost:4444)
+**Requires:** Running Service backend (default: localhost:4444)
 
 **Run it:**
 ```bash
@@ -102,7 +102,7 @@ Tests for the Intermediate Representation builder.
 - Method help rendering
 - Support level detection
 
-**Requires:** Running Hub backend
+**Requires:** Running Service backend
 
 **Run it:**
 ```bash
@@ -255,7 +255,7 @@ See `BidirIntegrationSpec.hs` for a complete example.
 
 To run tests in CI:
 
-1. Start a Hub backend (if integration tests are included)
+1. Start a Service backend (if integration tests are included)
 2. Run all tests with appropriate options:
    ```bash
    cabal test --project-dir=/workspace/hypermemetic/synapse --test-options="plexus"
@@ -272,7 +272,7 @@ cabal test bidir-test parse-test path-normalization-test typeref-json
 ## Troubleshooting
 
 ### "Could not connect" error
-- Ensure a Hub backend is running on the specified port
+- Ensure a Service backend is running on the specified port
 - Check firewall settings
 - Verify the backend name matches the running backend
 

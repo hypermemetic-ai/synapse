@@ -167,8 +167,8 @@ tooMany :: Text -> Bool
 tooMany msg = any (`T.isInfixOf` T.toLower msg) ["responsecode = 429", "too many requests"]
 
 -- | SCAFFOLD-21: a proxy in front (the edge before a hosted app) answering
--- the upgrade 502, 503 or 504 — it is up, the hub behind it is not (a
--- promote's restart). Nothing was sent; the hub comes back behind it.
+-- the upgrade 502, 503 or 504 — it is up, the service behind it is not (a
+-- promote's restart). Nothing was sent; the service comes back behind it.
 gatewayDown :: Text -> Bool
 gatewayDown msg = any (`T.isInfixOf` T.toLower msg)
   ["responsecode = 502", "responsecode = 503", "responsecode = 504"]
@@ -183,7 +183,7 @@ isOutageText msg = any (`T.isInfixOf` T.toLower msg)
     -- the server's connection limits (ACCESS-29) answer 429 at the upgrade:
     -- nothing was sent, and it passes
   , "responsecode = 429", "too many requests"
-    -- SCAFFOLD-21: the proxy in front answers while the hub behind is away
+    -- SCAFFOLD-21: the proxy in front answers while the service behind is away
   , "responsecode = 502", "responsecode = 503", "responsecode = 504"
   ]
 
@@ -210,7 +210,7 @@ plainReason why
   | "ConnectionRefused" `T.isInfixOf` why = "connection refused"
   | "ConnectionTimeout" `T.isInfixOf` why = "connection timed out"
   | Just code <- find (\c -> ("responseCode = " <> c) `T.isInfixOf` why) ["502", "503", "504"] =
-      "the proxy in front answered " <> code <> ": the hub behind it is away"
+      "the proxy in front answered " <> code <> ": the service behind it is away"
   | otherwise = why
 
 -- | An outage under way: when it began, how many tries, the next pause.

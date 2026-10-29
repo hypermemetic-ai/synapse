@@ -144,7 +144,7 @@ pub trait MyRpc {
 ### How jsonrpsee Fits Our Architecture
 
 Our requirements:
-1. ✅ **Hub-and-spoke routing**: Each plugin is an RPC trait
+1. ✅ **Star routing (one router, many spokes)**: Each plugin is an RPC trait
 2. ✅ **Type-safe methods**: Proc macros ensure compile-time safety
 3. ✅ **Streaming support**: Native subscriptions for our stream-based design
 4. ✅ **Plugin path tracking**: We add this as a wrapper around subscription items
@@ -216,7 +216,7 @@ We wrap subscription items with our path tracking:
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackedStreamItem {
     pub plugin_path: PluginPath,
-    pub item: HubStreamItem,
+    pub item: ServiceStreamItem,
 }
 
 // Plugin implementations yield TrackedStreamItem

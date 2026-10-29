@@ -9,7 +9,7 @@
 -- - Methods with bidirectional flag are detected
 -- - Schema-driven dispatch logic
 --
--- This test requires a running Hub backend on localhost:4444
+-- This test requires a running Service backend on localhost:4444
 -- with at least one method marked as bidirectional.
 module Main where
 
@@ -54,9 +54,9 @@ main = do
       case irResult of
         Left err -> do
           putStrLn $ "Failed to build IR: " <> show err
-          putStrLn "Is the Hub backend running?"
+          putStrLn "Is the Service backend running?"
           hspec $ describe "Bidirectional Integration Tests" $
-            it "connects to Hub backend" $
+            it "connects to Service backend" $
               expectationFailure $ "Could not connect: " <> show err
 
         Right ir -> withArgs [] $ hspec $ bidirIntegrationSpec ir

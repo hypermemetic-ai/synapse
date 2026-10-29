@@ -56,9 +56,9 @@ main = do
   case irResult of
     Left err -> do
       putStrLn $ "Failed to build IR: " <> show err
-      putStrLn "Is the Hub backend running?"
+      putStrLn "Is the Service backend running?"
       withArgs [] $ hspec $ describe "IR Integration Tests" $
-        it "connects to Hub backend" $
+        it "connects to Service backend" $
           expectationFailure $ "Could not connect: " <> show err
 
     Right ir -> withArgs [] $ hspec $ irSpec ir

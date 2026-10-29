@@ -28,7 +28,7 @@ This results in:
 The Rust `schemars` crate generates self-contained JSON schemas. Each call to `schema_for!(T)` includes all referenced types in `$defs`:
 
 ```rust
-// In hub-macro/src/codegen/method_enum.rs (lines 81-97)
+// In plexus-macros/src/codegen/method_enum.rs (lines 81-97)
 let return_schema_entries: Vec<TokenStream> = methods
     .iter()
     .map(|m| {
@@ -123,15 +123,15 @@ Since `jupiter.SolarEvent` and `io.SolarEvent` have different qualified names, t
 
 ## Solution Options
 
-### Option A: Schema Registry at Compile Time (hub-macro)
+### Option A: Schema Registry at Compile Time (plexus-macros)
 
-**Approach**: Modify the hub-macro code generator to emit schemas that reference a shared type registry instead of embedding types inline.
+**Approach**: Modify the plexus-macros code generator to emit schemas that reference a shared type registry instead of embedding types inline.
 
 **Implementation**:
 
 1. **Create a type registry macro**:
    ```rust
-   // New: hub-macro/src/codegen/type_registry.rs
+   // New: plexus-macros/src/codegen/type_registry.rs
 
    /// Collect all types used across methods into a shared registry
    pub fn generate_type_registry(methods: &[MethodDef]) -> TokenStream {
@@ -190,7 +190,7 @@ Since `jupiter.SolarEvent` and `io.SolarEvent` have different qualified names, t
 
 ---
 
-### Option B: Runtime Deduplication in Plexus (hub-core)
+### Option B: Runtime Deduplication in Plexus (plexus-core)
 
 **Approach**: When returning schemas, Plexus collects all `$defs` from the tree, deduplicates them, and returns a flattened schema with shared types.
 
@@ -198,7 +198,7 @@ Since `jupiter.SolarEvent` and `io.SolarEvent` have different qualified names, t
 
 1. **Add deduplication to schema collection**:
    ```rust
-   // In hub-core/src/plexus/plexus.rs
+   // In plexus-core/src/plexus/plexus.rs
 
    /// Collect schemas with deduplicated type definitions
    pub fn collect_deduplicated_schemas(&self) -> DeduplicatedSchema {
@@ -232,7 +232,7 @@ Since `jupiter.SolarEvent` and `io.SolarEvent` have different qualified names, t
 2. **Add new RPC method**:
    ```rust
    // {backend}.full_schema_deduplicated or enhance existing plexus.schema
-   #[hub_method]
+   #[method]
    async fn full_schema(&self) -> PlexusFullSchema {
        let deduped = self.collect_deduplicated_schemas();
        PlexusFullSchema {
@@ -245,7 +245,7 @@ Since `jupiter.SolarEvent` and `io.SolarEvent` have different qualified names, t
 
 3. **Update schema structure**:
    ```rust
-   // In hub-core/src/plexus/schema.rs
+   // In plexus-core/src/plexus/schema.rs
 
    #[derive(Serialize, JsonSchema)]
    pub struct PlexusFullSchema {
@@ -451,7 +451,7 @@ This allows clients to correctly attribute types to their defining namespace.
 
 ### Medium-term (Future)
 3. **Implement Option A** - Compile-time registry
-   - Refactor hub-macro to generate type registries
+   - Refactor plexus-macros to generate type registries
    - Reduce runtime deduplication needs
 
 4. **Enhance tooling**
@@ -477,16 +477,16 @@ This allows clients to correctly attribute types to their defining namespace.
 ## Appendix: Affected Files
 
 ### Backend (Substrate)
-- `hub-macro/src/codegen/method_enum.rs` - Schema generation
-- `hub-macro/src/codegen/activation.rs` - Plugin schema building
-- `hub-core/src/plexus/plexus.rs` - Schema collection
-- `hub-core/src/plexus/schema.rs` - Schema structures
+- `plexus-macros/src/codegen/method_enum.rs` - Schema generation
+- `plexus-macros/src/codegen/activation.rs` - Plugin schema building
+- `plexus-core/src/plexus/plexus.rs` - Schema collection
+- `plexus-core/src/plexus/schema.rs` - Schema structures
 
 ### Synapse (Haskell)
 - `src/Synapse/IR/Builder.hs` - IR construction
 - `src/Synapse/IR/Types.hs` - TypeDef structure
 - `src/Synapse/Schema/Types.hs` - Schema parsing
 
-### Hub-Codegen (Rust)
+### Service-Codegen (Rust)
 - `src/ir.rs` - IR structures
 - `src/generator/types.rs` - Type generation
