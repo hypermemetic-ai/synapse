@@ -58,7 +58,7 @@ Both approaches return identical `MethodSchema` output.
 Runtime validation prevents ambiguous routing by detecting collisions at schema construction time:
 
 ```rust
-// PluginSchema::hub() and ::leaf() will panic on:
+// PluginSchema::parent() and ::leaf() will panic on:
 // - Duplicate method names
 // - Duplicate child names
 // - Method/child name collisions
@@ -79,10 +79,10 @@ pub struct PluginSchema {
 }
 ```
 
-The 15-word limit on `description` is enforced in `hub-macro` at compile time:
+The 15-word limit on `description` is enforced in `plexus-macros` at compile time:
 
 ```rust
-// hub-macro/src/parse.rs
+// plexus-macros/src/parse.rs
 const MAX_DESCRIPTION_WORDS: usize = 15;
 // Compile error if exceeded
 ```
@@ -278,7 +278,7 @@ fetchMethodSchema plugin method = do
 - `src/activations/health/activation.rs` - Updated schema handling
 - `src/activations/solar/celestial.rs` - Updated schema handling
 
-### Hub-Macro
+### Plexus-macros
 - `src/parse.rs` - Added `long_description` parsing, 15-word validation
 - `src/codegen/mod.rs` - Pass through long_description
 - `src/codegen/activation.rs` - Generate long_description(), updated schema dispatch

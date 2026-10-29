@@ -80,7 +80,7 @@ data TypeRef
 ```
 
 #### Phase 1.2: Rust Types ✅
-**File**: `/Users/user/dev/controlflow/hypermemetic/hub-codegen/src/ir.rs`
+**File**: `/Users/user/dev/controlflow/hypermemetic/service-codegen/src/ir.rs`
 
 Added:
 ```rust
@@ -141,8 +141,8 @@ parseQualifiedName t =
 ### Phase 3: TypeScript Generators ✅
 
 **Files**:
-- `/Users/user/dev/controlflow/hypermemetic/hub-codegen/src/generator/types.rs`
-- `/Users/user/dev/controlflow/hypermemetic/hub-codegen/src/generator/namespaces.rs`
+- `/Users/user/dev/controlflow/hypermemetic/service-codegen/src/generator/types.rs`
+- `/Users/user/dev/controlflow/hypermemetic/service-codegen/src/generator/namespaces.rs`
 
 Replaced all string parsing with structured access:
 ```rust
@@ -203,12 +203,12 @@ emptyIR = IR
 
 **Added version check**:
 ```rust
-// hub-codegen/src/generator/mod.rs
+// service-codegen/src/generator/mod.rs
 pub fn generate(ir: &IR) -> Result<GenerationResult> {
     if ir.ir_version != "2.0" {
         anyhow::bail!(
             "Unsupported IR version: {}. Expected 2.0.\n\
-             This version of hub-codegen requires IR v2.0 with structured TypeRef.\n\
+             This version of service-codegen requires IR v2.0 with structured TypeRef.\n\
              Please regenerate IR with latest Synapse.",
             ir.ir_version
         );
@@ -264,7 +264,7 @@ grep -r "cache" # in plexus/substrate code
 
 **What We Haven't Verified**:
 - [ ] IR generation produces structured `QualifiedName` format
-- [ ] hub-codegen can deserialize the new format
+- [ ] service-codegen can deserialize the new format
 - [ ] TypeScript generation works with structured refs
 - [ ] Cross-namespace imports are fixed
 - [ ] TypeScript compilation succeeds with fewer errors
@@ -338,7 +338,7 @@ jq '.irMethods["cone.chat"].mdReturns' /tmp/ir-test.json
 
 #### Step 4: Deserialization Test
 ```bash
-cd hub-codegen
+cd service-codegen
 cargo run --release -- /tmp/ir-test.json --dry-run 2>&1 | head -20
 ```
 
@@ -406,7 +406,7 @@ cabal build synapse
 jq -r '.irVersion' /tmp/ir-final.json  # Should be "2.0"
 
 # Generate TypeScript
-cd ../hub-codegen
+cd ../service-codegen
 cargo run --release -- /tmp/ir-final.json -o /tmp/client-final
 
 # Install and test
@@ -433,16 +433,16 @@ synapse/test/IRSpec.hs                   - Update test helpers
 
 ### Modified Files (Rust)
 ```
-hub-codegen/src/ir.rs                    - QualifiedName struct, TypeRef update
-hub-codegen/src/generator/types.rs       - Use structured access, fix imports
-hub-codegen/src/generator/namespaces.rs  - Use structured access
-hub-codegen/src/generator/mod.rs         - Version check
+service-codegen/src/ir.rs                    - QualifiedName struct, TypeRef update
+service-codegen/src/generator/types.rs       - Use structured access, fix imports
+service-codegen/src/generator/namespaces.rs  - Use structured access
+service-codegen/src/generator/mod.rs         - Version check
 ```
 
 ### Build Status
 ```
 ✅ Synapse: Compiles cleanly (cabal build synapse)
-✅ hub-codegen: Compiles cleanly (cargo build --release)
+✅ service-codegen: Compiles cleanly (cargo build --release)
 ✅ Zero compilation errors
 ✅ 7 minor warnings in Rust (unused code, pre-existing)
 ```
@@ -461,13 +461,13 @@ git checkout HEAD -- src/Synapse/CLI/Help.hs
 git checkout HEAD -- src/Synapse/CLI/Template.hs
 git checkout HEAD -- test/IRSpec.hs
 
-cd ../hub-codegen
+cd ../service-codegen
 git checkout HEAD -- src/ir.rs
 git checkout HEAD -- src/generator/
 
 # Rebuild both
 cd ../synapse && cabal clean && cabal build
-cd ../hub-codegen && cargo clean && cargo build --release
+cd ../service-codegen && cargo clean && cargo build --release
 ```
 
 ## Next Steps

@@ -2,7 +2,7 @@
 
 ## Problem
 
-Clients connecting to the substrate hub have no way to discover:
+Clients connecting to the substrate service have no way to discover:
 1. Which activations are available
 2. What methods each activation exposes
 3. Which LLM services and models are available through Cone
@@ -18,7 +18,7 @@ Expose the substrate's full capability schema via a dedicated RPC method. Client
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                          Substrate Hub                           │
+│                          Substrate Service                           │
 ├─────────────────────────────────────────────────────────────────┤
 │  Plexus                                                          │
 │  ├── Health                                                      │
@@ -39,7 +39,7 @@ Expose the substrate's full capability schema via a dedicated RPC method. Client
 │                        Dynamic CLI                               │
 ├─────────────────────────────────────────────────────────────────┤
 │  1. Connect to ws://127.0.0.1:4444                              │
-│  2. Call hub_schema → receive all methods + params              │
+│  2. Call service_schema → receive all methods + params              │
 │  3. Call cone_registry → receive models + services              │
 │  4. Build command structure from schema                         │
 │  5. Execute user commands via RPC                               │
@@ -48,7 +48,7 @@ Expose the substrate's full capability schema via a dedicated RPC method. Client
 
 ## New RPC Methods
 
-### `hub_schema`
+### `service_schema`
 
 Returns the complete schema of all registered activations and their methods.
 
@@ -137,9 +137,9 @@ models: [
 ```
 1. Parse CLI args for connection target (default: ws://127.0.0.1:4444)
 
-2. Establish WebSocket connection to hub
+2. Establish WebSocket connection to service
 
-3. Subscribe to hub_schema
+3. Subscribe to service_schema
    → Receive activation/method definitions
    → Build command tree:
        cli arbor tree-create <metadata> <owner>
@@ -180,7 +180,7 @@ With runtime schema, the CLI can provide:
 2. **Help generation** - `cli arbor --help` shows all arbor methods
 3. **Argument validation** - Reject invalid params before RPC call
 4. **Type coercion** - Parse JSON objects from string args
-5. **Version independence** - CLI works with any hub version
+5. **Version independence** - CLI works with any service version
 
 ## Substrate Integration Points
 

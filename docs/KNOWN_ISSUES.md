@@ -54,11 +54,11 @@ $ echo '{"jsonrpc":"2.0","id":1,"method":"ping_pong","params":{"message":"test"}
 ❌ Synapse `_self test` on plexus-derive methods
 ❌ Schema fetching via synapse client
 
-### Comparison: hub_methods vs #[activation]
+### Comparison: the old methods macro vs #[activation]
 
 **VERIFIED VIA TESTING**:
 
-**hub_methods (old macro)**:
+**the old methods macro**:
 - Synapse CLI: ✅ **WORKS**
 - Direct WebSocket: ✅ WORKS
 - Example: `synapse substrate bash execute --command "echo hello"` → Success!
@@ -160,7 +160,7 @@ Server successfully starts and accepts WebSocket connections on port 4444.
 ### Next Steps
 
 1. Debug synapse Haskell client schema fetching
-2. Compare wire protocol between hub_methods and #[activation]
+2. Compare wire protocol between the old methods macro and #[activation]
 3. Check if jsonrpsee subscription protocol changed
 4. Investigate -32603 internal error source in substrate logs
 5. Test with other JSON-RPC clients (Python, JS) to isolate synapse issue

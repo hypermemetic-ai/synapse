@@ -10,7 +10,7 @@
 1. **Global types.ts cleanup** - Only exports core transport types (commit 1e5f7a6)
 2. **Namespace-scoped stub generation** - Missing types get stubs in their namespace files (commit b94f059)
 3. **Synapse namespace extraction** - Uses full path instead of final segment (commit 5d3101e)
-4. **Hub-codegen nested directory support** - Converts dots to slashes, calculates relative imports (commit e9f2313)
+4. **Service-codegen nested directory support** - Converts dots to slashes, calculates relative imports (commit e9f2313)
 
 ### 🚧 In Progress
 - **Types.ts generation for nested namespaces** - Some types.ts files not generating for deeply nested namespaces
@@ -102,7 +102,7 @@ Each `repos` plugin is a **separate instance** at different tree locations, but 
 ### Impact
 
 1. **TypeScript compilation fails** - duplicate method signatures in interface
-2. **Hub-codegen groups unrelated methods** - all "repos" methods go to same file
+2. **Service-codegen groups unrelated methods** - all "repos" methods go to same file
 3. **Name collisions** - can't distinguish `hyperforge.workspace.repos.diff` from `hyperforge.org.hypermemetic.repos.diff`
 
 ## Solution Options
@@ -156,7 +156,7 @@ hyperforge/
 Keep namespace as final segment but deduplicate methods in codegen based on full path.
 
 ```rust
-// hub-codegen/src/generator/namespaces.rs
+// service-codegen/src/generator/namespaces.rs
 pub fn generate_namespaces(ir: &IR) -> HashMap<String, String> {
     // Group by namespace, but track full paths
     let mut methods_by_ns: HashMap<String, Vec<&MethodDef>> = HashMap::new();
@@ -250,7 +250,7 @@ irAlgebra (PluginF schema path childIRs) = do
 }
 ```
 
-### Hub-codegen Changes (commit e9f2313)
+### Service-codegen Changes (commit e9f2313)
 
 **1. File path generation** - Convert dots to slashes:
 ```rust
@@ -333,7 +333,7 @@ update(path: string, protected: boolean): AsyncGenerator<RepoEvent>
 Escape reserved keywords in parameter names:
 
 ```rust
-// hub-codegen/src/generator/namespaces.rs
+// service-codegen/src/generator/namespaces.rs
 fn to_camel(s: &str) -> String {
     let camel = pascal_to_camel(to_pascal(s));
 
@@ -407,7 +407,7 @@ export { createEchoClient } from './echo';
    jq '.irMethods."hyperforge.workspace.repos.diff".mdNamespace' /tmp/ir-fixed.json
    # Output: "hyperforge.workspace.repos" ✓
    ```
-3. ✅ Updated hub-codegen to handle dotted namespaces (commit e9f2313)
+3. ✅ Updated service-codegen to handle dotted namespaces (commit e9f2313)
    - Convert dots to slashes for directory paths
    - Calculate relative imports based on nesting depth
    - Update PascalCase conversion to handle dots
@@ -417,7 +417,7 @@ export { createEchoClient } from './echo';
 
 ### 🔄 Phase 2: Fix Reserved Keywords (Pending)
 
-1. ⏳ Add `is_reserved_word()` function to hub-codegen
+1. ⏳ Add `is_reserved_word()` function to service-codegen
 2. ⏳ Update `to_camel()` to escape reserved words
 3. ⏳ Test with repos methods
 
@@ -463,7 +463,7 @@ jq '.irPlugins | keys | .[] | select(contains("repos"))' /tmp/ir-fixed.json
 # All unique ✓
 
 # 4. 🚧 Regenerate TypeScript (partial success)
-cd hub-codegen && cargo run --release -- /tmp/ir-fixed.json -o /tmp/codegen-test
+cd service-codegen && cargo run --release -- /tmp/ir-fixed.json -o /tmp/codegen-test
 
 # Generated structure (example):
 #   hyperforge/workspace/repos/client.ts ✓

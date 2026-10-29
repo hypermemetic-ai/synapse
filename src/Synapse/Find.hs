@@ -108,7 +108,7 @@ findInfo = info (p <**> helper)
   )
   where
     p = FindOpts
-      <$> (T.pack <$> strArgument (metavar "BACKEND" <> help "The hub's name, e.g. menger"))
+      <$> (T.pack <$> strArgument (metavar "BACKEND" <> help "The service's name, e.g. menger"))
       <*> some (T.pack <$> strArgument (metavar "WORDS..." <> help "[activation…] then the words to look for"))
       <*> option auto (long "limit" <> metavar "N" <> value defaultLimit <> showDefault <> help "At most N hits")
       <*> switch (long "methods" <> help "Only methods")
@@ -613,7 +613,7 @@ nearest :: [Entry] -> [Text] -> [Entry]
 nearest entries ws = take 3 (sortOn rank candidates)
   where
     methods = [e | e <- entries, enKind e == MethodEntry]
-    -- the introspection every hub has (schema, hashes) is never what was meant
+    -- the introspection every service has (schema, hashes) is never what was meant
     candidates = case filter ((`notElem` ["schema", "hashes"]) . mdName . enMethod) methods of
       [] -> methods
       cs -> cs

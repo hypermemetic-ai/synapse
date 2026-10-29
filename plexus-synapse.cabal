@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            3.17.0
+version:            3.17.1
 synopsis:           Schema-driven CLI for Plexus RPC servers
 license:            MIT
 author:
@@ -282,7 +282,7 @@ test-suite render-test
   -- required before optional, types as the schema says them).
   -- SYNAPSE-13: in the gh / cargo shape — listings of one-line summaries in
   -- their groups; a method's page with its usage line, aligned options,
-  -- values and examples; an older hub's schema still rendered.
+  -- values and examples; an older service's schema still rendered.
   type:             exitcode-stdio-1.0
   main-is:          RenderSpec.hs
   build-depends:
@@ -542,10 +542,10 @@ test-suite auth-test
   -- AUTH-8: the auth shapes plexus-protocol parses (and their absence),
   -- the anonymous page, the caller's header and grant columns, the refusal
   -- block, the loopback's state check, and the flows end to end against a
-  -- hub in miniature (test/MockHub.hs) on ports of their own.
+  -- service in miniature (test/MockService.hs) on ports of their own.
   type:             exitcode-stdio-1.0
   main-is:          AuthSpec.hs
-  other-modules:    MockHub
+  other-modules:    MockService
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
@@ -569,11 +569,11 @@ test-suite auth-test
 test-suite find-test
   -- SYNAPSE-17: _find's matcher (exact, prefix, typo at both thresholds,
   -- snake_case subsequence, every word, ranking) and its renders against
-  -- the mock hub's catalog (menger's schema as it was, test/fixtures), on a
+  -- the mock service's catalog (menger's schema as it was, test/fixtures), on a
   -- terminal and piped; a caller's view; the IR cache's hash check.
   type:             exitcode-stdio-1.0
   main-is:          FindSpec.hs
-  other-modules:    MockHub
+  other-modules:    MockService
   build-depends:
     base >= 4.17 && < 5,
     plexus-synapse,
@@ -599,7 +599,7 @@ test-suite reconnect-test
   -- answer, a silent peer by its keepalive) and synapse rides out the
   -- outage — a read sent again, a stream resumed with since, a write that
   -- went out never repeated, one that never left sent when the backend is
-  -- back, the window run out — against a flaky hub on ports of its own.
+  -- back, the window run out — against a flaky service on ports of its own.
   type:             exitcode-stdio-1.0
   main-is:          ReconnectSpec.hs
   build-depends:
@@ -623,13 +623,13 @@ test-suite reconnect-test
 test-suite hold-test
   -- SYNAPSE-28: a call costs one round trip and the server's time — the
   -- multiplexer and the holder carry every call on one connection (counted
-  -- at the mock hub), a stream abandoned is unsubscribed, the holder exits
+  -- at the mock service), a stream abandoned is unsubscribed, the holder exits
   -- idle; and the built synapse, end to end: cold fills the cache on one
   -- connection, warm opens none and fetches nothing, --no-hold opens one,
   -- a renamed method falls back and answers.
   type:             exitcode-stdio-1.0
   main-is:          HoldSpec.hs
-  other-modules:    MockHub
+  other-modules:    MockService
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -674,11 +674,11 @@ test-suite endpoint-test
 test-suite tls-test
   -- SCAFFOLD-21: synapse speaks wss — the probe, a call and a key login
   -- through a TLS terminator of the test's own (a CA openssl makes for the
-  -- run, in front of the mock hub), at a path; an unknown CA and a wrong
+  -- run, in front of the mock service), at a path; an unknown CA and a wrong
   -- name refused at the handshake. Pending without openssl.
   type:             exitcode-stdio-1.0
   main-is:          TlsSpec.hs
-  other-modules:    MockHub
+  other-modules:    MockService
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
@@ -734,7 +734,7 @@ test-suite ir-coverage-test
   -- bare object: exit 65.
   type:             exitcode-stdio-1.0
   main-is:          IRCoverageSpec.hs
-  other-modules:    IRFixture, MockHub
+  other-modules:    IRFixture, MockService
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -760,3 +760,18 @@ test-suite ir-coverage-test
   default-extensions:
     OverloadedStrings
   ghc-options:      -threaded
+
+-- NAMING-9: the naming gate (scripts/naming-gate.sh) in the suite. The
+-- spec counts the gate's lines and shows the first; it never diffs them.
+-- Its heap is capped (-M6G; +RTS -M... -RTS overrides it), so no regression
+-- of that can take the machine (2026-10-29: an hspec diff reached 7.3 GB).
+test-suite naming-gate
+  type:             exitcode-stdio-1.0
+  main-is:          NamingGateSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    process >= 1.6 && < 1.7,
+    hspec >= 2.10 && < 2.12
+  hs-source-dirs:   test
+  default-language: GHC2021
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-M6G"

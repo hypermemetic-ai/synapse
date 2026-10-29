@@ -83,9 +83,9 @@ newIRCache config = do
     }
 
 -- | AUTH-8: the key an IR is kept under — the plugin hash, qualified by
--- the caller's view when the hub has one (@VIEW_HASH@ joined with @-@, a
+-- the caller's view when the service has one (@VIEW_HASH@ joined with @-@, a
 -- file name). Callers pass this to 'lookupIR' / 'insertIR' so two
--- callers' views of one hub never share an IR on disk.
+-- callers' views of one service never share an IR on disk.
 irCacheKey :: Maybe Text -> Text -> Text
 irCacheKey Nothing hash = hash
 irCacheKey (Just v) hash

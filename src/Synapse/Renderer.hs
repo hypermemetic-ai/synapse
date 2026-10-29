@@ -77,11 +77,11 @@ import Text.Mustache.Render (substituteValue)
 import qualified Text.Mustache.Types as MT
 
 import Synapse.Schema.Types
-  ( HubStreamItem
-  , pattern HubData
-  , pattern HubProgress
-  , pattern HubError
-  , pattern HubDone
+  ( ServiceStreamItem
+  , pattern ServiceData
+  , pattern ServiceProgress
+  , pattern ServiceError
+  , pattern ServiceDone
   )
 
 -- ============================================================================
@@ -242,20 +242,20 @@ getCachedTemplate cfg path = do
 -- ============================================================================
 
 -- | Render a stream item using templates
-renderItem :: RendererConfig -> HubStreamItem -> IO (Maybe Text)
+renderItem :: RendererConfig -> ServiceStreamItem -> IO (Maybe Text)
 renderItem cfg item = case rcMode cfg of
   ModeJson -> pure Nothing  -- Caller should use JSON
   ModeRaw  -> pure Nothing  -- Caller should extract content
   ModeTemplate -> case item of
-    HubData _ _ contentType content ->
+    ServiceData _ _ contentType content ->
       renderValue cfg contentType content
-    HubProgress _ _ msg _ ->
+    ServiceProgress _ _ msg _ ->
       pure $ Just msg
-    HubError _ _ err _ ->
+    ServiceError _ _ err _ ->
       pure $ Just $ "Error: " <> err
-    HubDone _ _ ->
+    ServiceDone _ _ ->
       pure Nothing
-    _ -> pure Nothing  -- Handle other variants (e.g., HubGuidance)
+    _ -> pure Nothing  -- Handle other variants (e.g., ServiceGuidance)
 
 -- | Render a value using template for content type
 renderValue :: RendererConfig -> Text -> Value -> IO (Maybe Text)

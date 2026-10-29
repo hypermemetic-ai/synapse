@@ -57,7 +57,7 @@ This directory contains architecture decision records and implementation docs fo
 ### RPC Protocol
 - **[Introspective RPC Protocol](./16680807091363337727_introspective-rpc-protocol.md)**
 - **[Substrate RPC Protocol](./16681062792662575615_substrate-rpc-protocol.md)**
-- **[Multi-Hub Transport Envelope](./16679517135570018559_multi-hub-transport-envelope.md)**
+- **[Multi-Service Transport Envelope](./16679517135570018559_multi-service-transport-envelope.md)**
 
 ### Category Theory Foundation
 - **[Category Theory Implementation](./16680343462706939647_category-theory-implementation.md)**

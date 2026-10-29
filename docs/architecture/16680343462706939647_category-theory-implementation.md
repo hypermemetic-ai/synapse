@@ -28,7 +28,7 @@ data PluginSchema = PluginSchema
   , psDescription :: Text
   , psHash        :: PluginHash
   , psMethods     :: [MethodSchema]
-  , psChildren    :: Maybe [PluginSchema]  -- Nothing = leaf, Just = hub
+  , psChildren    :: Maybe [PluginSchema]  -- Nothing = leaf, Just = parent
   }
 
 makeBaseFunctor ''PluginSchema  -- Generates PluginSchemaF

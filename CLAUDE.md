@@ -10,7 +10,7 @@
 **Synapse** is a Haskell CLI frontend for **Plexus** - a streaming JSON-RPC protocol for LLM orchestration.
 
 The stack:
-- **Substrate** (Rust) - The backend hub that hosts activations
+- **Substrate** (Rust) - The backend service that hosts activations
 - **Plexus** - The RPC protocol layer (WebSocket, JSON-RPC 2.0, streaming)
 - **Synapse** (this project) - Haskell CLI that discovers and invokes Plexus methods
 - **plexus-protocol** (sibling package) - Shared types for the Plexus protocol
@@ -90,7 +90,7 @@ Arguments are derived from JSON Schema. The CLI accepts simple values:
 ## wss (SCAFFOLD-21, 3.15.0)
 
 `synapse --url wss://hostdemo.menger.sh/ws hostdemo …` (or `-H HOST --tls
---path /ws`; `--cacert FILE` for a local CA) reaches a hub behind TLS — every
+--path /ws`; `--cacert FILE` for a local CA) reaches a service behind TLS — every
 command: calls, streams and their reconnects, `-s`, `_find`, bidirectional
 `respond`, `_login`. The address is one `Synapse.Endpoint` (host, port, tls,
 path, CA files) from `app/Main.hs`'s `resolveConnection` to every dial
@@ -102,7 +102,7 @@ by its URL (`sessions/wss_HOST_443_ws/`, keychain `backend=wss://HOST:443/ws`).
 A key proof's `aud` is `wss://HOST` behind TLS (`Endpoint.audience`).
 `test/EndpointSpec.hs` pins the keys; `test/TlsSpec.hs` runs the probe, a
 call, a bidirectional request and a key login through a TLS terminator of its
-own (openssl makes the CA per run). README "A hub behind TLS".
+own (openssl makes the CA per run). README "A service behind TLS".
 
 ## Outages (SYNAPSE-20, 3.14.9)
 
@@ -114,7 +114,7 @@ stream resubscribes, with `since` = when it began when the method takes one
 (`await_reply`), and `-j` prints `{"type":"reconnected",…}`; past the window,
 exit 69. Progress is on stderr. The detection is plexus-protocol's
 `Plexus.Client` (`LostConnection`, `scClosed`, the keepalive); the policy is
-`Synapse.Reconnect`; `test/ReconnectSpec.hs` pins both against a flaky hub.
+`Synapse.Reconnect`; `test/ReconnectSpec.hs` pins both against a flaky service.
 README "Outages: reconnecting".
 
 ## One round trip a call (SYNAPSE-28, 3.16.0)
@@ -139,7 +139,7 @@ the call, or the server refused what it said before the method ran) runs the
 call again the old way (`slowPath`), which fills the cache. Help, listings,
 `-s`, `-i`, `_find` and calls with a credential of their own read the server.
 `test/HoldSpec.hs` counts connections, probes and schema fetches at
-`test/MockHub.hs` (cold: one connection; warm: none, no probe, no fetch;
+`test/MockService.hs` (cold: one connection; warm: none, no probe, no fetch;
 `--no-hold`: one; a renamed method falls back and answers); `ReconnectSpec`
 runs every outage again through a holder. README "One round trip a call".
 
@@ -210,7 +210,7 @@ synapse -P 4455 _logout menger [--as worker-3]
 
 ## Each caller its own server (AUTH-8)
 
-On a hub with the AUTH gate (AUTH-1), `_info` says the caller's `view`:
+On a service with the AUTH gate (AUTH-1), `_info` says the caller's `view`:
 
 - **anonymous** — `synapse menger` shows only the door ("Sign in to see what
   you can do here.", `auth`'s login / signup / providers, and the two `_login`
@@ -227,14 +227,14 @@ On a hub with the AUTH gate (AUTH-1), `_info` says the caller's `view`:
   it), waits 5 minutes for `/cb?code&state` with the state it was given, trades
   the code (`auth.login {flow: {code}}`), and keeps the session as agent `me`
   (no key: when it ends, sign in again). An agent's `_login` asks `auth.login
-  {flow: {session: {ttl_secs, ceiling}}}`, and `session.login` on a hub
+  {flow: {session: {ttl_secs, ceiling}}}`, and `session.login` on a service
   without auth.
 
-A hub without the gate (today's menger) answers none of these fields and
+A service without the gate (today's menger) answers none of these fields and
 renders exactly as before. The wire types are plexus-protocol's `Plexus.Auth`
 and the new optional fields on `MethodSchema` / `PluginSchema`; the renders are
 `Synapse.Auth`; `test/AuthSpec.hs` pins them and runs the flows against
-`test/MockHub.hs` (`SYNAPSE_MOCK_HUB=today|anonymous|caller` serves it by hand).
+`test/MockService.hs` (`SYNAPSE_MOCK_SERVICE=today|anonymous|caller` serves it by hand).
 
 ## Help (SYNAPSE-12, SYNAPSE-13)
 
@@ -254,7 +254,7 @@ cargo's: the description; the long description; `Usage: … --id <ID>
 `examples` as command lines under their notes (a list inside an object goes
 whole as `-p '{…}'`, SYNAPSE-9), else one synthesised from the required
 options; and, in a caller's view, `Requires: GRANT on the scope of --TARGET
-(you hold it on …)`. A hub that sends none of the new fields renders the same
+(you hold it on …)`. A service that sends none of the new fields renders the same
 shape without them. `Synapse.Algebra.Render.renderListing` and
 `Synapse.CLI.Help.renderMethodPage`; `test/RenderSpec.hs` pins both.
 
@@ -265,7 +265,7 @@ MENTIONED IN in the listing's shape; `… _find menger tickets <words>` narrows,
 `--limit N`, `--methods` / `--params`, `-j` one JSON object per hit. The IR is
 cached on disk under the root schema's hash and the caller's view (one schema
 call when nothing changed). `Synapse.Find`; `test/FindSpec.hs` pins the matcher
-and the pages against `test/MockHub.hs`'s catalog (`test/fixtures/`).
+and the pages against `test/MockService.hs`'s catalog (`test/fixtures/`).
 
 ## Low-Level Plexus RPC
 
@@ -338,3 +338,16 @@ synapse/
 
 ../plexus-protocol/              # Shared protocol types (sibling package)
 ```
+
+## Naming: a backend is a service (NAMING-9, 3.17.1)
+
+A Plexus backend is a *service*, never the retired word (owner, 2026-10-29;
+`~/AGENTS.md` "Naming"); an activation with children is a *parent*
+(`isParentActivation`). `scripts/naming-gate.sh` fails on any line that says
+the old word (no arguments: each line, exit 1; `-c`: the count), and
+`test/NamingGateSpec.hs` runs it as `test-suite naming-gate`, so `cabal test`
+and CI fail on it too. What may stay: GitHub, a line marked `naming-alias` (an
+old name kept, deprecated, until NAMING-18) and the gate's `ALLOW` entries,
+each with its reason and the NAMING ticket that removes it. The spec counts
+the gate's lines and shows the first twenty; it never diffs the whole output
+(hspec's diff of 875 lines reached 7.3 GB on 2026-10-29).

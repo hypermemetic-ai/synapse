@@ -198,7 +198,7 @@ currentIrVersion = "2.1"
 --   site is named here, and where it stood the IR says 'RefUnknown' (or the
 --   type is left out and its uses say 'RefUnknown').
 --
---   Sites are written as hub-codegen's report and PYTHON-3's walk write them:
+--   Sites are written as service-codegen's report and PYTHON-3's walk write them:
 --   @<ns.Type>[.<variant>].<field>@ · @<method path>(<param>)@ ·
 --   @<method path> returns@, with the suffixes @[]@ (element), @?@
 --   (optional), @{}@ (map value) and @.N@ (tuple element).
@@ -417,7 +417,7 @@ data MethodDef = MethodDef
     -- BidirChannel<StandardRequest<T>, StandardResponse<T>>.
     --
     -- Populated from the "bidirectional" / "request_type" fields in the
-    -- MethodSchema (emitted by the hub-macro when #[bidirectional] is set).
+    -- MethodSchema (emitted by plexus-macros when #[bidirectional] is set).
     --
     -- - Nothing  → method is not bidirectional, OR uses the default
     --              T = serde_json::Value (StandardBidirChannel)
@@ -446,7 +446,7 @@ data MethodDef = MethodDef
     -- 'plexus_core::MethodRole'. Defaults to 'MethodRoleRpc' when the
     -- upstream schema omits @role@ (pre-IR servers).
     --
-    -- Consumed by hub-codegen (Rust field @md_role@, JSON key @mdRole@)
+    -- Consumed by service-codegen (Rust field @md_role@, JSON key @mdRole@)
     -- to emit typed-handle clients for @DynamicChild@ methods.
   , mdGrant       :: Maybe Text
     -- ^ AUTH-9: the method's grant (AUTH-3's @MethodSchema.grant@),
@@ -467,7 +467,7 @@ data MethodDef = MethodDef
 
 -- | Manual JSON instances so @mdRole@ defaults to 'MethodRoleRpc' when
 --   deserializing pre-IR-12 IR JSON (same back-compat posture as the
---   Rust @#[serde(default)]@ on @MethodDef.md_role@ in hub-codegen).
+--   Rust @#[serde(default)]@ on @MethodDef.md_role@ in service-codegen).
 --
 --   All other fields preserve the generic derivation defaults (field
 --   names used verbatim as JSON keys; @Maybe@ fields omitted when
@@ -534,7 +534,7 @@ data ParamDef = ParamDef
     --   schema declared one on this parameter. The value is the raw JSON
     --   object (e.g. @{ "from": "auth", "resolver": "self.db.validate_user" }@
     --   or @{ "from": "cookie", "key": "access_token" }@). Consumers (synapse
-    --   renderer, hub-codegen JSDoc) read this to identify where each param
+    --   renderer, service-codegen JSDoc) read this to identify where each param
     --   is sourced from. @Nothing@ means the schema lacked the extension —
     --   treat as RPC-sourced.
   , pdValues      :: Maybe [Text]

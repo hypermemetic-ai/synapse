@@ -97,7 +97,7 @@ This means:
 | `src/Synapse/IR/Builder.hs` | Namespace-qualify all type names |
 | `src/Synapse/CLI/Template.hs` | Fix nested struct expansion - no wrapper |
 | `app/Main.hs` | Default template output to `~/.config/synapse/templates/` |
-| `hub-synapse.cabal` | Added `filepath` dependency to executable |
+| `plexus-synapse.cabal` | Added `filepath` dependency to executable |
 
 ### 4. Template Search Path Priority
 

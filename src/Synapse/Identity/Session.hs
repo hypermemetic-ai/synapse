@@ -78,7 +78,7 @@ import Synapse.Endpoint (Endpoint)
 import qualified Synapse.Endpoint as E
 import qualified Synapse.Log as Log
 import Synapse.Monad
-import Synapse.Schema.Types (HubStreamItem, pattern HubData, pattern HubError, pattern HubGuidance)
+import Synapse.Schema.Types (ServiceStreamItem, pattern ServiceData, pattern ServiceError, pattern ServiceGuidance)
 import Synapse.Transport (invoke)
 
 -- ============================================================================
@@ -97,10 +97,10 @@ data LoginResult = LoginResult
 nowSecs :: IO Integer
 nowSecs = round <$> getPOSIXTime
 
--- | Log in to the hub @backend@ at @HOST:PORT@ as @agent@, proving the key:
+-- | Log in to the service @backend@ at @HOST:PORT@ as @agent@, proving the key:
 -- a connection opened with the proof, and on it AUTH-5's @auth.login
--- {flow: {session: {ttl_secs?, ceiling?}}}@ — or, on a hub with no @auth@
--- activation (every hub before AUTH), IDENTITY-42's @session.login {ttl_secs?,
+-- {flow: {session: {ttl_secs?, ceiling?}}}@ — or, on a service with no @auth@
+-- activation (every service before AUTH), IDENTITY-42's @session.login {ttl_secs?,
 -- scope?}@ on a second connection with a fresh proof (a proof works once).
 loginWithKey :: Log.Logger -> Endpoint -> Text -> Seed -> Text -> [Text] -> Maybe Integer -> IO (Either Text LoginResult)
 loginWithKey logger ep backend seed agent scope ttl
@@ -128,7 +128,7 @@ loginWithKey logger ep backend seed agent scope ttl
       ts <- nowSecs
       pure (buildProof seed (E.audience ep) agent nonce ts)
     grantItem what items =
-      case [g | HubData _ _ _ v <- items, Just g <- [parseSessionGrant v]] of
+      case [g | ServiceData _ _ _ v <- items, Just g <- [parseSessionGrant v]] of
         (g : _) -> Right LoginResult
           { lrToken = sgToken g
           , lrPrincipal = sgPrincipal g
@@ -138,7 +138,7 @@ loginWithKey logger ep backend seed agent scope ttl
           }
         [] -> Left (answerError items (what <> " answered no session"))
     loginItem items =
-      case [o | HubData _ _ _ (Object o) <- items, KM.lookup "type" o == Just (String "login")] of
+      case [o | ServiceData _ _ _ (Object o) <- items, KM.lookup "type" o == Just (String "login")] of
         (o : _) | Just (String tok) <- KM.lookup "token" o -> Right LoginResult
           { lrToken = tok
           , lrPrincipal = str "principal" o
@@ -181,19 +181,19 @@ loginPerson logger ep backend secs say =
             let codeFlow = object ["flow" .= object ["code" .= object ["code" .= code, "state" .= state]]]
             done <- call logger ep backend Nothing "auth" "login" codeFlow
             pure $ done >>= \items ->
-              case [g | HubData _ _ _ v <- items, Just g <- [parseSessionGrant v]] of
+              case [g | ServiceData _ _ _ v <- items, Just g <- [parseSessionGrant v]] of
                 (g : _) -> Right g
                 [] -> Left (answerError items "auth.login answered no session for the code")
   where
     loginUrl items =
-      case [o | HubData _ _ _ (Object o) <- items, KM.lookup "type" o `elem` [Just (String "login_url"), Just (String "url")]] of
+      case [o | ServiceData _ _ _ (Object o) <- items, KM.lookup "type" o `elem` [Just (String "login_url"), Just (String "url")]] of
         (o : _) | Just (String u) <- KM.lookup "url" o, not (T.null u) ->
           case KM.lookup "state" o of
             Just (String st) | not (T.null st) -> Right (u, st)
             _ -> Left "auth.login gave a sign-in URL with no state; refused (the state is what binds the browser's answer to this sign-in)"
         _ -> Left (answerError items "auth.login answered no sign-in URL")
 
--- | AUTH-8: who a token is — @auth.whoami@, else (a hub without the auth
+-- | AUTH-8: who a token is — @auth.whoami@, else (a service without the auth
 -- activation) @session.whoami@; Nothing when neither says.
 whoamiWith :: Log.Logger -> Endpoint -> Text -> Text -> IO (Maybe Whoami)
 whoamiWith logger ep backend token = do
@@ -215,12 +215,12 @@ whoamiM = do
       b <- (Just <$> invoke ["session"] "whoami" (object [])) `catchError` \_ -> pure Nothing
       pure (b >>= either (const Nothing) Just . firstWhoami)
 
-firstWhoami :: [HubStreamItem] -> Either Text Whoami
-firstWhoami items = case [w | HubData _ _ _ v <- items, Just w <- [parseWhoami v]] of
+firstWhoami :: [ServiceStreamItem] -> Either Text Whoami
+firstWhoami items = case [w | ServiceData _ _ _ v <- items, Just w <- [parseWhoami v]] of
   (w : _) -> Right w
   [] -> Left (answerError items "no whoami")
 
--- | End the session this token is: @auth.logout@ (AUTH-5), else — a hub
+-- | End the session this token is: @auth.logout@ (AUTH-5), else — a service
 -- with no auth activation — @session.logout@.
 logoutWithToken :: Log.Logger -> Endpoint -> Text -> Text -> IO (Either Text ())
 logoutWithToken logger ep backend token = do
@@ -234,16 +234,16 @@ logoutWithToken logger ep backend token = do
     -- an answer with no error is a logout; one that says so, certainly
     ended what is
       | any isLoggedOut is = Right ()
-      | null [() | HubError{} <- is] && null (errorEvents is) && not (null [() | HubData{} <- is]) = Right ()
+      | null [() | ServiceError{} <- is] && null (errorEvents is) && not (null [() | ServiceData{} <- is]) = Right ()
       | otherwise = Left (answerError is (what <> " answered nothing"))
     isLoggedOut = \case
-      HubData _ _ _ (Object o) -> KM.lookup "type" o `elem` [Just (String "logged_out"), Just (String "logout")]
+      ServiceData _ _ _ (Object o) -> KM.lookup "type" o `elem` [Just (String "logged_out"), Just (String "logout")]
       _ -> False
-    errorEvents is = [() | HubData _ _ _ (Object o) <- is, KM.lookup "type" o == Just (String "error")]
+    errorEvents is = [() | ServiceData _ _ _ (Object o) <- is, KM.lookup "type" o == Just (String "error")]
 
 -- | One @\<ns\>.\<method\>@ call on a fresh connection presenting @cred@
 -- as @Authorization: Bearer@ (none: anonymous).
-call :: Log.Logger -> Endpoint -> Text -> Maybe Text -> Text -> Text -> Value -> IO (Either Text [HubStreamItem])
+call :: Log.Logger -> Endpoint -> Text -> Maybe Text -> Text -> Text -> Value -> IO (Either Text [ServiceStreamItem])
 call logger ep backend cred ns method params = do
   env0 <- initEnvAt ep backend logger Nothing
   let env = withRequestContext [] (maybe [] (\c -> [bearer c]) cred) env0
@@ -270,11 +270,11 @@ firstLine = T.strip . T.takeWhile (/= '\n')
 bearer :: Text -> (Text, Text)
 bearer cred = ("Authorization", "Bearer " <> cred)
 
-answerError :: [HubStreamItem] -> Text -> Text
+answerError :: [ServiceStreamItem] -> Text -> Text
 answerError items fallback =
-  case [m | HubData _ _ _ (Object o) <- items, KM.lookup "type" o == Just (String "error"), Just (String m) <- [KM.lookup "message" o]]
-       <> [e | HubError _ _ e _ <- items]
-       <> [T.pack (show g) | HubGuidance _ _ g _ _ _ <- items] of
+  case [m | ServiceData _ _ _ (Object o) <- items, KM.lookup "type" o == Just (String "error"), Just (String m) <- [KM.lookup "message" o]]
+       <> [e | ServiceError _ _ e _ <- items]
+       <> [T.pack (show g) | ServiceGuidance _ _ g _ _ _ <- items] of
     (m : _) -> m
     [] -> fallback
 
@@ -456,13 +456,13 @@ storedFresher st active rec = do
 -- Recognising an ended session
 -- ============================================================================
 
--- | The in-band error a hub answers a call whose session has ended with.
-isSessionEndedItem :: HubStreamItem -> Bool
+-- | The in-band error a service answers a call whose session has ended with.
+isSessionEndedItem :: ServiceStreamItem -> Bool
 isSessionEndedItem = \case
-  HubData _ _ _ (Object o)
+  ServiceData _ _ _ (Object o)
     | KM.lookup "type" o == Just (String "error")
     , Just (String m) <- KM.lookup "message" o -> isSessionEndedText m
-  HubError _ _ e _ -> isSessionEndedText e
+  ServiceError _ _ e _ -> isSessionEndedText e
   _ -> False
 
 isSessionEndedText :: Text -> Bool

@@ -16,7 +16,7 @@
 --
 --   * A synthesised 'MethodDef' whose 'mdRole' is 'MethodRoleDynamicChild'
 --     round-trips through JSON and emits the exact @kind@/@list_method@
---     shape consumed by hub-codegen (whose Rust @MethodRole@ enum uses
+--     shape consumed by service-codegen (whose Rust @MethodRole@ enum uses
 --     @#[serde(tag = \"kind\", rename_all = \"snake_case\")]@).
 module Main where
 
@@ -173,12 +173,12 @@ main = hspec $ do
         Right md -> mdRole md `shouldBe` mdRole original
 
     it "pre-IR-12 MethodDef JSON (no mdRole) decodes with default Rpc" $ do
-      -- Matches hub-codegen's Rust-side #[serde(default)] posture.
+      -- Matches service-codegen's Rust-side #[serde(default)] posture.
       case eitherDecode (encode preIrMethodDefJson) :: Either String MethodDef of
         Left e -> expectationFailure $ "decode failed: " <> e
         Right md -> mdRole md `shouldBe` MethodRoleRpc
 
-  -- AUTH-9: what a method requires reaches hub-codegen through the IR.
+  -- AUTH-9: what a method requires reaches service-codegen through the IR.
   describe "AUTH-9: grant, target, long_description and roles in the IR" $ do
     let schemaWith extra = object $
           [ "name" .= ("set_status" :: String)

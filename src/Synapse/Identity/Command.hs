@@ -127,11 +127,11 @@ loginInfo :: ParserInfo LoginOpts
 loginInfo = info (p <**> helper)
   ( fullDesc
  <> header "synapse _login - sign in; later calls to this backend carry the session by themselves"
- <> progDesc "A person (no --key, no --as): opens the browser to sign in and waits on a loopback port (127.0.0.1) for it to come back (auth.login's browser flow; 5 minutes). An agent (--key and/or --as): proves the key (a plexus-key proof at the upgrade) and asks auth.login for a session (session.login on a hub without auth). Either way the session is kept (keychain, else ~/.plexus/sessions/HOST_PORT/AGENT.json; a person's under the name 'me') and becomes this backend's default. Global options (-H, -P) go before _login."
+ <> progDesc "A person (no --key, no --as): opens the browser to sign in and waits on a loopback port (127.0.0.1) for it to come back (auth.login's browser flow; 5 minutes). An agent (--key and/or --as): proves the key (a plexus-key proof at the upgrade) and asks auth.login for a session (session.login on a service without auth). Either way the session is kept (keychain, else ~/.plexus/sessions/HOST_PORT/AGENT.json; a person's under the name 'me') and becomes this backend's default. Global options (-H, -P) go before _login."
   )
   where
     p = LoginOpts
-      <$> (T.pack <$> strArgument (metavar "BACKEND" <> help "The hub's name, e.g. menger"))
+      <$> (T.pack <$> strArgument (metavar "BACKEND" <> help "The service's name, e.g. menger"))
       <*> optional (T.pack <$> strOption (long "key" <> short 'k' <> metavar "NAME" <> help "The key to prove (an agent; 'default' when only --as is given)"))
       <*> optional (T.pack <$> strOption (long "as" <> metavar "AGENT" <> help "The agent id to log in as (else SYNAPSE_AS)"))
       <*> (splitScopes <$> many (T.pack <$> strOption (long "scope" <> metavar "ROLE@SCOPE" <> help "The session's ceiling, e.g. editor@MENGER-12 (repeat, or commas); default: the key's own grants")))
@@ -149,7 +149,7 @@ logoutInfo = info (p <**> helper)
   )
   where
     p = LogoutOpts
-      <$> (T.pack <$> strArgument (metavar "BACKEND" <> help "The hub's name, e.g. menger"))
+      <$> (T.pack <$> strArgument (metavar "BACKEND" <> help "The service's name, e.g. menger"))
       <*> optional (T.pack <$> strOption (long "as" <> metavar "AGENT" <> help "Which agent's session (else SYNAPSE_AS, else the backend's default)"))
 
 -- | @--scope a,b --scope c@ → @[a, b, c]@.

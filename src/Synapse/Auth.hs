@@ -1,17 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 
--- | AUTH-8: what synapse shows of a hub's auth — pure, so every render is
+-- | AUTH-8: what synapse shows of a service's auth — pure, so every render is
 -- tested from fixtures.
 --
--- * The anonymous page: a hub whose @_info@ says @view: anonymous@ shows
+-- * The anonymous page: a service whose @_info@ says @view: anonymous@ shows
 --   only its door (login, signup, providers) and how to sign in from here.
 -- * The caller's header: @you are NAME (PRINCIPAL) · ROLE on SCOPES, within
---   CEILING@, from @auth.whoami@ (or, on a hub without it, @session.whoami@).
+--   CEILING@, from @auth.whoami@ (or, on a service without it, @session.whoami@).
 -- * A refusal: @refused: needs GRANT on SCOPE@ and what would allow it.
 --
 -- Every wire field read here is optional (AUTH-1, "Login off stays open"):
--- a hub without a gate answers none of it, and nothing here is shown.
+-- a service without a gate answers none of it, and nothing here is shown.
 module Synapse.Auth
   ( -- * Who the caller is
     Whoami(..)
@@ -57,8 +57,8 @@ data Whoami = Whoami
   { whoPrincipal   :: Text
   , whoName        :: Maybe Text
   , whoAgent       :: Maybe Text
-  , whoMemberships :: [(Text, Text)]  -- ^ (role, scope); scope "" when the hub names none
-  , whoCeiling     :: [Text]          -- ^ as the hub says it: @editor\@MENGER-12@ or a scope
+  , whoMemberships :: [(Text, Text)]  -- ^ (role, scope); scope "" when the service names none
+  , whoCeiling     :: [Text]          -- ^ as the service says it: @editor\@MENGER-12@ or a scope
   } deriving (Eq, Show)
 
 -- | A whoami from a data item's content. Shapes read (all fields but the
@@ -134,7 +134,7 @@ scopeOf s = case T.breakOn "@" s of
 -- | @you are worker-1 (key:ac79…) · editor on MENGER, within MENGER-12@.
 --
 -- Several roles: each @ROLE on SCOPES@, joined with @; @. A membership the
--- hub named no scope for is the role alone. No memberships: the name and
+-- service named no scope for is the role alone. No memberships: the name and
 -- principal alone.
 renderCallerHeader :: Whoami -> Text
 renderCallerHeader w = "you are " <> who <> held <> within
@@ -175,7 +175,7 @@ abbreviatePrincipal p
 -- ============================================================================
 
 data AnonPage = AnonPage
-  { apBackend :: Text              -- ^ the hub's name
+  { apBackend :: Text              -- ^ the service's name
   , apVersion :: Maybe Text        -- ^ the root schema's version, when the view shows it
   , apMethods :: [(Text, Text)]    -- ^ (method, description) under @auth@
   , apInvoke  :: Text              -- ^ how this synapse was pointed: @synapse -P 4455@
@@ -206,7 +206,7 @@ anonymousMethods info authSchema = sortOn (rank . fst) [ (m, describe m) | m <- 
       ]
     rank m = (fromMaybe 3 (lookup m (zip ["login", "signup", "providers"] [0 :: Int ..])), m)
 
--- | The page an anonymous caller sees for a hub (AUTH-8):
+-- | The page an anonymous caller sees for a service (AUTH-8):
 --
 -- @
 -- menger v1.0.0
@@ -250,7 +250,7 @@ renderAnonymousPage AnonPage{..} = T.unlines $
 --   you hold it on  MENGER (within MENGER-12)
 -- @
 --
--- The ceiling is the refusal's own when the hub names one, else the one
+-- The ceiling is the refusal's own when the service names one, else the one
 -- passed in (the stored session's, as asked at login). A line with
 -- nothing to say is left out; a refusal naming no grant is its message.
 renderRefusal :: [Text] -> Refusal -> Text
@@ -304,7 +304,7 @@ parseSessionGrant = \case
         }
   _ -> Nothing
 
--- | Is this error the hub saying it has no @auth@ activation (or no such
+-- | Is this error the service saying it has no @auth@ activation (or no such
 -- method on it)? Then synapse falls back to IDENTITY-42's @session.*@.
 isMissingAuth :: Text -> Bool
 isMissingAuth m = any (`T.isInfixOf` T.toLower m)

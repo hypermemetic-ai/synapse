@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | SCAFFOLD-21: where a hub is reached — @--url@ and @-H@ / @-P@ with
+-- | SCAFFOLD-21: where a service is reached — @--url@ and @-H@ / @-P@ with
 -- @--tls@ / @--path@ read into one 'Endpoint', and every key derived from
 -- it: the session store's (a plain address keyed exactly as before), the
 -- key proof's audience, the options a message tells the reader to type.
@@ -75,7 +75,7 @@ main = hspec $ do
   describe "audience (a key proof's aud)" $ do
     it "is ws://HOST:PORT for a plain address, as before" $
       audience (plainAt "127.0.0.1" 4455) `shouldBe` "ws://127.0.0.1:4455"
-    it "is the wss origin a hub run with --public-url https://HOST accepts — no path, no :443" $ do
+    it "is the wss origin a service run with --public-url https://HOST accepts — no path, no :443" $ do
       audience (Endpoint "hostdemo.menger.sh" 443 True "/ws" []) `shouldBe` "wss://hostdemo.menger.sh"
       audience (Endpoint "localhost" 8443 True "/ws" []) `shouldBe` "wss://localhost:8443"
 

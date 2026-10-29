@@ -424,7 +424,7 @@ src/Synapse/Self/Template.hs
 src/Synapse/CLI/Help.hs
   - Display params as kebab-case (--model-id not --model_id)
 
-hub-synapse.cabal
+plexus-synapse.cabal
   - Added regex-tdfa dependency
   - Added Self modules to exposed-modules
 ```

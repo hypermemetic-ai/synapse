@@ -188,7 +188,7 @@ This means:
 5. **test/PathNormalizationSpec.hs** (new)
    - Comprehensive tests for path/param normalization
 
-6. **hub-synapse.cabal**
+6. **plexus-synapse.cabal**
    - Added two new test suites
 
 7. **docs/architecture/16680606527890548735_schema-to-cli-pipeline.md**

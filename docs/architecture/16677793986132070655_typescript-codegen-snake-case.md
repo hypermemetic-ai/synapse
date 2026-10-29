@@ -54,7 +54,7 @@ substrate-sandbox-ts/lib/
 
 ## Root Cause
 
-The TypeScript codegen pipeline (hub-codegen → synapse → TypeScript output) has a naming convention gap:
+The TypeScript codegen pipeline (service-codegen → synapse → TypeScript output) has a naming convention gap:
 
 1. **Rust backend**: Uses `snake_case` (Rust convention)
    ```rust
@@ -247,7 +247,7 @@ const result = await cone.create(
 
 ### If choosing Option 1:
 
-1. **Codegen source** (hub-codegen or synapse):
+1. **Codegen source** (service-codegen or synapse):
    - Remove camelCase transformation
    - Keep snake_case in TypeScript output
 

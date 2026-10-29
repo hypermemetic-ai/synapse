@@ -10,7 +10,7 @@
 -- a usage line naming the required flags, aligned options with their types
 -- and allowed values, examples as command lines (the schema's, else one
 -- synthesised), and, in a caller's view, what it requires. A schema from a
--- hub that says none of the new fields still renders sensibly.
+-- service that says none of the new fields still renders sensibly.
 module Main (main) where
 
 import Data.Aeson (Value)
@@ -44,9 +44,9 @@ grouped g m = m { methodGroup = Just g }
 -- Fixtures
 -- ---------------------------------------------------------------------------
 
--- | A hub with children and ungrouped methods (an older hub's shape).
-hub :: PluginSchema
-hub = PluginSchema
+-- | A parent with children and ungrouped methods (an older service's shape).
+parentSchema :: PluginSchema
+parentSchema = PluginSchema
   { psNamespace = "menger", psVersion = "1.0.0"
   , psDescription = "Central routing and introspection"
   , psLongDescription = Nothing, psHash = "h0"
@@ -113,7 +113,7 @@ answerParams = [aesonQQ|{
   "required": ["ticket", "value"]
 }|]
 
--- | set_status as a hub with SYNAPSE-13's fields serves it.
+-- | set_status as a service with SYNAPSE-13's fields serves it.
 setStatus :: MethodSchema
 setStatus = (method "set_status" "Set a ticket's status (not a doc's: a doc has no lifecycle)" (Just setStatusParams))
   { methodLongDescription = Just "Yields exactly one event: `StatusChanged`, `NotFound`, or `Error`.\n\nA doc has no lifecycle."
@@ -134,7 +134,7 @@ pageOf caller ms =
         , mpSchema = Just ms, mpCaller = caller }
   in (md, renderMethodPage page ir md)
 
--- | An older hub's set_status: no long description, examples, values,
+-- | An older service's set_status: no long description, examples, values,
 -- grant or group — and only the IR (no schema) at hand.
 oldPage :: Text
 oldPage =
@@ -168,10 +168,10 @@ col needle l = T.length (fst (T.breakOn needle l))
 main :: IO ()
 main = do
   let listing = renderListing defaultStyle (Listing "synapse -P 4455 menger tickets" Nothing) tickets
-      hubListing = renderListing defaultStyle (Listing "synapse -P 4455 menger" Nothing) hub
+      parentListing = renderListing defaultStyle (Listing "synapse -P 4455 menger" Nothing) parentSchema
       (_, page) = pageOf False setStatus
       (_, callerPage) = pageOf True setStatus
-  mapM_ TIO.putStrLn [listing, hubListing, page, callerPage, oldPage]
+  mapM_ TIO.putStrLn [listing, parentListing, page, callerPage, oldPage]
   hspec $ do
     describe "a listing (gh's shape)" $ do
       let ls = linesOf listing
@@ -207,8 +207,8 @@ main = do
         filter ((> 80) . T.length) ls `shouldBe` []
         ("\n\n\n" `T.isInfixOf` listing) `shouldBe` False
 
-    describe "a listing of a hub with no groups (an older hub)" $ do
-      let ls = linesOf hubListing
+    describe "a listing of a parent with no groups (an older service)" $ do
+      let ls = linesOf parentListing
       it "lists activations, then methods, alphabetically" $ do
         filter (`elem` ["ACTIVATIONS", "METHODS"]) ls `shouldBe` ["ACTIVATIONS", "METHODS"]
         (indexOf ls "  comments " < indexOf ls "  tickets ", indexOf ls "  call " < indexOf ls "  hash ") `shouldBe` (True, True)
@@ -285,7 +285,7 @@ main = do
       it "fits in 80 columns, its command lines (usage, examples) aside" $
         filter (\l -> T.length l > 80 && not ("  synapse " `T.isPrefixOf` l) && not ("Usage: " `T.isPrefixOf` l)) ls `shouldBe` []
 
-    describe "a method's page from an older hub (none of the new fields)" $ do
+    describe "a method's page from an older service (none of the new fields)" $ do
       let ls = linesOf oldPage
       it "still has its usage line and options" $ do
         lineWith ls "Usage:" `shouldBe` "Usage: synapse menger tickets set_status --id <ID> --status <STATUS>"

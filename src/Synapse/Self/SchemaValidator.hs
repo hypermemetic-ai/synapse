@@ -4,7 +4,7 @@
 -- | Schema validation for _self test
 --
 -- Detects incompatibilities between different macro implementations
--- (hub_methods vs plexus-derive) by validating schema structure.
+-- (the old methods macro vs plexus-derive) by validating schema structure.
 
 module Synapse.Self.SchemaValidator
   ( validateMethodSchema
@@ -170,7 +170,7 @@ validateMetadata obj =
 
 -- | Compare two schemas and report differences
 --
--- This is useful for comparing hub_methods vs plexus-derive schemas
+-- This is useful for comparing the old methods macro vs plexus-derive schemas
 compareSchemas :: Text -> Value -> Value -> [SchemaIssue]
 compareSchemas methodName schema1 schema2 = case (schema1, schema2) of
   (Object obj1, Object obj2) ->

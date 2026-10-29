@@ -43,7 +43,7 @@ This matches how Rust's serde handles naming conventions across serialization bo
 
 ### Part 1: Request Parameter Transformation
 
-**File**: `hub-codegen/src/generator/namespaces.rs`
+**File**: `service-codegen/src/generator/namespaces.rs`
 **Function**: `generate_params_object()`
 
 **Before** (used JavaScript shorthand):
@@ -81,7 +81,7 @@ Generated: `{ model_id: modelId, system_prompt: systemPrompt }` ✓
 
 ### Part 2: Response Field Transformation
 
-**File**: `hub-codegen/src/generator/rpc.rs`
+**File**: `service-codegen/src/generator/rpc.rs`
 **Functions**: Added `toCamelCase()`, `transformKeys()`, modified `extractData()` and `collectOne()`
 
 **Implementation**:
@@ -241,7 +241,7 @@ const identifier = this.config.coneId;
 
 ### Code Changes
 
-**hub-codegen** (Rust):
+**service-codegen** (Rust):
 - `src/generator/namespaces.rs` - Request parameter mapping
 - `src/generator/rpc.rs` - Response field transformation
 
@@ -266,7 +266,7 @@ const identifier = this.config.coneId;
 
 Automated checks:
 1. Haskell tests (synapse)
-2. Rust tests (hub-codegen)
+2. Rust tests (service-codegen)
 3. IR generation and validation
 4. TypeScript generation
 5. Import structure validation

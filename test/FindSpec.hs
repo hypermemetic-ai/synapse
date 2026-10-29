@@ -4,14 +4,14 @@
 --
 -- * the matcher: exact, prefix, a typo at both thresholds, a snake_case
 --   subsequence, every word required, and the ranking;
--- * the renders, against the mock hub's catalog (menger's tickets and
+-- * the renders, against the mock service's catalog (menger's tickets and
 --   deployments as its schema had them on 2026-10-15, test/fixtures):
 --   each of the ticket's examples piped (no colour codes) and on a
 --   terminal (the matched characters bold);
 -- * a caller's view: a method outside it is never a hit;
 -- * the IR cache: a second search costs one schema call, the hash check.
 --
--- @SYNAPSE_MOCK_HUB=catalog|catalog-caller@ serves the catalog hub instead
+-- @SYNAPSE_MOCK_SERVICE=catalog|catalog-caller@ serves the catalog service instead
 -- of running the tests (it prints its port), for transcripts by hand.
 module Main (main) where
 
@@ -35,15 +35,15 @@ import Synapse.IR.Types
 import qualified Synapse.Log as Log
 import Synapse.Monad (initEnv, runSynapseM, withViewKey)
 
-import MockHub
+import MockService
 
 main :: IO ()
 main = do
-  serve <- lookupEnv "SYNAPSE_MOCK_HUB"
+  serve <- lookupEnv "SYNAPSE_MOCK_SERVICE"
   dump <- lookupEnv "SYNAPSE_FIND_DUMP"
   case (serve, dump) of
-    (Just "catalog", _) -> serveMockHub (catalogHub NoView)
-    (Just "catalog-caller", _) -> serveMockHub (catalogHub CallerView)
+    (Just "catalog", _) -> serveMockService (catalogService NoView)
+    (Just "catalog-caller", _) -> serveMockService (catalogService CallerView)
     (_, Just _) -> dumpAll
     _ -> hspec spec
 
@@ -51,9 +51,9 @@ main = do
 -- Fixtures
 -- ============================================================================
 
--- | The catalog as a view of the mock hub has it (no cache).
+-- | The catalog as a view of the mock service has it (no cache).
 catalog :: ViewMode -> IO IR
-catalog v = withMockHub (catalogHub v) $ \port -> do
+catalog v = withMockService (catalogService v) $ \port -> do
   logger <- Log.makeLogger Katip.ErrorS
   env0 <- initEnv "127.0.0.1" port "menger" logger Nothing
   let env = withViewKey (if v == CallerView then Just "v-9a77" else Nothing) env0
@@ -179,7 +179,7 @@ spec = do
     it "summarize does not stop inside a quote" $
       summarize "Run `a. b` then stop. More" `shouldBe` "Run `a. b` then stop"
 
-  describe "the pages, piped and on a terminal (the mock hub's catalog)" $ do
+  describe "the pages, piped and on a terminal (the mock service's catalog)" $ do
     mapM_ (\(typed, file, fo, boldBit) -> do
       it ("_find menger " <> typed <> ", piped: as pinned, no colour codes") $ do
         ir <- catalog NoView
@@ -234,7 +234,7 @@ spec = do
       exists <- doesDirectoryExist dir
       if exists then removeDirectoryRecursive dir else pure ()
       cache <- newIRCache (CacheConfig True 100 True dir)
-      withMockHub (catalogHub NoView) $ \port -> do
+      withMockService (catalogService NoView) $ \port -> do
         logger <- Log.makeLogger Katip.ErrorS
         env <- initEnv "127.0.0.1" port "menger" logger Nothing
         before <- readIORef schemaCalls

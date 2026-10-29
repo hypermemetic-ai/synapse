@@ -180,7 +180,7 @@ fetchMethodSchema path methodName = do
     Right schema -> pure schema
 
 -- | Invoke a method and return stream items
-invoke :: Path -> Text -> Value -> SynapseM [HubStreamItem]
+invoke :: Path -> Text -> Value -> SynapseM [ServiceStreamItem]
 invoke namespacePath method params = do
   logger <- getLogger
   cfg <- getConfig
@@ -219,7 +219,7 @@ invoke namespacePath method params = do
     getPort _ c = substratePort c
 
 -- | Invoke with raw method path
-invokeRaw :: Text -> Value -> SynapseM [HubStreamItem]
+invokeRaw :: Text -> Value -> SynapseM [ServiceStreamItem]
 invokeRaw method params = do
   cfg <- getConfig
   result <- liftIO $ ST.invokeRaw cfg method params
@@ -247,7 +247,7 @@ invokeRaw method params = do
     getPort _ c = substratePort c
 
 -- | Invoke a method with streaming output - calls callback for each item
-invokeStreaming :: Path -> Text -> Value -> (HubStreamItem -> IO ()) -> SynapseM ()
+invokeStreaming :: Path -> Text -> Value -> (ServiceStreamItem -> IO ()) -> SynapseM ()
 invokeStreaming namespacePath method params onItem = do
   cfg <- getConfig
   result <- liftIO $ ST.invokeMethodStreaming cfg namespacePath method params onItem
@@ -285,7 +285,7 @@ invokeStreamingWithBidir
   -> Path
   -> Text
   -> Value
-  -> (HubStreamItem -> IO ())                              -- ^ Handler for non-request items
+  -> (ServiceStreamItem -> IO ())                              -- ^ Handler for non-request items
   -> (Text -> PT.Request Value -> IO (Maybe (PT.Response Value)))  -- ^ Handler for bidirectional requests
   -> SynapseM ()
 invokeStreamingWithBidir shape refreshAuth onResume namespacePath method params onItem onBidirRequest = do

@@ -134,7 +134,7 @@ HOME=/tmp/cabal312home cabal-3.12.1.0 test bidir-integration-test \
   --test-options="plexus"
 ```
 
-**Note:** Requires a running Hub backend on localhost:4444 (or custom port with `--port`)
+**Note:** Requires a running Service backend on localhost:4444 (or custom port with `--port`)
 
 ---
 
@@ -184,7 +184,7 @@ Test suite bidir-test: PASS ✅
 
 **Status:** Compiles successfully ✅
 
-**Note:** Requires running Hub backend to execute. Tests are designed to:
+**Note:** Requires running Service backend to execute. Tests are designed to:
 - Gracefully handle missing backends
 - Report connection failures clearly
 - Skip tests when bidirectional methods aren't available

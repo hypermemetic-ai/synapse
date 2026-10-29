@@ -14,7 +14,7 @@ module Synapse.Schema.Types
     -- * Query helpers
   , pluginChildren
   , childNamespaces
-  , isHubActivation
+  , isParentActivation
   , isLeafActivation
 
     -- * Navigation Types
@@ -25,15 +25,15 @@ module Synapse.Schema.Types
     -- * Stream Types
   , StreamMeta(..)
 
-    -- * Hub Protocol Types
-    -- | Re-exported from Plexus.Types with Hub naming
-  , HubStreamItem
-  , pattern HubData
-  , pattern HubProgress
-  , pattern HubError
-  , pattern HubDone
-  , pattern HubGuidance
-  , pattern HubRequest
+    -- * Service Protocol Types
+    -- | Re-exported from Plexus.Types with Service naming
+  , ServiceStreamItem
+  , pattern ServiceData
+  , pattern ServiceProgress
+  , pattern ServiceError
+  , pattern ServiceDone
+  , pattern ServiceGuidance
+  , pattern ServiceRequest
 
     -- * Bidirectional Types (re-exported)
   , Request(..)
@@ -57,7 +57,7 @@ import Plexus.Schema.Recursive
   , SchemaResult(..)
   , pluginChildren
   , childNamespaces
-  , isHubActivation
+  , isParentActivation
   , isLeafActivation
   )
 
@@ -99,35 +99,35 @@ data StreamMeta = StreamMeta
   deriving stock (Show, Eq, Generic)
 
 -- ============================================================================
--- Hub Protocol Types (re-exported from Plexus.Types with Hub naming)
+-- Service Protocol Types (re-exported from Plexus.Types with Service naming)
 -- ============================================================================
 
--- | Hub stream item - the universal transport envelope for streaming responses
+-- | Service stream item - the universal transport envelope for streaming responses
 --
 -- This is a type alias for 'PlexusStreamItem' from the protocol layer,
--- renamed to use Hub terminology at the application level.
-type HubStreamItem = PlexusStreamItem
+-- renamed to use Service terminology at the application level.
+type ServiceStreamItem = PlexusStreamItem
 
 -- | Pattern synonym for data events
-pattern HubData :: Text -> Provenance -> Text -> Value -> HubStreamItem
-pattern HubData hash prov contentType content = StreamData hash prov contentType content
+pattern ServiceData :: Text -> Provenance -> Text -> Value -> ServiceStreamItem
+pattern ServiceData hash prov contentType content = StreamData hash prov contentType content
 
 -- | Pattern synonym for progress events
-pattern HubProgress :: Text -> Provenance -> Text -> Maybe Double -> HubStreamItem
-pattern HubProgress hash prov msg pct = StreamProgress hash prov msg pct
+pattern ServiceProgress :: Text -> Provenance -> Text -> Maybe Double -> ServiceStreamItem
+pattern ServiceProgress hash prov msg pct = StreamProgress hash prov msg pct
 
 -- | Pattern synonym for error events
-pattern HubError :: Text -> Provenance -> Text -> Bool -> HubStreamItem
-pattern HubError hash prov err recoverable = StreamError hash prov err recoverable
+pattern ServiceError :: Text -> Provenance -> Text -> Bool -> ServiceStreamItem
+pattern ServiceError hash prov err recoverable = StreamError hash prov err recoverable
 
 -- | Pattern synonym for done events
-pattern HubDone :: Text -> Provenance -> HubStreamItem
-pattern HubDone hash prov = StreamDone hash prov
+pattern ServiceDone :: Text -> Provenance -> ServiceStreamItem
+pattern ServiceDone hash prov = StreamDone hash prov
 
 -- | Pattern synonym for guidance events
-pattern HubGuidance :: Text -> Provenance -> GuidanceErrorType -> GuidanceSuggestion -> Maybe [Text] -> Maybe Value -> HubStreamItem
-pattern HubGuidance hash prov errType suggestion methods schema = StreamGuidance hash prov errType suggestion methods schema
+pattern ServiceGuidance :: Text -> Provenance -> GuidanceErrorType -> GuidanceSuggestion -> Maybe [Text] -> Maybe Value -> ServiceStreamItem
+pattern ServiceGuidance hash prov errType suggestion methods schema = StreamGuidance hash prov errType suggestion methods schema
 
 -- | Pattern synonym for bidirectional request events
-pattern HubRequest :: Text -> Provenance -> Text -> Request Value -> Maybe Int -> HubStreamItem
-pattern HubRequest hash prov reqId reqData timeout = StreamRequest hash prov reqId reqData timeout
+pattern ServiceRequest :: Text -> Provenance -> Text -> Request Value -> Maybe Int -> ServiceStreamItem
+pattern ServiceRequest hash prov reqId reqData timeout = StreamRequest hash prov reqId reqData timeout

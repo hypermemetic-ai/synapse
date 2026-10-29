@@ -14,7 +14,7 @@ Anything in the operator's environment that isn't "plexus + cookie-based JWT" is
 - A backend behind Caddy `basic_auth` (HTTP Basic) — the canonical way to gate something quickly without IdP infrastructure. The platform's PLATFORM-38 Enforcement::BasicAuth deploys exactly this.
 - A backend behind Cloudflare Access service tokens (`CF-Access-Client-Id` + `CF-Access-Client-Secret` headers).
 - A reverse proxy that requires a Bearer token directly (`Authorization: Bearer <token>`) — common at the edge before plexus runs.
-- A hub that wants a non-standard header for routing (e.g. `X-Tenant-Id`, `X-Request-Origin`).
+- A service that wants a non-standard header for routing (e.g. `X-Tenant-Id`, `X-Request-Origin`).
 
 **Real, tonight (2026-05-01)**: we deployed `https://whoami.hypermemetic.ai` — a plexus RPC backend gated by Caddy `basic_auth`. Synapse can't talk to it. The workaround is an SSH tunnel that bypasses Caddy entirely. That's a leaky abstraction.
 
@@ -131,5 +131,5 @@ So operators can verify what's being sent.
 ## Cross-references
 
 - Consumer: `hypermemetic-infra` `plans/PLATFORM/PLATFORM-38.md` (BasicAuth enforcement variant). Tonight's deploy of `https://whoami.hypermemetic.ai` is exactly the case this ticket unblocks.
-- Sibling: `hypermemetic-infra` `plans/PLATFORM/PLATFORM-44.md` (Wire SessionValidator into every plexus hub) — that ticket lands the JWT-via-Cookie path that `-t/--token` already supports. This ticket is about the *non-Logto* paths (basic-auth, bearer, custom edge).
+- Sibling: `hypermemetic-infra` `plans/PLATFORM/PLATFORM-44.md` (Wire SessionValidator into every plexus service) — that ticket lands the JWT-via-Cookie path that `-t/--token` already supports. This ticket is about the *non-Logto* paths (basic-auth, bearer, custom edge).
 - Existing infra: SELF-1..8's resolver framework gets reused for header values.

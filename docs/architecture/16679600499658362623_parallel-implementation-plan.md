@@ -33,7 +33,7 @@ This plan maximizes parallelization by identifying independent workstreams that 
                     └─────────────────────────────────────────────┘
         │                                │                                │
         ▼                                ▼                                ▼
-   hub-macro emits              Type generator                   Implement new
+   plexus-macros emits              Type generator                   Implement new
    streaming flag               (structs, enums)                 arbor types
         │                                │                                │
         ▼                                ▼                                ▼
@@ -44,7 +44,7 @@ This plan maximizes parallelization by identifying independent workstreams that 
         │                                │                                │
         ▼                                ▼                                ▼
    Synapse reads                 Namespace generator              Arbor tests
-   streaming flag                + hub factory                    + validation
+   streaming flag                + service factory                    + validation
         │                                │                                │
         └────────────────────────────────┼────────────────────────────────┘
                                          │
@@ -56,28 +56,28 @@ This plan maximizes parallelization by identifying independent workstreams that 
                                          │
                                          ▼
                               End-to-end pipeline
-                              synapse --emit-ir | hub-codegen
+                              synapse --emit-ir | service-codegen
 ```
 
 ## Agent Assignments
 
-### Agent A: Protocol (substrate + hub-macro)
+### Agent A: Protocol (substrate + plexus-macros)
 
 **Scope**: Add streaming flag to schema, emit from macro
 
 **Files**:
 - `substrate/src/plexus/schema.rs`
-- `hub-macro/src/codegen/method_enum.rs`
-- `hub-macro/src/parse.rs` (if needed)
+- `plexus-macros/src/codegen/method_enum.rs`
+- `plexus-macros/src/parse.rs` (if needed)
 
 **Interface contract**: After Phase 2, `synapse --schema cone chat` returns JSON with `"streaming": true`
 
-### Agent B: Transpiler (new hub-codegen package)
+### Agent B: Transpiler (new service-codegen package)
 
 **Scope**: Build TypeScript code generator from IR
 
 **Files**:
-- `hub-codegen/` (new package)
+- `service-codegen/` (new package)
 - Can work with mock IR initially
 
 **Interface contract**: Consumes IR JSON, produces `generated/` directory with compilable TypeScript
@@ -138,7 +138,7 @@ impl MethodSchema {
 ### Agent B: Transpiler Scaffold
 
 ```
-hub-codegen/
+service-codegen/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs           # CLI entry point
@@ -200,10 +200,10 @@ pub enum NodeCreateResult {
 **Depends on**: Phase 1 completion for each agent
 **Agents continue independently**
 
-### Agent A: hub-macro Emits Streaming
+### Agent A: plexus-macros Emits Streaming
 
 ```rust
-// hub-macro/src/codegen/method_enum.rs
+// plexus-macros/src/codegen/method_enum.rs
 
 // In method_schemas() generation, add streaming to each schema:
 let streaming_flags: Vec<bool> = methods
@@ -229,7 +229,7 @@ schema
 
 **Validation**:
 ```bash
-# Start hub, query schema
+# Start service, query schema
 synapse --schema cone chat | jq '.streaming'
 # Should output: true
 
@@ -240,7 +240,7 @@ synapse --schema cone create | jq '.streaming'
 ### Agent B: Type Generator
 
 ```rust
-// hub-codegen/src/generator/types.rs
+// service-codegen/src/generator/types.rs
 
 pub fn generate_types(ir: &IR) -> String {
     let mut output = String::new();
@@ -312,7 +312,7 @@ pub enum TreeGetResult {
 
 Update activation to use new types:
 ```rust
-#[hub_method]
+#[method]
 async fn tree_create(&self, ...) -> impl Stream<Item = TreeCreateResult> {
     stream! {
         yield TreeCreateResult::TreeCreated { tree_id, root_node_id };
@@ -371,7 +371,7 @@ synapse --emit-ir cone | jq '.irMethods["cone.chat"].mdStreaming'
 ### Agent B: Namespace Generator
 
 ```rust
-// hub-codegen/src/generator/namespaces.rs
+// service-codegen/src/generator/namespaces.rs
 
 pub fn generate_namespace(plugin: &str, methods: &[&MethodDef], types: &HashMap<String, TypeDef>) -> String {
     let mut output = String::new();
@@ -401,7 +401,7 @@ pub fn generate_namespace(plugin: &str, methods: &[&MethodDef], types: &HashMap<
 }
 ```
 
-**Validation**: Generated namespaces compile, match hub structure
+**Validation**: Generated namespaces compile, match service structure
 
 ### Agent C: Arbor Validation
 
@@ -437,14 +437,14 @@ async fn test_tree_create_returns_typed_result() {
 ### End-to-End Pipeline
 
 ```bash
-# 1. Start hub with all changes
+# 1. Start service with all changes
 cargo run --bin substrate &
 
 # 2. Generate IR (streaming flags now explicit)
 synapse --emit-ir > ir.json
 
 # 3. Generate TypeScript client
-cd hub-codegen && cargo run -- ../ir.json -o ../generated
+cd service-codegen && cargo run -- ../ir.json -o ../generated
 
 # 4. Verify TypeScript compiles
 cd ../generated && npx tsc --noEmit
@@ -457,17 +457,17 @@ npm test
 
 ```typescript
 // generated/tests/integration.test.ts
-import { createHub } from "../";
+import { createService } from "../";
 
-describe("Generated Hub Client", () => {
-  let hub: Hub;
+describe("Generated Service Client", () => {
+  let service: Service;
 
   beforeAll(async () => {
-    hub = await createHub({ url: "ws://localhost:4444" });
+    service = await createService({ url: "ws://localhost:4444" });
   });
 
   test("cone.create returns Promise (non-streaming)", async () => {
-    const result = await hub.cone.create({
+    const result = await service.cone.create({
       name: "test-agent",
       model_id: "gpt-4o-mini",
     });
@@ -476,7 +476,7 @@ describe("Generated Hub Client", () => {
 
   test("cone.chat returns AsyncGenerator (streaming)", async () => {
     const events: ChatEvent[] = [];
-    for await (const event of hub.cone.chat({
+    for await (const event of service.cone.chat({
       identifier: { by_name: "test-agent" },
       prompt: "Say hello",
     })) {
@@ -487,7 +487,7 @@ describe("Generated Hub Client", () => {
   });
 
   test("arbor.tree_create has typed result", async () => {
-    const result = await hub.arbor.tree_create({ owner_id: "test" });
+    const result = await service.arbor.tree_create({ owner_id: "test" });
     // TypeScript knows this is TreeCreateResult, not ArborEvent
     if (result.type === "tree_created") {
       expect(result.tree_id).toBeDefined();
@@ -579,11 +579,11 @@ Agent C Phase 1 ─────┴───► Agent C Phase 2 ───► Agen
 
 ```bash
 # Agent A: Protocol
-# Working directory: substrate + hub-macro
+# Working directory: substrate + plexus-macros
 # Focus: MethodSchema.streaming, macro emission, synapse consumption
 
 # Agent B: Transpiler
-# Working directory: hub-codegen (new)
+# Working directory: service-codegen (new)
 # Focus: IR parsing, type generation, namespace generation
 
 # Agent C: Arbor

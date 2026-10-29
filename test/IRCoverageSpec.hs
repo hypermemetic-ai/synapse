@@ -39,7 +39,7 @@ import Synapse.SchemaStore (Plan(..), Store(..), readPlan, writePlan)
 import Plexus.Schema.Recursive (MethodSchema(..))
 
 import IRFixture
-import MockHub
+import MockService
 
 main :: IO ()
 main = hspec $ do
@@ -324,7 +324,7 @@ main = hspec $ do
               , ("hash", String "r-cc8"), ("methods", Array mempty)
               , ("children", toJSON [ Object (KM.fromList [("namespace", String "tickets"), ("description", String "t"), ("hash", String "t-cc8")]) ]) ])
         writeIORef schemaOverride (Just (("", root) : rows))
-        withSystemTempDirectory "cc8-cli" $ \dir -> withMockHub todaysHub $ \port -> do
+        withSystemTempDirectory "cc8-cli" $ \dir -> withMockService todaysService $ \port -> do
           forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
           env0 <- getEnvironment
           let env = [ (k, v) | (k, v) <- env0, k `notElem` ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION"] ]

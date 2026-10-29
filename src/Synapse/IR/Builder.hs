@@ -496,13 +496,13 @@ methodDefRead shared namespace pathPrefix method = do
         , mdBidirResponseType = Nothing  -- TODO: could extract from response_type title
         , mdBidirResponseSchema = methodResponseType method
         , mdRole = methodRole method
-          -- IR-12: lift MethodSchema.role onto the IR so hub-codegen's
+          -- IR-12: lift MethodSchema.role onto the IR so service-codegen's
           -- typed-handle codegen (IR-9) sees DynamicChild/StaticChild tags.
         , mdGrant = methodGrant method
         , mdTarget = methodTarget method
         , mdLongDescription = methodLongDescription method
           -- AUTH-9: what the method requires and its doc comment, lifted
-          -- for hub-codegen; Nothing from a pre-AUTH schema.
+          -- for service-codegen; Nothing from a pre-AUTH schema.
         , mdInjected = injected
         , mdInput = rrRef <$> inputRead
         }
