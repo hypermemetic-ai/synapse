@@ -701,3 +701,25 @@ test-suite tls-test
   default-extensions:
     OverloadedStrings
   ghc-options:      -threaded
+
+benchmark ir-bench
+  -- SYNAPSE-CC-8: the IR builder alone, over menger's 2026-10-29 schemas
+  -- (test/fixtures/ir-coverage, gzipped): decoded once, then the IR built
+  -- 20 times from memory — median, p90, bytes allocated per build.
+  type:             exitcode-stdio-1.0
+  main-is:          IRBench.hs
+  other-modules:    IRFixture
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
+    katip >= 0.8 && < 0.9,
+    text >= 2.0 && < 2.2,
+    zlib >= 0.6 && < 0.8
+  hs-source-dirs:   bench test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -O2 -threaded -rtsopts "-with-rtsopts=-T"
