@@ -760,3 +760,18 @@ test-suite ir-coverage-test
   default-extensions:
     OverloadedStrings
   ghc-options:      -threaded
+
+-- NAMING-9: the naming gate (scripts/naming-gate.sh) in the suite. The
+-- spec counts the gate's lines and shows the first; it never diffs them.
+-- Its heap is capped (-M6G; +RTS -M... -RTS overrides it), so no regression
+-- of that can take the machine (2026-10-29: an hspec diff reached 7.3 GB).
+test-suite naming-gate
+  type:             exitcode-stdio-1.0
+  main-is:          NamingGateSpec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    process >= 1.6 && < 1.7,
+    hspec >= 2.10 && < 2.12
+  hs-source-dirs:   test
+  default-language: GHC2021
+  ghc-options:      -threaded -rtsopts "-with-rtsopts=-M6G"
