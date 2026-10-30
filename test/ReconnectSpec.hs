@@ -11,11 +11,14 @@
 --   'PT.ConnectionLost' — instead of waiting forever (APP-41's hang);
 -- * a read is sent again, a stream resumes (with @since@ when it takes
 --   one), a write that went out is never repeated, one that never left is;
--- * the window, its spelling, and a method's shape from its schema.
+-- * the window, its spelling, and a method's shape from its schema;
+-- * SYNAPSE-26: an item the printer could not print (stdout closed) ends
+--   the call — never a retry — while the socket's own broken pipe is still
+--   an outage.
 module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Exception (SomeException, bracket, try)
+import Control.Exception (SomeException, bracket, throwIO, try)
 import Control.Monad (forever, void)
 import Data.Aeson
 import qualified Data.Aeson.KeyMap as KM
@@ -24,6 +27,9 @@ import Data.Text (Text)
 import qualified Network.Socket as N
 import qualified Network.WebSockets as WS
 import System.Environment (setEnv, unsetEnv)
+import GHC.Clock (getMonotonicTime)
+import GHC.IO.Exception (IOException(..), IOErrorType(..))
+import System.IO (stdout)
 import System.Timeout (timeout)
 import Test.Hspec
 
@@ -186,6 +192,8 @@ main = hspec $ do
       map (isOutage . upgrade) ["401", "403", "404", "421"] `shouldBe` [False, False, False, False]
     it "is the server's own 429, as before" $
       isOutage (upgrade "429") `shouldBe` True
+    it "is a socket's own broken pipe (a peer gone away), as before (SYNAPSE-26)" $
+      isOutage (PT.NetworkError "Network.Socket.sendBuf: resource vanished (Broken pipe)") `shouldBe` True
 
   outageSpec
   -- SYNAPSE-28: the same outages, every call through a connection holder
@@ -285,7 +293,38 @@ outageSpec = do
         setReconnectWindow 0
         e <- within 20 $ resilientCall "service" readShape (attemptAt (servicePort h)) noReauth (object []) (\_ -> pure ()) (\_ -> pure ())
         e `shouldSatisfy` \case { Failed (PT.ConnectionLost _ True) -> True; _ -> False }
+
+  describe "a closed stdout is not an outage (SYNAPSE-26)" $ do
+    it "ends a write whose answer cannot be printed, sent once, with no pause" $
+      withService [Answer] $ \h -> do
+        setReconnectWindow 10
+        t0 <- getMonotonicTime
+        e <- within 20 $ resilientCall "service" writeShape (attemptAt (servicePort h)) noReauth (object []) (\_ -> pure ()) (\_ -> throwIO stdoutClosed)
+        t1 <- getMonotonicTime
+        length <$> readIORef (serviceCalls h) `shouldReturn` 1
+        e `shouldNotBe` Finished
+        e `shouldSatisfy` \case { GaveUp{} -> False; WriteUnknown{} -> False; _ -> True }
+        (t1 - t0) `shouldSatisfy` (< 1)
+    it "ends a read whose item cannot be printed, sent once, even with no window" $
+      withService [Answer] $ \h -> do
+        setReconnectWindow 0
+        e <- within 20 $ resilientCall "service" readShape (attemptAt (servicePort h)) noReauth (object []) (\_ -> pure ()) (\_ -> throwIO stdoutClosed)
+        length <$> readIORef (serviceCalls h) `shouldReturn` 1
+        show e `shouldNotContain` "Transport"
+        e `shouldSatisfy` \case { Failed{} -> False; _ -> True }
+    it "with stdout open, a read cut mid-answer is sent again and printed whole" $
+      withService [DropMid, Answer] $ \h -> do
+        setReconnectWindow 10
+        printed <- newIORef (0 :: Int)
+        e <- within 20 $ resilientCall "service" readShape (attemptAt (servicePort h)) noReauth (object [])
+               (\_ -> pure ()) (\i -> if isData i then modifyIORef' printed (+ 1) else pure ())
+        e `shouldBe` Finished
+        readIORef printed `shouldReturn` 2
+        length <$> readIORef (serviceCalls h) `shouldReturn` 2
   where
+    -- what a write to stdout raises once its reader has gone (GHC ignores
+    -- SIGPIPE, so EPIPE comes back as this)
+    stdoutClosed = IOError (Just stdout) ResourceVanished "hPutChar" "Broken pipe" (Just 32) Nothing
     newEmptyIORef :: IO (IORef (Maybe Int))
     newEmptyIORef = newIORef Nothing
 

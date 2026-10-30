@@ -29,6 +29,10 @@ module MockService
   , renamedGet
     -- * SYNAPSE-CC-8: a service serving schemas a test gives it
   , schemaOverride
+    -- * SYNAPSE-26: what a closed stdout cost the service
+  , callsMade
+  , floodsEnded
+  , dropNext
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -102,6 +106,23 @@ renamedGet = unsafePerformIO (newIORef False)
 {-# NOINLINE schemaOverride #-}
 schemaOverride :: IORef (Maybe [(Text, Value)])
 schemaOverride = unsafePerformIO (newIORef Nothing)
+
+-- | SYNAPSE-26: the method of every @menger.call@ the services took, in order.
+{-# NOINLINE callsMade #-}
+callsMade :: IORef [Text]
+callsMade = unsafePerformIO (newIORef [])
+
+-- | SYNAPSE-26: @tickets.flood@ streams that ended — unsubscribed, or their
+-- connection gone.
+{-# NOINLINE floodsEnded #-}
+floodsEnded :: IORef Int
+floodsEnded = unsafePerformIO (newIORef 0)
+
+-- | SYNAPSE-26: methods whose next call is taken and then answered by
+-- closing the connection (each name once).
+{-# NOINLINE dropNext #-}
+dropNext :: IORef [Text]
+dropNext = unsafePerformIO (newIORef [])
 
 mockCode, mockState :: Text
 mockCode = "c_19ab"
@@ -190,7 +211,30 @@ handleCall sc c next signedIn _o rid method params = do
       let inner = str "method" params
           args = case KM.lookup "params" params of { Just (Object a) -> a; _ -> KM.empty }
       renamed <- readIORef renamedGet
+      atomicModifyIORef' callsMade (\cs -> (cs ++ [inner], ()))
+      dropIt <- atomicModifyIORef' dropNext (\ds -> if inner `elem` ds then (filter (/= inner) ds, True) else (ds, False))
+      if dropIt then ioError (userError "dropped") else pure ()
       case inner of
+        -- SYNAPSE-26: a write answered in two parts, a moment apart, so a
+        -- reader that closes after the first has closed before the second
+        "tickets.amend" -> void $ forkIO $ do
+          dat "tickets.amend" (object ["type" .= ("amended" :: Text), "id" .= str "id" args, "part" .= (1 :: Int)])
+          threadDelay 300000
+          dat "tickets.amend" (object ["type" .= ("amended" :: Text), "id" .= str "id" args, "part" .= (2 :: Int)])
+          done
+        -- SYNAPSE-26: a stream that ticks every 100 ms until it is
+        -- unsubscribed or its connection goes
+        "tickets.flood" -> void $ forkIO $ do
+          u0 <- length <$> readIORef unsubscribes
+          let tick (n :: Int) = do
+                u <- length <$> readIORef unsubscribes
+                if u > u0 then pure () else do
+                  ok <- try (dat "tickets.flood" (object ["type" .= ("tick" :: Text), "n" .= n]))
+                  case ok of
+                    Left (_ :: SomeException) -> pure ()
+                    Right () -> threadDelay 100000 >> tick (n + 1)
+          tick 0
+          atomicModifyIORef' floodsEnded (\n -> (n + 1, ()))
         -- waits for its answer off the connection's loop, as a real service
         -- runs calls side by side (SYNAPSE-28: the answer may come on this
         -- very connection)
