@@ -560,6 +560,19 @@ network blip — for **ten minutes** by default.
   Other modes say it on stderr.
 - **After the window**, synapse **exits 69** with the reason (`… unreachable
   for 10m (connection refused) — giving up`). It never hangs.
+- **A closed stdout is not an outage** (SYNAPSE-26, 3.17.2). When the
+  reader of synapse's stdout goes — `… | head -1`, `… | grep -m1` — synapse
+  stops at once and **exits 141** (what a shell says of a filter its pipe
+  closed on), saying nothing: no retry, no reconnect, a stream unsubscribed,
+  a write sent once. Whatever window `--reconnect-for` sets, and on `-j` and
+  the plain printer alike. (Before 3.17.2 the EPIPE was taken for a lost
+  connection and a write was sent again for as long as the pipe stayed
+  closed.) The socket's own broken pipe — the service gone — is still an
+  outage. A stream notices its reader is gone only when it next prints: once
+  `tickets watch | head -1` has its line, synapse keeps running until the
+  next event arrives, then exits 141 — with no event, it waits. A run
+  already ending with a code of its own — 75, 77, 69 — keeps it; 141 only
+  replaces a success.
 
 Many agents' calls at once ride out a restart too (SYNAPSE-15): a call
 whose stored session the restart ended signs in again from its key under a
@@ -573,6 +586,7 @@ connection limits (429) is waited out like any outage.
 | 69 | the backend stayed unreachable for the whole window |
 | 75 | a write went out and its answer never came — it may have happened |
 | 77 | the service refused the call (AUTH-8) |
+| 141 | stdout's reader closed the pipe (SYNAPSE-26): nothing more was sent |
 
 Through the connection holder (SYNAPSE-28, below) all of this holds as it is.
 

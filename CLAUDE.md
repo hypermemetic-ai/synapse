@@ -112,7 +112,12 @@ keepalive ping after 15 s idle; `PLEXUS_KEEPALIVE=IDLE[,TIMEOUT]`). A read is
 sent again; a write that went out is not (exit 75: it may have happened); a
 stream resubscribes, with `since` = when it began when the method takes one
 (`await_reply`), and `-j` prints `{"type":"reconnected",…}`; past the window,
-exit 69. Progress is on stderr. The detection is plexus-protocol's
+exit 69. Progress is on stderr. A closed stdout is no outage (SYNAPSE-26,
+3.17.2): what the printer raises is marked in the item callback
+(`resilientCall`'s `printing`), the call ends unretried, and an EPIPE on
+stdout/stderr — told from a socket's by `ioe_handle` — exits 141
+(`exitOnClosedOutput` wraps `main`); `test/PipeSpec.hs` (pipe-test) runs
+the built synapse into a reader that closes early. The detection is plexus-protocol's
 `Plexus.Client` (`LostConnection`, `scClosed`, the keepalive); the policy is
 `Synapse.Reconnect`; `test/ReconnectSpec.hs` pins both against a flaky service.
 README "Outages: reconnecting".
