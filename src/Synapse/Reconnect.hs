@@ -20,6 +20,19 @@
 --   lost — and the caller is told it resumed (@-j@ prints a
 --   @{"type":"reconnected"}@ line);
 -- * when the window runs out, it exits 'exitUnreachable' with the reason.
+--
+-- SYNAPSE-26: a closed stdout is not an outage. GHC's runtime ignores
+-- SIGPIPE, so a write to a stdout whose reader has gone (@… | head -1@)
+-- raises an EPIPE, and the transport reports anything raised in a call as
+-- a network error — which "broken pipe" made an outage, and a write was
+-- sent again for as long as the pipe stayed closed. Whatever the printer
+-- raises is marked where it is raised, in the item callback, and the call
+-- ends there, never retried: a closed stdout (or stderr) exits
+-- 'exitOutputClosed' (141, what a shell says of a filter the pipe closed
+-- on) saying nothing, with the stream unsubscribed and the socket closed
+-- as the transport unwinds; any other failure of the printer is reported
+-- as before, once. A socket's own broken pipe — the peer gone — is never
+-- raised in the callback, and is still an outage.
 module Synapse.Reconnect
   ( -- * The window
     setReconnectWindow
@@ -44,12 +57,19 @@ module Synapse.Reconnect
   , giveUp
   , reportEnding
 
+    -- * A closed stdout
+  , isClosedOutput
+  , exitOnClosedOutput
+
     -- * Exit codes
   , exitUnreachable
   , exitWriteUnknown
+  , exitOutputClosed
   ) where
 
 import Control.Concurrent (threadDelay)
+import Control.Exception (SomeAsyncException, SomeException, catch, fromException, throwIO)
+import GHC.IO.Exception (IOException(..), IOErrorType(..))
 import Data.Aeson (Value(..))
 import qualified Data.Aeson.KeyMap as KM
 import Data.Char (isDigit)
@@ -61,8 +81,9 @@ import qualified Data.Text.IO as TIO
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import GHC.Clock (getMonotonicTime)
 import System.Exit (ExitCode(..), exitWith)
-import System.IO (hFlush, stderr)
+import System.IO (hFlush, stderr, stdout)
 import System.IO.Unsafe (unsafePerformIO)
+import System.Posix.Process (exitImmediately)
 
 import Plexus.Schema.Recursive (MethodSchema(..))
 import qualified Plexus.Types as PT
@@ -270,6 +291,7 @@ data Ending
   | Failed PT.TransportError   -- ^ not an outage (or no window): reported as before
   | GaveUp Double Text         -- ^ the window ran out: its length, the last reason
   | WriteUnknown Text          -- ^ a write went out and its connection went before the answer
+  | OutputClosed               -- ^ SYNAPSE-26: stdout's reader closed the pipe; nothing is tried again
   deriving (Eq, Show)
 
 -- | Run a call, one attempt at a time, through any outage within the
@@ -294,7 +316,14 @@ resilientCall whereTo shape attempt reauth params0 onResume onItem = do
   window <- reconnectWindow
   began <- (floor <$> getPOSIXTime) :: IO Integer
   everDelivered <- newIORef False
-  let sinceFor n
+  -- SYNAPSE-26: what the printer raised, marked where it was raised — the
+  -- transport reports it as a network error, and it is no outage
+  printerFailed <- newIORef Nothing
+  let printing :: IO () -> IO ()
+      printing act = act `catch` \(e :: SomeException) -> case fromException e of
+        Just (_ :: SomeAsyncException) -> throwIO e
+        Nothing -> writeIORef printerFailed (Just e) >> throwIO e
+      sinceFor n
         | n > (0 :: Int), csSince shape, Object o <- params0, unset (KM.lookup "since" o) = Just began
         | otherwise = Nothing
       -- a default the schema filled in (null) is no since of the caller's
@@ -307,9 +336,7 @@ resilientCall whereTo shape attempt reauth params0 onResume onItem = do
       go n outage = goAuth n outage False
       goAuth n outage reauthed = do
         taken <- newIORef False
-        let subscribed = do
-              writeIORef taken True
-              case outage of
+        let subscribed = writeIORef taken True >> printing (case outage of
                 Just o -> do
                   now <- getMonotonicTime
                   say $ "reconnected to " <> whereTo <> " after " <> renderDuration (now - oStart o)
@@ -317,16 +344,22 @@ resilientCall whereTo shape attempt reauth params0 onResume onItem = do
                   if csStream shape || before
                     then onResume (Resumed (now - oStart o) (oAttempts o) (sinceFor n))
                     else pure ()
-                Nothing -> pure ()
-            item i = writeIORef everDelivered True >> onItem i
+                Nothing -> pure ())
+            item i = writeIORef everDelivered True >> printing (onItem i)
         r <- attempt (paramsFor n) subscribed item
+        failed <- readIORef printerFailed
         t <- readIORef taken
         -- a try the server took had the connection back: a new loss is a
         -- new outage, with the whole window again
         let outage' = if t then Nothing else outage
-        case r of
-          Right () -> pure Finished
-          Left e
+        case (failed, r) of
+          -- the printer's failure ends the call, whatever the transport made of it
+          (Just pe, _)
+            | Just (code :: ExitCode) <- fromException pe -> throwIO code
+            | isClosedOutput pe -> pure OutputClosed
+          (Just _, Left e) -> pure (Failed e)
+          (_, Right ()) -> pure Finished
+          (Nothing, Left e)
             | Just _ <- outage', not reauthed, upgradeRefused e -> do
                 -- the server came back without the session: once per
                 -- outage, sign in again and try at once
@@ -390,6 +423,39 @@ awaitBackend outage whereTo act = do
 -- ---------------------------------------------------------------------------
 -- Endings
 
+-- | SYNAPSE-26: 128 + SIGPIPE — what a shell says of a filter whose
+-- output pipe closed (GHC ignores the signal, so synapse exits with it).
+exitOutputClosed :: Int
+exitOutputClosed = 141
+
+-- | SYNAPSE-26: an EPIPE (or any vanished resource) raised writing to
+-- stdout or stderr: its reader has gone. Told apart from a socket's own by
+-- the handle the 'IOException' carries — a socket's carries none — as
+-- GHC's top handler tells it (#2699).
+isClosedOutput :: SomeException -> Bool
+isClosedOutput e = case fromException e of
+  Just IOError { ioe_type = ResourceVanished, ioe_handle = Just h } -> h == stdout || h == stderr
+  _ -> False
+
+-- | SYNAPSE-26: run a program, and exit 'exitOutputClosed' quietly when
+-- its stdout's reader went — raised while it ran, or at the last flush.
+-- Every other ending is the program's.
+exitOnClosedOutput :: IO a -> IO a
+exitOnClosedOutput act = (act >>= \a -> flushOut >> pure a) `catch` \(e :: SomeException) ->
+  case fromException e of
+    Just (code :: ExitCode) -> flushOut >> throwIO code
+    _ | isClosedOutput e -> closed
+      | otherwise -> throwIO e
+  where
+    flushOut = hFlush stdout `catch` \(e :: SomeException) -> if isClosedOutput e then closed else throwIO e
+    -- at once: what is left in stdout's buffer has nowhere to go, and the
+    -- runtime's own last flush would fail on it again
+    closed :: IO b
+    closed = do
+      hFlush stderr `catch` \(_ :: SomeException) -> pure ()
+      exitImmediately (ExitFailure exitOutputClosed)
+      exitWith (ExitFailure exitOutputClosed)
+
 -- | sysexits' EX_UNAVAILABLE: the backend stayed away for the whole window.
 exitUnreachable :: Int
 exitUnreachable = 69
@@ -412,6 +478,7 @@ reportEnding whereTo = \case
   Finished -> pure (Right ())
   Failed e -> pure (Left e)
   GaveUp window why -> giveUp whereTo window why
+  OutputClosed -> exitWith (ExitFailure exitOutputClosed)
   WriteUnknown why -> do
     say $ "connection to " <> whereTo <> " lost before an answer (" <> why
       <> ") — the write may have happened; check before sending it again"

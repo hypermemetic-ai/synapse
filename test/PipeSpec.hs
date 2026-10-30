@@ -62,8 +62,9 @@ pipeSpec exe = describe "a closed stdout (SYNAPSE-26)" $ do
       err `shouldNotContain` "reconnect"
       err `shouldNotContain` "lost"
 
-  it "a_closed_stdout_ends_a_stream" $
-    withRun $ \spawn -> do
+  forM_ [([], "through the connection holder"), (["--no-hold"], "on a connection of its own (--no-hold)")] $ \(globals, how) ->
+   it ("a_closed_stdout_ends_a_stream, " <> how) $
+    withRunG globals $ \spawn -> do
       warm spawn
       writeIORef callsMade []
       ended0 <- readIORef floodsEnded
@@ -102,13 +103,14 @@ pipeSpec exe = describe "a closed stdout (SYNAPSE-26)" $ do
   where
     -- a run of the built synapse against a fresh mock service serving a
     -- tickets schema with a write (amend) and an endless stream (flood)
-    withRun act = withSystemTempDirectory "synapse26" $ \dir -> withMockService todaysService $ \port -> do
+    withRun = withRunG []
+    withRunG globals act = withSystemTempDirectory "synapse26" $ \dir -> withMockService todaysService $ \port -> do
       forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
       env0 <- getEnvironment
       let env = [ (k, v) | (k, v) <- env0, k `notElem` ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION", "SYNAPSE_RECONNECT_FOR"] ]
               ++ [ ("HOME", dir </> "home"), ("XDG_CACHE_HOME", dir </> "cache"), ("XDG_RUNTIME_DIR", dir </> "run")
                  , ("PLEXUS_KEYCHAIN", "off"), ("SYNAPSE_HOLD_FOR", "3s") ]
-          spawn args = (proc exe (["--url", "ws://127.0.0.1:" <> show port <> "/ws", "menger"] ++ args))
+          spawn args = (proc exe (globals ++ ["--url", "ws://127.0.0.1:" <> show port <> "/ws", "menger"] ++ args))
             { env = Just env, std_in = CreatePipe, std_out = CreatePipe, std_err = CreatePipe }
       writeIORef schemaOverride (Just [("tickets", ticketsWithWrites)])
       writeIORef dropNext []

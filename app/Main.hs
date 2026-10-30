@@ -395,7 +395,8 @@ buildEnv ep backend logger opts = do
 -- ============================================================================
 
 main :: IO ()
-main = do
+-- SYNAPSE-26: a closed stdout ends the run, 141, whatever it was printing
+main = Reconnect.exitOnClosedOutput $ do
   args0 <- execParser argsInfo
   -- SYNAPSE-28: the connection holder a run started (synapse _hold …)
   when (argBackend args0 == Just "_hold") $ runHold (argPath args0)
