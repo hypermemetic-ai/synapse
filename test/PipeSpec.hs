@@ -49,18 +49,47 @@ pipeSpec exe = describe "a closed stdout (SYNAPSE-26)" $ do
     (_, out, _) <- readProcessWithExitCode exe ["--version"] ""
     out `shouldStartWith` "3.17"
 
-  it "a_closed_stdout_ends_a_write_once" $
-    withRun $ \spawn -> do
+  -- one reader takes a byte and closes, one closes before anything is
+  -- printed
+  forM_ [ ([], "", firstByte), (["-j"], " with -j", nothing)
+        , (["--reconnect-for", "0"], " with --reconnect-for 0", firstByte)
+        , (["--no-hold"], " with --no-hold", firstByte) ] $ \(globals, how, reader) ->
+   it ("a_closed_stdout_ends_a_write_once" <> how) $
+    withRunG globals $ \spawn -> do
       warm spawn
       writeIORef callsMade []
-      (code, secs, err) <- closingAfter (BS.hGetSome `flip` 1) spawn
+      (code, secs, err) <- closingAfter reader spawn
         ["tickets", "amend", "--id", "MENGER-12", "--body", "the step"]
       threadDelay 500000
       amends <- length . filter (== "tickets.amend") <$> readIORef callsMade
-      (code, amends) `shouldBe` (ExitFailure 141, 1)
+      (code, amends, err) `shouldBe` (ExitFailure 141, 1, "")
       secs `shouldSatisfy` (< 2)
-      err `shouldNotContain` "reconnect"
-      err `shouldNotContain` "lost"
+
+  it "the holder survives a call's closed stdout and answers the next call on its connection" $
+    withRun $ \spawn -> do
+      warm spawn
+      (code, _, _) <- closingAfter firstByte spawn ["tickets", "amend", "--id", "MENGER-12", "--body", "the step"]
+      code `shouldBe` ExitFailure 141
+      c0 <- readIORef connectionsAccepted
+      (code', out, err) <- reading spawn ["tickets", "get", "--id", "MENGER-12"]
+      (code', err) `shouldBe` (ExitSuccess, "")
+      out `shouldContain` "MENGER-12"
+      c1 <- readIORef connectionsAccepted
+      (c1 - c0) `shouldBe` 0
+
+  -- (the printer's stdout is line-buffered — katip's scribe sets it — so
+  -- what is printed is written at once; a run's own exit code under a
+  -- closed stdout is pinned in reconnect-test's exitOnClosedOutput cases)
+  it "a write lost on the socket keeps its exit 75 when its stdout is closed too" $
+    withRun $ \spawn -> do
+      warm spawn
+      writeIORef callsMade []
+      writeIORef dropNext ["tickets.amend"]
+      (code, _, err) <- closingAfter nothing spawn ["tickets", "amend", "--id", "MENGER-12", "--body", "the step"]
+      code `shouldBe` ExitFailure 75
+      err `shouldContain` "the write may have happened"
+      amends <- length . filter (== "tickets.amend") <$> readIORef callsMade
+      amends `shouldBe` 1
 
   forM_ [([], "through the connection holder"), (["--no-hold"], "on a connection of its own (--no-hold)")] $ \(globals, how) ->
    it ("a_closed_stdout_ends_a_stream, " <> how) $
@@ -69,9 +98,8 @@ pipeSpec exe = describe "a closed stdout (SYNAPSE-26)" $ do
       writeIORef callsMade []
       ended0 <- readIORef floodsEnded
       (code, secs, err) <- closingAfter BS8.hGetLine spawn ["tickets", "flood"]
-      code `shouldBe` ExitFailure 141
+      (code, err) `shouldBe` (ExitFailure 141, "")
       secs `shouldSatisfy` (< 2)
-      err `shouldNotContain` "reconnect"
       -- the service saw the stream end, and it was subscribed once
       waitUpTo 2 ((> ended0) <$> readIORef floodsEnded) >>= (`shouldBe` True)
       floods <- length . filter (== "tickets.flood") <$> readIORef callsMade
@@ -147,6 +175,11 @@ closingAfter readSome spawn args = do
     Just c -> do
       e <- BS.hGetContents err
       pure (c, t1 - t0, BS8.unpack e)
+
+-- | A reader that takes the first byte and goes, and one that goes at once.
+firstByte, nothing :: Handle -> IO BS.ByteString
+firstByte h = BS.hGetSome h 1
+nothing _ = pure "-"
 
 -- | Run with stdout read to its end.
 reading :: ([String] -> CreateProcess) -> [String] -> IO (ExitCode, String, String)

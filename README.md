@@ -568,7 +568,11 @@ network blip — for **ten minutes** by default.
   the plain printer alike. (Before 3.17.2 the EPIPE was taken for a lost
   connection and a write was sent again for as long as the pipe stayed
   closed.) The socket's own broken pipe — the service gone — is still an
-  outage.
+  outage. A stream notices its reader is gone only when it next prints: once
+  `tickets watch | head -1` has its line, synapse keeps running until the
+  next event arrives, then exits 141 — with no event, it waits. A run
+  already ending with a code of its own — 75, 77, 69 — keeps it; 141 only
+  replaces a success.
 
 Many agents' calls at once ride out a restart too (SYNAPSE-15): a call
 whose stored session the restart ended signs in again from its key under a

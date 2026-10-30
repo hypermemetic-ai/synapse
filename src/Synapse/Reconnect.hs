@@ -25,14 +25,18 @@
 -- SIGPIPE, so a write to a stdout whose reader has gone (@… | head -1@)
 -- raises an EPIPE, and the transport reports anything raised in a call as
 -- a network error — which "broken pipe" made an outage, and a write was
--- sent again for as long as the pipe stayed closed. Whatever the printer
--- raises is marked where it is raised, in the item callback, and the call
--- ends there, never retried: a closed stdout (or stderr) exits
+-- sent again for as long as the pipe stayed closed. Whatever the call's
+-- callbacks raise is marked where it is raised, and the call ends there,
+-- never retried. Those callbacks are the caller's side of the call: the
+-- printer (each item, the @-j@ reconnected line, the stderr lines) and the
+-- answering of a two-way request (the prompt or @--bidir-cmd@ that
+-- answers it; sending the answer, @<backend>.respond@, reports its own
+-- failure as a value and raises nothing). A closed stdout (or stderr) exits
 -- 'exitOutputClosed' (141, what a shell says of a filter the pipe closed
 -- on) saying nothing, with the stream unsubscribed and the socket closed
--- as the transport unwinds; any other failure of the printer is reported
--- as before, once. A socket's own broken pipe — the peer gone — is never
--- raised in the callback, and is still an outage.
+-- as the transport unwinds; any other failure there is reported as
+-- before, once. A socket's own broken pipe — the peer gone — is never
+-- raised in a callback, and is still an outage.
 module Synapse.Reconnect
   ( -- * The window
     setReconnectWindow
@@ -439,22 +443,27 @@ isClosedOutput e = case fromException e of
 
 -- | SYNAPSE-26: run a program, and exit 'exitOutputClosed' quietly when
 -- its stdout's reader went — raised while it ran, or at the last flush.
--- Every other ending is the program's.
+-- A run that was ending with a code of its own keeps it (a write of
+-- unknown outcome's 75, a refusal's 77, a spent window's 69): 141 only
+-- ever replaces a success. Every other ending is the program's.
 exitOnClosedOutput :: IO a -> IO a
-exitOnClosedOutput act = (act >>= \a -> flushOut >> pure a) `catch` \(e :: SomeException) ->
+exitOnClosedOutput act = (act >>= \a -> flushOr ExitSuccess >> pure a) `catch` \(e :: SomeException) ->
   case fromException e of
-    Just (code :: ExitCode) -> flushOut >> throwIO code
-    _ | isClosedOutput e -> closed
+    Just (code :: ExitCode) -> flushOr code >> throwIO code
+    _ | isClosedOutput e -> closed (ExitFailure exitOutputClosed)
       | otherwise -> throwIO e
   where
-    flushOut = hFlush stdout `catch` \(e :: SomeException) -> if isClosedOutput e then closed else throwIO e
+    flushOr code = hFlush stdout `catch` \(e :: SomeException) ->
+      if isClosedOutput e
+        then closed (if code == ExitSuccess then ExitFailure exitOutputClosed else code)
+        else throwIO e
     -- at once: what is left in stdout's buffer has nowhere to go, and the
     -- runtime's own last flush would fail on it again
-    closed :: IO b
-    closed = do
+    closed :: ExitCode -> IO b
+    closed code = do
       hFlush stderr `catch` \(_ :: SomeException) -> pure ()
-      exitImmediately (ExitFailure exitOutputClosed)
-      exitWith (ExitFailure exitOutputClosed)
+      exitImmediately code
+      exitWith code
 
 -- | sysexits' EX_UNAVAILABLE: the backend stayed away for the whole window.
 exitUnreachable :: Int

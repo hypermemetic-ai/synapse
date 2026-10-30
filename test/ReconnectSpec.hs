@@ -41,7 +41,10 @@ import Synapse.Reconnect
 import qualified Synapse.Hold as Hold
 import System.Directory (doesFileExist, getTemporaryDirectory)
 import System.FilePath ((</>))
-import System.Posix.Process (getProcessID)
+import System.Posix.Process (ProcessStatus(..), forkProcess, getProcessID, getProcessStatus)
+import System.Posix.IO (closeFd, createPipe, dupTo, stdOutput)
+import System.Exit (ExitCode(..), exitWith)
+import System.IO (BufferMode(..), hSetBuffering)
 
 -- ---------------------------------------------------------------------------
 -- The flaky service
@@ -195,6 +198,15 @@ main = hspec $ do
     it "is a socket's own broken pipe (a peer gone away), as before (SYNAPSE-26)" $
       isOutage (PT.NetworkError "Network.Socket.sendBuf: resource vanished (Broken pipe)") `shouldBe` True
 
+  -- SYNAPSE-26: a run whose stdout's reader went, its last output still in
+  -- the buffer (a child process, its stdout a pipe already closed)
+  describe "a run with its stdout closed (exitOnClosedOutput)" $ do
+    it "exits 141 where it would have succeeded" $
+      closedChild (pure ()) `shouldReturn` Just (Exited (ExitFailure 141))
+    it "keeps a code of its own — a write of unknown outcome's 75, a refusal's 77" $ do
+      closedChild (exitWith (ExitFailure 75)) `shouldReturn` Just (Exited (ExitFailure 75))
+      closedChild (exitWith (ExitFailure 77)) `shouldReturn` Just (Exited (ExitFailure 77))
+
   outageSpec
   -- SYNAPSE-28: the same outages, every call through a connection holder
   -- (in this process, on a socket of the test's own): what the run sees
@@ -327,6 +339,20 @@ outageSpec = do
     stdoutClosed = IOError (Just stdout) ResourceVanished "hPutChar" "Broken pipe" (Just 32) Nothing
     newEmptyIORef :: IO (IORef (Maybe Int))
     newEmptyIORef = newIORef Nothing
+
+-- | SYNAPSE-26: run @body@ under 'exitOnClosedOutput' in a child whose
+-- stdout is a pipe nobody reads, with output left in its buffer.
+closedChild :: IO () -> IO (Maybe ProcessStatus)
+closedChild body = do
+  (r, w) <- createPipe
+  closeFd r
+  pid <- forkProcess $ do
+    _ <- dupTo w stdOutput
+    closeFd w
+    hSetBuffering stdout (BlockBuffering Nothing)
+    exitOnClosedOutput (putStr "the answer, still in the buffer" >> body)
+  closeFd w
+  getProcessStatus True False pid
 
 -- | SYNAPSE-28: the holder's socket for these tests.
 holderSocket :: IO FilePath
