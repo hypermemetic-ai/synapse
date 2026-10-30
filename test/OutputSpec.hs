@@ -147,10 +147,12 @@ outputSpec exe = describe "synapse -o FILE (SYNAPSE-39)" $ do
       _ <- BS.hGetContents err
       (got, running) `shouldBe` (True, Nothing)
       BS.length o `shouldBe` 0
-      ls <- lines <$> readFile' file
+      body <- readFile' file
+      -- what was printed is in FILE whole: it ends with its line's end
+      last body `shouldBe` '\n'
       if null globals
-        then forM_ ls (`shouldContain` "tick")
-        else forM_ (take 3 ls) $ \l -> (decodeStrict (BS8.pack l) :: Maybe Value) `shouldSatisfy` (/= Nothing)
+        then body `shouldContain` "type: tick"
+        else forM_ (lines body) $ \l -> (decodeStrict (BS8.pack l) :: Maybe Value) `shouldSatisfy` (/= Nothing)
       modeOf file >>= (`shouldBe` 0o600)
       leftovers dir "ticks.out" >>= (`shouldBe` [])
 

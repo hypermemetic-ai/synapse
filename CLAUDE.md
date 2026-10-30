@@ -122,6 +122,22 @@ the built synapse into a reader that closes early. The detection is plexus-proto
 `Synapse.Reconnect`; `test/ReconnectSpec.hs` pins both against a flaky service.
 README "Outages: reconnecting".
 
+## The answer in a file: `-o FILE` (SYNAPSE-39, 3.17.3)
+
+`synapse -o FILE …` (`--output`, a global option) writes what the call
+prints to FILE, never stdout: the same form (`-j` lines with `-j`), through a
+temporary file beside it (0600) renamed over FILE when the run ends 0; any
+other ending leaves no FILE (an old one removed) and keeps its code; a stream
+renames at once and appends each item as it comes; `-o -` is stdout; a FILE
+that cannot be made exits 73 with nothing sent, a failed write to it 74.
+`Synapse.Output.withOutputFile` points the run's stdout at the file
+(`hDuplicateTo`, the encoding kept, line-buffered), so every printer is
+unchanged; `Output.streaming` is told from `invokeMethod`; a failed write to
+stdout is `Reconnect.isStdoutFailure`, raised to the run, never an outage.
+`test/OutputSpec.hs` (output-test) runs the built synapse against the mock.
+Read an answer from a file; never pipe a write. README "The answer in a
+file".
+
 ## One round trip a call (SYNAPSE-28, 3.16.0)
 
 A warm call is one round trip and the server's time (`tickets health` against

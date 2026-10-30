@@ -97,6 +97,7 @@ import qualified Synapse.Identity.Command as IdCmd
 import qualified Synapse.Identity.Proof as Proof
 import qualified Synapse.Identity.Session as Session
 import qualified Synapse.Reconnect as Reconnect
+import qualified Synapse.Output as Output
 import qualified Synapse.Identity.Store as Store
 import System.Exit (ExitCode(..), exitWith)
 import qualified Synapse.Find as Find
@@ -141,6 +142,7 @@ data SynapseOpts = SynapseOpts
   , soReconnectFor  :: Maybe Text    -- ^ SYNAPSE-20: how long to ride out an outage (10m; 0 = never)
   , soNoHold        :: Bool          -- ^ SYNAPSE-28: no connection held between runs
   , soHoldFor       :: Maybe Text    -- ^ SYNAPSE-28: how long the holder waits with nothing to do (10m)
+  , soOutput        :: Maybe FilePath  -- ^ SYNAPSE-39: -o FILE, the answer written to FILE whole (- = stdout)
   }
   deriving Show
 
@@ -400,6 +402,13 @@ main = Reconnect.exitOnClosedOutput $ do
   args0 <- execParser argsInfo
   -- SYNAPSE-28: the connection holder a run started (synapse _hold …)
   when (argBackend args0 == Just "_hold") $ runHold (argPath args0)
+  -- SYNAPSE-39: -o FILE — stdout is FILE's temporary file from here on,
+  -- renamed into place when the run ends with 0
+  Output.withOutputFile (soOutput (argOpts args0)) (runArgs args0)
+
+-- | The run, once the arguments are read (and stdout is where -o put it).
+runArgs :: Args -> IO ()
+runArgs args0 = do
   -- SCAFFOLD-21: where the connection point is — --url, or -H / -P with
   -- --tls / --path — resolved once, before anything dials
   opts <- either (\e -> hPutStrLn stderr ("synapse: " <> T.unpack e) >> exitWith (ExitFailure 2)) pure
@@ -1501,6 +1510,9 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
               Just _ -> do
                 env' <- buildEnv ep backendName' logger' soOpts
                 pure (Just (mergeUpgradeHeaders (seToken env') (seCookies env') (seHeaders env')))
+      -- SYNAPSE-39: a stream has no end to wait for — with -o, its items
+      -- go to FILE itself, each as it comes
+      when (methodStreaming method) $ liftIO Output.streaming
       -- Use bidirectional streaming handler
       invokeStreamingWithBidir
         (Reconnect.callShape method)
@@ -2046,6 +2058,9 @@ optsParser = do
   soHoldFor <- optional $ T.pack <$> strOption
     ( long "hold-for" <> metavar "DURATION"
    <> help "How long the connection holder keeps the signed-in socket open with nothing to do (10m, 90s, 1h; else SYNAPSE_HOLD_FOR, else 10m)" )
+  soOutput <- optional $ strOption
+    ( long "output" <> short 'o' <> metavar "FILE"
+   <> help "Write the answer to FILE, not stdout: whole, in the same form (-j lines with -j), renamed into place when the call succeeds (a failed call leaves no FILE); 0600; a stream's items appended as they come; - is stdout" )
   pure SynapseOpts
     { soHost = maybe defaultHost id soHostFlag
     , soPort = maybe defaultPort id soPortFlag
