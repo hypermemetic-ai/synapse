@@ -514,6 +514,43 @@ Generate templates from the schema:
 synapse --generate-templates substrate
 ```
 
+### The answer in a file: `-o FILE` (SYNAPSE-39, 3.17.3)
+
+An answer you mean to read goes to a file, then you read the file — never
+through a filter that may stop reading early (a `grep` that cuts a list short,
+a `head` that closes on a write):
+
+```bash
+synapse -P 4455 -o /tmp/t.json -j menger tickets list --summary true
+synapse -P 4455 --output /tmp/t.txt menger tickets get --id MENGER-12
+```
+
+- `-o FILE` / `--output FILE` is a global option (before the service name,
+  as `-j`). What the call prints goes to FILE instead of stdout, in the same
+  form a pipe would get (`-j` lines with `-j`, the rendered answer without);
+  stdout gets nothing, stderr what it always gets.
+- It is written to a temporary file beside FILE and renamed over FILE when
+  the call ends with 0, so a reader never sees half an answer. FILE is
+  `0600` (an answer may carry a session token — `session login`).
+- A call that ends with anything else leaves no FILE — an older FILE is
+  removed too, so nothing stale is read as this call's answer — and no
+  temporary file. The exit code is the call's (75, 77, 69…).
+- A stream (`watch`) has no end: its items are appended to FILE and flushed
+  as each comes. A stream that fails keeps what it wrote.
+- A write's answer is written whole, whoever reads it.
+- What must be seen while the call waits goes to **stderr**, not FILE: a
+  two-way request (the interactive prompt, `--bidir-mode json`'s and
+  `respond`'s request lines — the answer still goes to FILE), and under
+  `-j` an error or a refusal (its `-j` line goes with the failed run's FILE,
+  so a refused call says why on stderr and exits 77).
+- `-o -` is stdout. A FILE that cannot be made (no such directory, a
+  directory) is said on stderr and the run **exits 73** before anything is
+  sent; a write to it that fails later (a full disk, a file size limit) is
+  no outage — the call ends, unretried — and the run **exits 74**.
+- A SIGTERM or SIGHUP ends the run as a failed one (143, 129): no FILE and
+  no temporary file. A SIGKILL can leave the temporary file
+  (`FILE<n>.tmp`) behind.
+
 ## Outages: reconnecting (SYNAPSE-20)
 
 synapse rides out a backend that goes away — a restart, a promote, a
@@ -586,6 +623,8 @@ connection limits (429) is waited out like any outage.
 | 69 | the backend stayed unreachable for the whole window |
 | 75 | a write went out and its answer never came — it may have happened |
 | 77 | the service refused the call (AUTH-8) |
+| 73 | `-o FILE` could not be made (SYNAPSE-39): nothing was sent |
+| 74 | a write to `-o`'s FILE failed (SYNAPSE-39): the call ended there |
 | 141 | stdout's reader closed the pipe (SYNAPSE-26): nothing more was sent |
 
 Through the connection holder (SYNAPSE-28, below) all of this holds as it is.

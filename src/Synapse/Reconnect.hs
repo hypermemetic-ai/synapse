@@ -63,6 +63,7 @@ module Synapse.Reconnect
 
     -- * A closed stdout
   , isClosedOutput
+  , isStdoutFailure
   , exitOnClosedOutput
 
     -- * Exit codes
@@ -361,6 +362,10 @@ resilientCall whereTo shape attempt reauth params0 onResume onItem = do
           (Just pe, _)
             | Just (code :: ExitCode) <- fromException pe -> throwIO code
             | isClosedOutput pe -> pure OutputClosed
+            -- SYNAPSE-39: any other failed write to stdout (-o's FILE on a
+            -- full disk) is no outage and no failure of the call's: it is
+            -- the run's, raised to it
+            | isStdoutFailure pe -> throwIO pe
           (Just _, Left e) -> pure (Failed e)
           (_, Right ()) -> pure Finished
           (Nothing, Left e)
@@ -439,6 +444,14 @@ exitOutputClosed = 141
 isClosedOutput :: SomeException -> Bool
 isClosedOutput e = case fromException e of
   Just IOError { ioe_type = ResourceVanished, ioe_handle = Just h } -> h == stdout || h == stderr
+  _ -> False
+
+-- | SYNAPSE-39: a write to stdout that failed — the pipe's reader gone
+-- ('isClosedOutput'), or -o's FILE on a full disk. Raised by the printer,
+-- never an outage.
+isStdoutFailure :: SomeException -> Bool
+isStdoutFailure e = case fromException e of
+  Just IOError { ioe_handle = Just h } -> h == stdout
   _ -> False
 
 -- | SYNAPSE-26: run a program, and exit 'exitOutputClosed' quietly when
