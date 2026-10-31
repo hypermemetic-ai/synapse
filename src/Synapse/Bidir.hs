@@ -17,6 +17,10 @@
 -- - @--bidir-respond@: Prints request to stdout as JSON, returns Nothing so the
 --   agent can respond via a separate @synapse \<backend\> respond@ invocation
 --
+-- Under @-o FILE@ (SYNAPSE-39) stdout is FILE, renamed into place only when
+-- the call ends: every prompt and request line goes to stderr instead, to
+-- be seen while the call waits.
+--
 -- = Protocol
 --
 -- When a @StreamRequest@ arrives, the handler:
@@ -45,6 +49,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as TIO
 import System.IO (hClose, hFlush, hIsTerminalDevice, stderr, stdin, stdout)
+
+import Synapse.Output (promptHandle)
 import System.Process (createProcess, proc, std_in, std_out, StdStream(..), waitForProcess)
 import System.Exit (ExitCode(..))
 
@@ -113,8 +119,8 @@ handleInteractive _requestId req = case req of
           Just True  -> " [Y/n]"
           Just False -> " [y/N]"
           Nothing    -> " [y/n]"
-    TIO.putStr $ confirmMessage <> defaultHint <> ": "
-    hFlush stdout
+    promptHandle >>= \h -> TIO.hPutStr h $ confirmMessage <> defaultHint <> ": "
+    promptHandle >>= hFlush
     input <- TIO.getLine
     let confirmed = case T.toLower (T.strip input) of
           ""    -> case confirmDefault of
@@ -129,8 +135,8 @@ handleInteractive _requestId req = case req of
     let hint = case promptPlaceholder of
           Just ph -> " (" <> ph <> ")"
           Nothing -> ""
-    TIO.putStr $ promptMessage <> hint <> ": "
-    hFlush stdout
+    promptHandle >>= \h -> TIO.hPutStr h $ promptMessage <> hint <> ": "
+    promptHandle >>= hFlush
     input <- TIO.getLine
     let response = if T.null input
           then case promptDefault of
@@ -140,10 +146,10 @@ handleInteractive _requestId req = case req of
     pure $ Value response
 
   Select{..} -> do
-    TIO.putStrLn selectMessage
+    promptHandle >>= \h -> TIO.hPutStrLn h selectMessage
     mapM_ printOption (zip [1..] selectOptions)
-    TIO.putStr "Select (enter number): "
-    hFlush stdout
+    promptHandle >>= \h -> TIO.hPutStr h "Select (enter number): "
+    promptHandle >>= hFlush
     input <- TIO.getLine
     case reads (T.unpack input) of
       [(n, "")] | n >= 1 && n <= length selectOptions ->
@@ -156,10 +162,10 @@ handleInteractive _requestId req = case req of
       let desc = case optionDescription of
             Just d  -> " - " <> d
             Nothing -> ""
-      TIO.putStrLn $ "  " <> T.pack (show idx) <> ") " <> optionLabel <> desc
+      promptHandle >>= \h -> TIO.hPutStrLn h $ "  " <> T.pack (show idx) <> ") " <> optionLabel <> desc
 
 -- | JSON protocol handling for piped mode
--- Outputs request as a JSON line to stdout, reads a JSON response line from stdin
+-- Outputs request as a JSON line to stdout (stderr under -o, SYNAPSE-39), reads a JSON response line from stdin
 handleJson :: Text -> Request Value -> IO (Response Value)
 handleJson requestId req = do
   let jsonReq = encode $ object
@@ -167,8 +173,8 @@ handleJson requestId req = do
         , "request_id" .= requestId
         , "request"    .= req
         ]
-  LBS.putStrLn jsonReq
-  hFlush stdout
+  promptHandle >>= \h -> LBS.hPutStrLn h jsonReq
+  promptHandle >>= hFlush
   inputLine <- TIO.getLine
   case eitherDecode (LBS.fromStrict $ T.encodeUtf8 inputLine) of
     Left err -> do
@@ -257,8 +263,8 @@ handleRespond mResponseSchema requestId req = do
         Just schema -> baseFields ++ ["response_schema" .= schema]
         Nothing     -> baseFields
       jsonReq = encode $ object allFields
-  LBS.putStrLn jsonReq
-  hFlush stdout
+  promptHandle >>= \h -> LBS.hPutStrLn h jsonReq
+  promptHandle >>= hFlush
   pure Nothing
 
 -- | Get a human-readable name for the request type

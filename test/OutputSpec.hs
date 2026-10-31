@@ -12,7 +12,12 @@
 --   still 75);
 -- * a stream's items are in FILE as they come;
 -- * FILE is 0600; @-o -@ is stdout;
--- * a FILE that cannot be made is said at once, and the call is not sent.
+-- * a FILE that cannot be made (no such directory, a directory) is said at
+--   once, and the call is not sent;
+-- * the review's (SYNAPSE-39): a failed write to FILE exits 74 (forced with
+--   @ulimit -f@), a refusal under @-j@ is said on stderr, a two-way
+--   request's line goes to stderr and the answer to FILE, a SIGTERM leaves
+--   no temporary file.
 module Main (main) where
 
 import Control.Concurrent (threadDelay)
@@ -24,13 +29,13 @@ import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import Data.IORef
-import Data.List (isPrefixOf)
+import Data.List (isInfixOf, isPrefixOf, sort)
 import Data.Text (Text)
 import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable, listDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
-import System.IO (hClose)
+import System.IO (hClose, hGetLine, hPutStrLn, hFlush)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Files (fileMode, getFileStatus)
 import System.Process
@@ -167,11 +172,89 @@ outputSpec exe = describe "synapse -o FILE (SYNAPSE-39)" $ do
       threadDelay 300000
       amends <- length . filter (== "tickets.amend") <$> readIORef callsMade
       amends `shouldBe` 0
+
+  it "a directory as FILE is said at once, and the call is not sent" $
+    withRun $ \dir spawn -> do
+      warm spawn
+      writeIORef callsMade []
+      (code, out, err) <- reading (spawn ["-o", dir]) ["tickets", "amend", "--id", "MENGER-12", "--body", "the step"]
+      (code, out) `shouldBe` (ExitFailure 73, "")
+      err `shouldContain` "is a directory"
+      threadDelay 300000
+      amends <- length . filter (== "tickets.amend") <$> readIORef callsMade
+      amends `shouldBe` 0
+      listDirectory dir >>= (`shouldBe` ["cache", "home", "run"]) . sort
+
+  it "a write to FILE that fails (a file size limit) exits 74, said once, the call unretried" $
+    withRun $ \dir spawn -> do
+      warm spawn
+      writeIORef callsMade []
+      let file = dir </> "ticks.out"
+          limited args = let p = spawn ["-j", "-o", file] args in case cmdspec p of
+            RawCommand exe' as -> p { cmdspec = RawCommand "/bin/sh" (["-c", "trap '' XFSZ; ulimit -f 1; exec \"$0\" \"$@\"", exe'] ++ as) }
+            ShellCommand _ -> p
+      (code, out, err) <- reading limited ["tickets", "flood"]
+      (code, out) `shouldBe` (ExitFailure 74, "")
+      err `shouldContain` ("cannot write " <> file)
+      err `shouldNotContain` "hFlush"
+      err `shouldNotContain` "reconnect"
+      floods <- length . filter (== "tickets.flood") <$> readIORef callsMade
+      floods `shouldBe` 1
+      leftovers dir "ticks.out" >>= (`shouldBe` [])
+
+  it "a refusal under -j -o is said on stderr: exit 77, no FILE" $
+    withRunS (Scenario CallerView False True mockState False) $ \dir spawn -> do
+      warm spawn
+      let file = dir </> "answer.out"
+      (code, out, err) <- reading (spawn ["-j", "-o", file]) ["tickets", "set_status", "--id", "IDENTITY-3"]
+      (code, out) `shouldBe` (ExitFailure 77, "")
+      err `shouldContain` "tickets.set_status"
+      doesFileExist file >>= (`shouldBe` False)
+      leftovers dir "answer.out" >>= (`shouldBe` [])
+
+  it "a two-way request's line goes to stderr, its answer to FILE" $
+    withRun $ \dir spawn -> do
+      warm spawn
+      let file = dir </> "answer.out"
+      (Just inp, Just out, Just err, ph) <- createProcess (spawn ["--bidir-mode", "json", "-o", file] ["tickets", "ask"])
+      let untilRequest = do
+            l <- hGetLine err
+            if "bidir_request" `isInfixOf` l then pure l else untilRequest
+      req <- timeout 10000000 untilRequest
+      req `shouldSatisfy` (/= Nothing)
+      hPutStrLn inp "{\"type\":\"confirmed\",\"value\":true}"
+      hFlush inp
+      code <- timeout 10000000 (waitForProcess ph)
+      code `shouldBe` Just ExitSuccess
+      o <- BS.hGetContents out
+      BS.length o `shouldBe` 0
+      body <- readFile' file
+      body `shouldContain` "answered"
+      body `shouldNotContain` "bidir_request"
+
+  forM_ [("a SIGTERM", ExitFailure 143)] $ \(how, want) ->
+   it (how <> " during an answer leaves no FILE and no temporary file") $
+    withRun $ \dir spawn -> do
+      warm spawn
+      let file = dir </> "answer.out"
+      -- tickets.watch, unary here: a call the service never ends
+      (Just inp, Just out, Just err, ph) <- createProcess (spawn ["-o", file] ["tickets", "watch"])
+      hClose inp
+      begun <- waitUpTo 10 (not . null <$> leftovers dir "answer.out")
+      threadDelay 500000
+      terminateProcess ph
+      code <- timeout 5000000 (waitForProcess ph)
+      _ <- BS.hGetContents out
+      _ <- BS.hGetContents err
+      (begun, code) `shouldBe` (True, Just want)
+      doesFileExist file >>= (`shouldBe` False)
+      leftovers dir "answer.out" >>= (`shouldBe` [])
   where
     -- a run of the built synapse against a fresh mock service serving a
     -- tickets schema with a read (get), a write (amend) and an endless
     -- stream (flood); @spawn globals args@
-    withRun act = withSystemTempDirectory "synapse39" $ \dir -> withMockService todaysService $ \port -> do
+    withRun = withRunS todaysService
+    withRunS sc act = withSystemTempDirectory "synapse39" $ \dir -> withMockService sc $ \port -> do
       forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
       env0 <- getEnvironment
       let env = [ (k, v) | (k, v) <- env0, k `notElem` ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION", "SYNAPSE_RECONNECT_FOR"] ]
@@ -234,7 +317,11 @@ ticketsWithWrites = object
   , "methods" .=
       [ m "get" "One ticket by id" (Just "read") False [("id", True)]
       , m "amend" "Replace a ticket's body" (Just "write") False [("id", True), ("body", False)]
-      , m "flood" "Ticks, every 100 ms, until unsubscribed" (Just "read") True [] ] ]
+      , m "flood" "Ticks, every 100 ms, until unsubscribed" (Just "read") True []
+      , m "set_status" "Change a ticket's status" (Just "write") False [("id", True)]
+      , m "ask" "Ask the caller to confirm" (Just "write") False []
+        -- the service's tickets.watch, said here to be unary: one item, and no end
+      , m "watch" "One item, and no end" (Just "read") False [] ] ]
   where
     m :: Text -> Text -> Maybe Text -> Bool -> [(Text, Bool)] -> Value
     m n d g s ps = object $

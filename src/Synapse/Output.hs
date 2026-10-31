@@ -18,14 +18,24 @@
 -- printer flushes). A stream that fails keeps what it wrote; one that wrote
 -- nothing leaves no FILE.
 --
--- A FILE that cannot be made is said at once and the run exits
--- 'exitCannotCreate' before anything is sent. A write to it that fails
+-- A FILE that cannot be made (no such directory, a directory) is said at
+-- once and the run exits 'exitCannotCreate' before anything is sent. A write to it that fails
 -- later (a full disk) is no outage and no answer of the service's: the
 -- printer's failure ends the call (SYNAPSE-26's marking in
--- 'Synapse.Reconnect'), and the run exits 'exitCannotWrite', saying so.
+-- 'Synapse.Reconnect'), and the run exits 'exitCannotWrite', saying so —
+-- at once, past the runtime's last flush, which would fail on what is left
+-- in stdout's buffer and make the exit 1.
+--
+-- What must be seen while the call waits goes to stderr under @-o@, not
+-- FILE: a two-way request's prompt ('promptHandle'), and under @-j@ an error
+-- or a refusal — FILE goes with the failed run, so its line alone would be
+-- lost. A SIGTERM or SIGHUP ends the run as a failed one (143, 129): the
+-- temporary file is removed. A SIGKILL can leave it behind.
 module Synapse.Output
   ( withOutputFile
   , streaming
+  , active
+  , promptHandle
   , exitCannotCreate
   , exitCannotWrite
   ) where
@@ -41,6 +51,9 @@ import System.FilePath (takeDirectory, takeFileName)
 import System.IO
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Files (setFileMode, fileSize, getFileStatus)
+import System.Posix.Process (exitImmediately)
+import System.Posix.Signals (Handler(..), installHandler, sigHUP, sigTERM)
+import System.Directory (doesDirectoryExist)
 
 import Synapse.Reconnect (isStdoutFailure)
 
@@ -69,10 +82,12 @@ withOutputFile Nothing act = act
 withOutputFile (Just "-") act = act
 withOutputFile (Just file) act = do
   let dir = case takeDirectory file of { "" -> "."; d -> d }
-  opened <- try (openBinaryTempFile dir (takeFileName file <> ".tmp"))
+  isDir <- doesDirectoryExist file
+  opened <- if isDir then pure (Left "is a directory") else
+    either (Left . reason) Right <$> try (openBinaryTempFile dir (takeFileName file <> ".tmp"))
   case opened of
-    Left (e :: IOException) -> do
-      hPutStrLn stderr ("synapse: cannot write " <> file <> ": " <> reason e)
+    Left why -> do
+      hPutStrLn stderr ("synapse: cannot write " <> file <> ": " <> why)
       exitWith (ExitFailure exitCannotCreate)
     Right (tmp, h) -> do
       setFileMode tmp 0o600
@@ -87,6 +102,13 @@ withOutputFile (Just file) act = do
       st <- newIORef False
       let out = Out file tmp st
       writeIORef current (Just out)
+      -- a run told to stop is a failed one: no FILE, no temporary file
+      let stopped n = Catch $ do
+            finish out (ExitFailure n) `catch` \(_ :: SomeException) -> pure ()
+            hFlush stderr `catch` \(_ :: SomeException) -> pure ()
+            exitImmediately (ExitFailure n)
+      _ <- installHandler sigTERM (stopped 143) Nothing
+      _ <- installHandler sigHUP (stopped 129) Nothing
       r <- try act
       let code = case r of
             Right _ -> ExitSuccess
@@ -122,6 +144,17 @@ finish out code = do
         exists <- doesFileExist (oFile out)
         when exists $ quietly (removeFile (oFile out))
 
+-- | Whether @-o FILE@ holds stdout.
+active :: IO Bool
+active = maybe False (const True) <$> readIORef current
+
+-- | Where a prompt goes that must be seen while the call waits: stderr
+-- under @-o@ (stdout is FILE), else stdout.
+promptHandle :: IO Handle
+promptHandle = do
+  a <- active
+  pure (if a then stderr else stdout)
+
 -- | The call is a stream: FILE is its temporary file from now on, each
 -- item in it as it is printed.
 streaming :: IO ()
@@ -139,6 +172,8 @@ streaming = do
 cannotWrite :: FilePath -> IOException -> IO a
 cannotWrite file e = do
   hPutStrLn stderr ("synapse: cannot write " <> file <> ": " <> reason e)
+  hFlush stderr `catch` \(_ :: SomeException) -> pure ()
+  exitImmediately (ExitFailure exitCannotWrite)
   exitWith (ExitFailure exitCannotWrite)
 
 reason :: IOException -> String

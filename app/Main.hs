@@ -1899,10 +1899,21 @@ printResult json raw cfg item = case itemRefusal item of
   -- AUTH-8: a refusal says what it needed (and the call exits non-zero)
   Just r -> do
     Session.noteRefused
-    if json then LBS.putStrLn (encode item) else do
+    -- SYNAPSE-39: under -o the -j line goes with FILE when the run fails,
+    -- so the refusal is said on stderr too
+    toFile <- Output.active
+    if json then LBS.putStrLn (encode item) else pure ()
+    if not json || toFile then do
       ceiling' <- Session.currentCeiling
       TIO.hPutStr stderr (renderRefusal ceiling' r)
-  Nothing -> printResult' json raw cfg item
+    else pure ()
+  Nothing -> do
+    -- SYNAPSE-39: an error's -j line goes with FILE too; say it on stderr
+    toFile <- Output.active
+    case item of
+      ServiceError _ _ err _ | json, toFile -> hPutStrLn stderr $ "Error: " <> T.unpack err
+      _ -> pure ()
+    printResult' json raw cfg item
 
 printResult' :: Bool -> Bool -> RendererConfig -> ServiceStreamItem -> IO ()
 printResult' True _ _ item = LBS.putStrLn $ encode item

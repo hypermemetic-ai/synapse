@@ -129,7 +129,11 @@ prints to FILE, never stdout: the same form (`-j` lines with `-j`), through a
 temporary file beside it (0600) renamed over FILE when the run ends 0; any
 other ending leaves no FILE (an old one removed) and keeps its code; a stream
 renames at once and appends each item as it comes; `-o -` is stdout; a FILE
-that cannot be made exits 73 with nothing sent, a failed write to it 74.
+that cannot be made (or a directory) exits 73 with nothing sent, a failed
+write to it 74 (`exitImmediately`, past the runtime's last flush). Under
+`-o`, two-way prompts and request lines go to stderr (`Output.promptHandle`,
+`Synapse.Bidir`), and a `-j` error or refusal is said on stderr too; SIGTERM
+/ SIGHUP remove the temporary file and exit 143 / 129.
 `Synapse.Output.withOutputFile` points the run's stdout at the file
 (`hDuplicateTo`, the encoding kept, line-buffered), so every printer is
 unchanged; `Output.streaming` is told from `invokeMethod`; a failed write to

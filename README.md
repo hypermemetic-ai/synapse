@@ -538,10 +538,18 @@ synapse -P 4455 --output /tmp/t.txt menger tickets get --id MENGER-12
 - A stream (`watch`) has no end: its items are appended to FILE and flushed
   as each comes. A stream that fails keeps what it wrote.
 - A write's answer is written whole, whoever reads it.
-- `-o -` is stdout. A FILE that cannot be made (no such directory) is said on
-  stderr and the run **exits 73** before anything is sent; a write to it
-  that fails later (a full disk) is no outage — the call ends, unretried —
-  and the run **exits 74**.
+- What must be seen while the call waits goes to **stderr**, not FILE: a
+  two-way request (the interactive prompt, `--bidir-mode json`'s and
+  `respond`'s request lines — the answer still goes to FILE), and under
+  `-j` an error or a refusal (its `-j` line goes with the failed run's FILE,
+  so a refused call says why on stderr and exits 77).
+- `-o -` is stdout. A FILE that cannot be made (no such directory, a
+  directory) is said on stderr and the run **exits 73** before anything is
+  sent; a write to it that fails later (a full disk, a file size limit) is
+  no outage — the call ends, unretried — and the run **exits 74**.
+- A SIGTERM or SIGHUP ends the run as a failed one (143, 129): no FILE and
+  no temporary file. A SIGKILL can leave the temporary file
+  (`FILE<n>.tmp`) behind.
 
 ## Outages: reconnecting (SYNAPSE-20)
 
