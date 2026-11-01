@@ -3,9 +3,11 @@ name:               plexus-synapse
 version:            3.17.3
 synopsis:           Schema-driven CLI for Plexus RPC servers
 license:            MIT
+license-file:       LICENSE
 author:
 maintainer:
 build-type:         Simple
+tested-with:        GHC == 9.8.4, GHC == 9.12.4
 
 flag build-examples
   description: Build example programs (schema-discovery)
@@ -81,7 +83,7 @@ library
   build-depends:
     base >= 4.17 && < 5,
     -- SYNAPSE-28: setCallRouter, substrateRpcSub, unsubscribe
-    plexus-protocol >= 0.5.4,
+    plexus-protocol >= 0.5.5,
     aeson >= 2.0 && < 2.3,
     aeson-pretty >= 0.8 && < 0.9,
     text >= 2.0 && < 2.2,
