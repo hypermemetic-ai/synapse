@@ -4,8 +4,10 @@ version:            3.17.3
 synopsis:           Schema-driven CLI for Plexus RPC servers
 license:            MIT
 license-file:       LICENSE
-author:
-maintainer:
+author:             hypermemetic
+maintainer:         hypermemetic@proton.me
+copyright:          (c) 2025-2026 hypermemetic
+category:           Network
 build-type:         Simple
 tested-with:        GHC == 9.8.4, GHC == 9.12.4
 
