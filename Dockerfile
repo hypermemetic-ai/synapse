@@ -17,8 +17,7 @@ RUN apt-get update && apt-get install -y \
 COPY plexus-synapse.cabal cabal.project* ./
 
 # Copy dependencies
-COPY ../plexus-protocol /build/plexus-protocol
-COPY ../synapse-types /build/synapse-types
+COPY synapse-types /build/synapse-types
 
 # Update cabal and build dependencies only
 RUN cabal update && cabal build --only-dependencies
