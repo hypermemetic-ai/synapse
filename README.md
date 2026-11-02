@@ -816,6 +816,19 @@ menger's 2026-10-29 schemas (`test/fixtures/ir-coverage`), with no network;
 refusals; the IR equal to `menger-2026-10-29.ir-2.1.json`), and the guard
 that every construct 2.0 already typed serializes as before.
 
+### Servers on the published 0.7.0 line (RETURNS-36)
+
+synapse 4.0 reads plexus 0.8's schema and frames strictly, and the
+published 0.7.0 line's too, by what that server itself declares
+(plexus-protocol 0.6, as plexus-core's child seam reads an old peer): a
+method with `streaming` and no `cardinality` is many when the flag is
+true, else one, and its missing `returns` is `{}`; an error frame with no
+typed `error` is typed from its `error_kind`, else its `code` (its fields
+kept); a progress frame with no `content` is `Note {message,
+percentage}`. A method that states neither `cardinality` nor `streaming`
+is refused. `--emit-ir` against a 0.7.0 server writes IR 3.0 with those
+cardinalities.
+
 ### Where IR 3.0 is built (RETURNS-36)
 
 - The types and the version: `src/Synapse/IR/Types.hs` — `IR`,
