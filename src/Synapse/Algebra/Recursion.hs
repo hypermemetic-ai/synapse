@@ -196,6 +196,10 @@ hyloMPar alg coalg = go
                 -- SYNAPSE-28: a run sending from the cache asks the server
                 -- for what the cache lacks; it never skips it
                 Left err | cacheCannotAnswer err -> pure (Left err)
+                -- RETURNS-13: a child whose schema builds no IR (two shapes
+                -- under one title) fails the walk; it is never skipped as a
+                -- fetch that failed
+                Left err@(ValidationError _) -> pure (Left err)
                 Left err -> do
                   hPutStrLn stderr $ "[synapse] warning: skipping plugin (fetch failed): " ++ show err
                   pure (Right Nothing)
