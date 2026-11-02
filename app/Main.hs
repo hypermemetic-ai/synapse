@@ -1040,7 +1040,8 @@ installCallRouter opts = do
   _ <- Hold.installRouter Hold.RouterOpts
          { Hold.roHold = if off then Nothing else Just agentFor
          , Hold.roSocket = sock
-         , Hold.roHoldFor = holdFor }
+         , Hold.roHoldFor = holdFor
+         , Hold.roVersion = T.pack (showVersion Meta.version) }
   pure ()
 
 -- | The address a plexus-protocol config dials.

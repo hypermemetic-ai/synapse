@@ -369,7 +369,7 @@ throughHolder = do
   let wait (0 :: Int) = pure ()
       wait n = doesFileExist sock >>= \ok -> if ok then pure () else threadDelay 20000 >> wait (n - 1)
   wait 250
-  _ <- Hold.installRouter Hold.RouterOpts { Hold.roHold = Just (const (pure (Just "test"))), Hold.roSocket = sock, Hold.roHoldFor = 600 }
+  _ <- Hold.installRouter Hold.RouterOpts { Hold.roHold = Just (const (pure (Just "test"))), Hold.roSocket = sock, Hold.roHoldFor = 600, Hold.roVersion = "" }
   pure ()
   where
     catch' act v = void (try act :: IO (Either SomeException ())) >> pure v

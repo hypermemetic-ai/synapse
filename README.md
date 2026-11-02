@@ -716,9 +716,10 @@ idle.
   next call dials again, and a dial that fails holds nothing, so riding out
   an outage stays the run's (SYNAPSE-20: a read sent again, a write never
   resent blind, exits 69 and 75).
-- **Idle, closed.** A connection nothing used for `--hold-for` (10 minutes)
-  is closed, and the holder exits once it has held nothing, with nothing to
-  do, for `--hold-for`.
+- **Idle, closed.** A connection is kept idle for the `--hold-for` of the
+  last call on it (10 minutes unless the call says), then closed; the
+  holder exits once it has held nothing, with no call, for its own
+  `--hold-for` (the run that started it said).
 - **A cap**: 256 connections (`SYNAPSE_HOLD_MAX`, read when the holder
   starts; 0: none). Past it the one idle longest is closed first; one
   carrying a call never is, so a burst of open calls may pass it until they
@@ -731,6 +732,20 @@ idle.
 - **SIGTERM / SIGHUP** stop it taking runs at once and give the calls under
   way ten seconds; a stream still open then is told its connection was
   lost and resumes through the next holder (SYNAPSE-20).
+- **The newest synapse holds.** The holder says its version when it takes a
+  request; a run of a newer synapse then puts its own holder in its place
+  (the old one lets go of the socket at once, closes what is idle,
+  finishes what it carries and exits), and a run of an older one never
+  replaces a newer, so the newest in use serves every run and two never
+  take turns.
+- **What it takes from the run that starts it**: nothing it does not need.
+  It starts in `/` (it keeps no directory in use), without the run's
+  `PLEXUS_KEY`, `PLEXUS_SESSION`, `SYNAPSE_TOKEN` or `PLEXUS_KEEPALIVE`
+  (one run's keepalive would be every connection's). It does keep that
+  run's other environment (`SYSTEM_CERTIFICATE_PATH`, say) and its cgroup:
+  a holder first started inside a systemd unit stops with the unit, and
+  the calls it carried then end as an outage does (a read sent again, a
+  write that went out exit 75).
 
 The socket's name carries the holder's protocol (2): a synapse that changes
 the wire or what the holder does bumps it and gets a holder of its own.

@@ -181,13 +181,22 @@ or through the registry what it names); the `Mux` keys connections by
 its headers), so two agents never share a connection, even with no
 credential. The holder's `sweep` (every second) lets go at once a
 connection whose `connectionLost` is filled (a close, a reset, the
-keepalive), closes one idle past `--hold-for` or superseded by a newer
+keepalive), closes one idle past the `--hold-for` its last call sent
+(`upHoldFor`; the request's `hold_for`) or superseded by a newer
 credential of the same agent and address, and trims to the cap
 (`defaultCap` 256, `SYNAPSE_HOLD_MAX`, 0 = none; ~96 kB a connection
 measured) the longest idle first — a connection carrying a call is never
 closed (`upClosing`, claimed only at zero calls, so a pick and a close never
-race). It exits once it has held nothing, with no run on it, for
-`--hold-for`; SIGTERM gives open calls 10 s. `{"status":true}` on the
+race; `upLastUsed` is a TVar stamped in the same transaction). It exits
+once it has held nothing, with no call (a status or a probe is none), for
+its own `--hold-for`; SIGTERM gives open calls 10 s. `taken` carries the
+holder's version: a newer run (`olderThan`, `RouterOpts.roVersion`)
+replaces an older holder under the socket's lock — `{"drain":true}`, the
+old one unlinks its socket, closes what is idle and exits when its calls
+end — and an older run never replaces a newer. The spawned holder runs in
+`/` without `PLEXUS_KEY`, `PLEXUS_SESSION`, `SYNAPSE_TOKEN` or
+`PLEXUS_KEEPALIVE` (`notForTheHolder`), and leaves if another holder
+answers by the time it binds. `{"status":true}` on the
 socket answers what it holds (`synapse _hold status`: address, agent,
 calls, idle — never a credential). A run never waits on a holder that died
 before answering (`ensureHolder` watches the process) and skips one whose

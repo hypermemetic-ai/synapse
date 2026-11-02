@@ -64,8 +64,10 @@ module Synapse.Hold
 
     -- * Through the holder
   , holderCall
+  , holderCallAs
   , holderStatus
   , HolderGone(..)
+  , olderThan
 
     -- * The router
   , RouterOpts(..)
@@ -73,8 +75,8 @@ module Synapse.Hold
   , routedCall
   ) where
 
-import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.Async (async, cancel, wait, waitCatch, withAsync)
+import Control.Concurrent (forkIO, forkIOWithUnmask, threadDelay)
+import Control.Concurrent.Async (async, asyncWithUnmask, cancel, wait, waitCatch, withAsync)
 import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Exception
@@ -88,10 +90,11 @@ import qualified Data.CaseInsensitive as CI
 import Data.IORef
 import Data.List (sortOn)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
+import Text.Read (readMaybe)
 import Foreign.C.Error (Errno(..), eAGAIN, throwErrnoIfMinus1RetryMayBlock_)
 import Foreign.C.Types (CInt(..))
 import GHC.Clock (getMonotonicTime)
@@ -140,7 +143,8 @@ data Upstream = Upstream
   { upConn     :: SubstrateConnection
   , upInflight :: TVar Int
   , upClosing  :: TVar Bool       -- ^ SYNAPSE-40: being let go; no call picks it
-  , upLastUsed :: IORef Double
+  , upLastUsed :: TVar Double     -- ^ when a call last took or gave back a slot on it
+  , upHoldFor  :: IORef Double    -- ^ SYNAPSE-40: how long it may sit idle — the --hold-for of the last call on it
   , upSerial   :: Int
   }
 
@@ -156,18 +160,21 @@ data Mux = Mux
     -- ^ schema and _info reads under way, each asked once however many wait
   , muxCap     :: Int
     -- ^ SYNAPSE-40: the most connections kept at once (0: no cap)
+  , muxIdle    :: Double
+    -- ^ how long a connection may sit idle when its call does not say
   }
 
 -- | A multiplexer with the default cap.
 newMux :: IO Mux
-newMux = newMuxWith defaultCap
+newMux = newMuxWith defaultCap defaultHoldFor
 
--- | A multiplexer keeping at most this many connections (0: no cap).
-newMuxWith :: Int -> IO Mux
-newMuxWith cap = do
+-- | A multiplexer keeping at most this many connections (0: no cap), each
+-- idle for at most the seconds unless its call says otherwise.
+newMuxWith :: Int -> Double -> IO Mux
+newMuxWith cap idle = do
   now <- getMonotonicTime
   Mux <$> newMVar Map.empty <*> newMVar Map.empty <*> newTVarIO 0 <*> newIORef now <*> newIORef 0
-      <*> newMVar Map.empty <*> pure (max 0 cap)
+      <*> newMVar Map.empty <*> pure (max 0 cap) <*> pure idle
 
 -- | SYNAPSE-40: the most connections the holder keeps. A live connection
 -- costs it about 96 kB (measured: 403 held to live services, 17.2 MB with
@@ -204,7 +211,7 @@ muxHolding mux = do
   ups <- readMVar (muxUps mux)
   forM [ (k, u) | (k, us) <- Map.toList ups, u <- us ] $ \(k, u) -> do
     n <- readTVarIO (upInflight u)
-    l <- readIORef (upLastUsed u)
+    l <- readTVarIO (upLastUsed u)
     pure Held { heldConfig = (ckConfig k) { substrateHeaders = [] }, heldAgent = ckAgent k
               , heldCalls = n, heldIdle = max 0 (now - l) }
 
@@ -216,18 +223,21 @@ perConnection = 200
 -- | One call on the shared connection for its address and credential, as
 -- no agent in particular (a run's own multiplexer: the run is one agent).
 muxCall :: Mux -> SubstrateConfig -> ST.CallRoute
-muxCall mux = muxCallAs mux ""
+muxCall mux = muxCallAs mux "" Nothing
 
 -- | One call, as the agent, on the shared connection for its address and
 -- credential — dialed when there is none (one dial at a time per key),
--- dropped when it is found dead. A call this side abandons (its thread
--- cancelled, or its consumer failing) is unsubscribed, so a held
+-- dropped when it is found dead — kept afterwards for the call's
+-- @--hold-for@ (else the multiplexer's). A call this side abandons (its
+-- thread cancelled, or its consumer failing) is unsubscribed, so a held
 -- connection never fills up with streams no one reads.
-muxCallAs :: Mux -> Text -> SubstrateConfig -> ST.CallRoute
-muxCallAs mux agent cfg onSub method params onItem
-  | shareable method params = shared mux key onSub method params onItem
-  | otherwise = muxCall' mux key onSub method params onItem
-  where key = keyOf agent cfg
+muxCallAs :: Mux -> Text -> Maybe Double -> SubstrateConfig -> ST.CallRoute
+muxCallAs mux agent hf cfg onSub method params onItem
+  | shareable method params = shared mux key idle onSub method params onItem
+  | otherwise = muxCall' mux key idle onSub method params onItem
+  where
+    key = keyOf agent cfg
+    idle = fromMaybe (muxIdle mux) hf
 
 -- | A read every run asks the same of, and asks first: a schema
 -- (@<backend>.call@ of @….schema@) or @_info@. Twenty runs starting at once
@@ -239,30 +249,33 @@ shareable method params = method == "_info" || case params of
   _ -> False
 
 -- | The read asked once: the first asks it, the rest are given what it was
--- answered (or how it failed), each told it was taken first.
-shared :: Mux -> ConnKey -> ST.CallRoute
-shared mux ck onSub method params onItem = do
+-- answered (or how it failed), each told it was taken first. The first
+-- asker's answer is always given to the rest, however its own call ends
+-- (its run going away included), so none of them waits for ever.
+shared :: Mux -> ConnKey -> Double -> ST.CallRoute
+shared mux ck idle onSub method params onItem = mask $ \restore -> do
   let key = (ck, method, LBS.toStrict (encode params))
   mine <- newEmptyMVar
   existing <- modifyMVar (muxShared mux) $ \m -> case Map.lookup key m of
     Just w -> pure (m, Just w)
     Nothing -> pure (Map.insert key mine m, Nothing)
   case existing of
-    Just waiting -> readMVar waiting >>= \case
+    Just waiting -> restore $ readMVar waiting >>= \case
       Right items -> onSub >> mapM_ onItem items
       -- the first run went away (its call cancelled): ask for this one
-      Left e | Just (_ :: SomeAsyncException) <- fromException e -> muxCall' mux ck onSub method params onItem
+      Left e | Just (_ :: SomeAsyncException) <- fromException e -> muxCall' mux ck idle onSub method params onItem
       Left e -> throwIO e
     Nothing -> do
       acc <- newIORef []
-      r <- try (muxCall' mux ck onSub method params (\i -> modifyIORef' acc (i :) >> onItem i))
-      items <- reverse <$> readIORef acc
-      modifyMVar_ (muxShared mux) (pure . Map.delete key)
-      putMVar mine (either Left (const (Right items)) r)
+      r <- try (restore (muxCall' mux ck idle onSub method params (\i -> modifyIORef' acc (i :) >> onItem i)))
+      uninterruptibleMask_ $ do
+        items <- reverse <$> readIORef acc
+        modifyMVar_ (muxShared mux) (pure . Map.delete key)
+        putMVar mine (either Left (const (Right items)) r)
       either throwIO pure r
 
-muxCall' :: Mux -> ConnKey -> ST.CallRoute
-muxCall' mux key onSub method params onItem = do
+muxCall' :: Mux -> ConnKey -> Double -> ST.CallRoute
+muxCall' mux key idle onSub method params onItem = do
   now <- getMonotonicTime
   writeIORef (muxLast mux) now
   bracket_ (atomically (modifyTVar' (muxBusy mux) (+ 1)))
@@ -273,7 +286,7 @@ muxCall' mux key onSub method params onItem = do
     -- the slot taken on a connection is given back however the call ends
     -- (bracket: never a connection counted busy for ever, so never idle)
     attempt again = do
-      (up, r) <- bracket (acquire mux key) release (\up -> (,) up <$> try (onUpstream up))
+      (up, r) <- bracket (acquire mux key idle) release (\up -> (,) up <$> try (onUpstream up))
       case r of
         -- the connection had died idle: nothing was sent, so once more on a
         -- fresh one (plexus-protocol's freshIfUnsent, here)
@@ -304,8 +317,8 @@ muxCall' mux key onSub method params onItem = do
 
 -- | A live connection for the key with room on it, or a new one — room
 -- made for it first when the multiplexer holds its cap.
-acquire :: Mux -> ConnKey -> IO Upstream
-acquire mux key = do
+acquire :: Mux -> ConnKey -> Double -> IO Upstream
+acquire mux key idle = do
   picked <- pick
   case picked of
     Just up -> pure up
@@ -322,8 +335,9 @@ acquire mux key = do
             n <- atomicModifyIORef' (muxSerial mux) (\k -> (k + 1, k + 1))
             inflight <- newTVarIO 1
             closing <- newTVarIO False
-            used <- newIORef =<< getMonotonicTime
-            let up = Upstream conn inflight closing used n
+            used <- newTVarIO =<< getMonotonicTime
+            held <- newIORef idle
+            let up = Upstream conn inflight closing used held n
             modifyMVar_ (muxUps mux) (pure . Map.insertWith (flip (++)) key [up])
             pure up
   where
@@ -333,10 +347,14 @@ acquire mux key = do
           try' (u : us) = do
             gone <- connectionLost (upConn u)
             when (isJust gone) $ drop' mux key u
+            now <- getMonotonicTime
             ok <- if isJust gone then pure False else atomically $ do
               closing <- readTVar (upClosing u)
               n <- readTVar (upInflight u)
-              if not closing && n < perConnection then True <$ writeTVar (upInflight u) (n + 1) else pure False
+              if not closing && n < perConnection
+                then True <$ (writeTVar (upInflight u) (n + 1) >> writeTVar (upLastUsed u) now)
+                else pure False
+            when ok $ writeIORef (upHoldFor u) idle
             if ok then pure (Just u) else try' us
       try' ups
 
@@ -345,7 +363,8 @@ acquire mux key = do
 -- connection closed — never open, answering pings, and held by no one.
 dialKept :: SubstrateConfig -> IO SubstrateConnection
 dialKept cfg = do
-  d <- async (connect cfg)
+  -- unmasked: the dial's own threads (reader, keepalive) start as any would
+  d <- asyncWithUnmask (\unmask -> unmask (connect cfg))
   wait d `onException` void (forkIO (waitCatch d >>= either (const (pure ()))
     (\c -> disconnect c `catch` \(_ :: SomeException) -> pure ())))
 
@@ -363,28 +382,42 @@ withDialLock mux key act = do
     modifyMVar_ (muxDialing mux)
       (pure . Map.update (\(l, n) -> if n <= 1 then Nothing else Just (l, n - 1)) key)
 
+-- | Give back a call's slot, stamped in the same transaction: no sweep
+-- sees it free with the time it was taken.
 release :: Upstream -> IO ()
 release up = do
-  atomically (modifyTVar' (upInflight up) (subtract 1))
-  getMonotonicTime >>= writeIORef (upLastUsed up)
+  now <- getMonotonicTime
+  atomically $ do
+    writeTVar (upLastUsed up) now
+    modifyTVar' (upInflight up) (subtract 1)
 
 -- | Let the connection go: no call picks it from now on, it leaves the map
 -- (and its key, when it was the last), and it is closed off this thread (a
 -- close never holds the holder up).
 drop' :: Mux -> ConnKey -> Upstream -> IO ()
-drop' mux key up = do
+drop' mux key up = uninterruptibleMask_ $ do
+  -- whole or not at all: a connection marked closing but left in the map
+  -- would be picked by no call, closed by no sweep, and keep the holder up
   atomically (writeTVar (upClosing up) True)
   modifyMVar_ (muxUps mux) $ pure . Map.update
     (\us -> case filter ((/= upSerial up) . upSerial) us of { [] -> Nothing; rest -> Just rest }) key
-  void $ forkIO $ disconnect (upConn up) `catch` \(_ :: SomeException) -> pure ()
+  void $ forkIOWithUnmask $ \unmask -> unmask (disconnect (upConn up)) `catch` \(_ :: SomeException) -> pure ()
 
--- | Claim a connection nothing is on, to close it: a call that picks it at
--- the same moment wins, and it is kept.
-claimIdle :: Upstream -> IO Bool
-claimIdle up = atomically $ do
+-- | Claim a connection nothing is on (and, by its last use, idle as the
+-- test says), to close it: a call that picks it at the same moment wins,
+-- and it is kept.
+claimIdle :: (Double -> Bool) -> Upstream -> IO Bool
+claimIdle idleEnough up = atomically $ do
   n <- readTVar (upInflight up)
   closing <- readTVar (upClosing up)
-  if n == 0 && not closing then True <$ writeTVar (upClosing up) True else pure False
+  l <- readTVar (upLastUsed up)
+  if n == 0 && not closing && idleEnough l then True <$ writeTVar (upClosing up) True else pure False
+
+-- | Close it if it is free and idle as the test says.
+closeIfIdle :: Mux -> ConnKey -> Upstream -> (Double -> Bool) -> IO ()
+closeIfIdle mux k u idleEnough = uninterruptibleMask_ $ do
+  ok <- claimIdle idleEnough u
+  when ok $ drop' mux k u
 
 -- | Close idle connections, the one idle longest first, until at most
 -- @limit@ are held (a connection carrying a call is never closed for it).
@@ -394,39 +427,42 @@ trimTo mux limit = do
   let held = [ (k, u) | (k, us) <- Map.toList ups, u <- us ]
       excess = length held - max 0 limit
   when (excess > 0) $ do
-    stamped <- forM held $ \(k, u) -> (\l -> (l, k, u)) <$> readIORef (upLastUsed u)
+    stamped <- forM held $ \(k, u) -> (\l -> (l, k, u)) <$> readTVarIO (upLastUsed u)
     let close' 0 _ = pure ()
         close' _ [] = pure ()
         close' n ((_, k, u) : rest) = do
-          ok <- claimIdle u
-          if ok then drop' mux k u >> close' (n - 1 :: Int) rest else close' n rest
+          ok <- uninterruptibleMask_ $ do
+            c <- claimIdle (const True) u
+            c <$ when c (drop' mux k u)
+          if ok then close' (n - 1 :: Int) rest else close' n rest
     close' excess (sortOn (\(l, _, _) -> l) stamped)
 
 -- | Let go what is not worth holding: at once, a connection whose server
 -- has gone (closed, reset, or silent past the keepalive: plexus-protocol
 -- has filled its 'connectionLost'); when idle, one superseded by a newer
 -- credential of the same agent at the same address (a session made again),
--- and one idle for longer than @maxIdle@; and past the cap, the idle
--- longest first.
-sweep :: Mux -> Double -> IO ()
-sweep mux maxIdle = do
+-- and one idle for longer than its @--hold-for@ (or than @override@, a
+-- draining holder's 0); and past the cap, the idle longest first.
+sweep :: Mux -> Maybe Double -> IO ()
+sweep mux override = do
   now <- getMonotonicTime
   ups <- readMVar (muxUps mux)
   facts <- forM [ (k, u) | (k, us) <- Map.toList ups, u <- us ] $ \(k, u) -> do
     gone <- connectionLost (upConn u)
-    l <- readIORef (upLastUsed u)
-    pure (k, u, isJust gone, l)
+    l <- readTVarIO (upLastUsed u)
+    hf <- maybe (readIORef (upHoldFor u)) pure override
+    pure (k, u, isJust gone, l, hf)
   -- per agent and address, the credential used last is kept
   let place k = let c = ckConfig k
                 in (ckAgent k, substrateHost c, substratePort c, substratePath c, substrateTls c)
-      lastOfKey = Map.fromListWith max [ (k, l) | (k, _, _, l) <- facts ]
+      lastOfKey = Map.fromListWith max [ (k, l) | (k, _, _, l, _) <- facts ]
       latest = Map.fromListWith max [ (place k, l) | (k, l) <- Map.toList lastOfKey ]
-  forM_ facts $ \(k, u, dead, l) ->
+  forM_ facts $ \(k, u, dead, _, hf) ->
     if dead then drop' mux k u else do
-      let superseded = Map.lookup (place k) latest > Map.lookup k lastOfKey && now - l > 5
-      when (superseded || now - l > maxIdle) $ do
-        ok <- claimIdle u
-        when ok $ drop' mux k u
+      let superseded = Map.lookup (place k) latest > Map.lookup k lastOfKey
+      -- decided on the last use read with the claim, so a call that just
+      -- ended is never taken for one idle since before it began
+      closeIfIdle mux k u (\l -> (superseded && now - l > 5) || now - l > hf)
   when (muxCap mux > 0) $ trimTo mux (muxCap mux)
 
 -- | How many connections are held.
@@ -439,8 +475,9 @@ heldCount mux = sum . map length . Map.elems <$> readMVar (muxUps mux)
 --
 -- One request per unix connection, a line of JSON each way:
 --
---   run → holder   {"agent","host","port","path","tls","ca","headers","method","params"}
---   holder → run   {"t":"taken"}            the request is read; it goes out now
+--   run → holder   {"agent","hold_for","host","port","path","tls","ca","headers","method","params"}
+--   holder → run   {"t":"taken","v"}        the request is read; it goes out now
+--                                           (v: the holder's synapse version)
 --                  {"t":"sub"}              the server took the call
 --                  {"t":"item","i":ITEM}    each item, as the server sent it
 --                  {"t":"end"}              the call ended
@@ -451,6 +488,11 @@ heldCount mux = sum . map length . Map.elems <$> readMVar (muxUps mux)
 --   holder → run   {"t":"status","protocol","version","pid","cap","hold_for",
 --                   "clients","calls","held":[{"host","port","path","tls",
 --                   "agent","calls","idle"}, …]}   never a credential
+--
+--   run → holder   {"drain":true}           (sent holding the socket's lock)
+--   holder → run   {"t":"draining"}         it has let go of the socket; it
+--                                           finishes what it carries, closes
+--                                           what is idle, and exits
 --
 -- A run that goes away mid-call closes its socket; the holder cancels the
 -- call (unsubscribing it).
@@ -465,8 +507,9 @@ heldCount mux = sum . map length . Map.elems <$> readMVar (muxUps mux)
 holdProtocol :: Int
 holdProtocol = 2
 
-encodeRequest :: Text -> SubstrateConfig -> Text -> Value -> Value
-encodeRequest agent c method params = object
+encodeRequest :: Text -> Maybe Double -> SubstrateConfig -> Text -> Value -> Value
+encodeRequest agent holdFor c method params = object $
+  [ "hold_for" .= h | Just h <- [holdFor] ] ++
   [ "agent" .= agent
   , "host" .= substrateHost c, "port" .= substratePort c, "path" .= substratePath c
   , "tls" .= isJust (substrateTls c)
@@ -475,10 +518,11 @@ encodeRequest agent c method params = object
   , "method" .= method, "params" .= params ]
   where latin1 = T.pack . BS8.unpack
 
-decodeRequest :: Value -> Maybe (Text, SubstrateConfig, Text, Value)
+decodeRequest :: Value -> Maybe (Text, Maybe Double, SubstrateConfig, Text, Value)
 decodeRequest = \case
   Object o -> do
     let agent = case KM.lookup "agent" o of { Just (String a) -> a; _ -> "" }
+        holdFor = case KM.lookup "hold_for" o of { Just (Number n) | n > 0 -> Just (realToFrac n); _ -> Nothing }
     String host <- KM.lookup "host" o
     port <- num =<< KM.lookup "port" o
     String path <- KM.lookup "path" o
@@ -489,7 +533,7 @@ decodeRequest = \case
     let params = maybe Null id (KM.lookup "params" o)
         bytes = BS8.pack . T.unpack
     headers <- mapM (\case { [k, v] -> Just (CI.mk (bytes k), bytes v); _ -> Nothing }) (hs :: [[Text]])
-    pure ( agent
+    pure ( agent, holdFor
          , SubstrateConfig
              { substrateHost = T.unpack host, substratePort = port, substratePath = T.unpack path
              , substrateBackend = "", substrateHeaders = headers
@@ -504,9 +548,12 @@ decodeRequest = \case
       Success a -> Just a
       Error _ -> Nothing
 
-isStatusRequest :: Value -> Bool
+isStatusRequest, isDrainRequest :: Value -> Bool
 isStatusRequest = \case
   Object o -> KM.lookup "status" o == Just (Bool True)
+  _ -> False
+isDrainRequest = \case
+  Object o -> KM.lookup "drain" o == Just (Bool True)
   _ -> False
 
 -- | Lines from a socket.
@@ -557,12 +604,19 @@ defaultHoldFor = 600
 -- 'hoHoldFor'; then remove it and exit. SIGTERM / SIGHUP: stop taking
 -- runs at once, give the calls under way ten seconds to end, and go (a
 -- stream still open then is told its connection was lost, and resumes as
--- SYNAPSE-20 says).
+-- SYNAPSE-20 says). Told to drain (a newer synapse is taking its place):
+-- let go of the socket at once, close what is idle, finish what is open,
+-- and go.
 runHolder :: HoldOpts -> IO ()
 runHolder HoldOpts{..} = do
-  mux <- newMuxWith hoCap
+  -- a holder that started slowly may find another serving the socket by
+  -- now: that one stays, this one goes
+  already <- answers hoSocket
+  when already exitSuccess
+  mux <- newMuxWith hoCap hoHoldFor
   clients <- newTVarIO (0 :: Int)
   lastSeen <- newIORef =<< getMonotonicTime
+  draining <- newIORef False
   lsock <- N.socket N.AF_UNIX N.Stream N.defaultProtocol
   privateDir (takeDirectory hoSocket)
   removeIfExists hoSocket
@@ -574,7 +628,7 @@ runHolder HoldOpts{..} = do
   ours <- fileID <$> getFileStatus hoSocket
   pid <- getProcessID
   done <- newEmptyMVar
-  let close' = withLock (hoSocket <> ".lock") $ do
+  let unlink = do
         N.close lsock `catch` \(_ :: SomeException) -> pure ()
         -- only our own socket: another holder may have replaced it
         st <- try (getFileStatus hoSocket)
@@ -582,6 +636,10 @@ runHolder HoldOpts{..} = do
           Right s | fileID s == ours -> removeIfExists hoSocket
           Left (_ :: SomeException) -> pure ()
           _ -> pure ()
+      close' = withLock (hoSocket <> ".lock") unlink
+      -- the run asking holds the lock: let go of the socket under it
+      drain = unlink >> writeIORef draining True
+      touch = getMonotonicTime >>= writeIORef lastSeen
       -- what was taken before the close is finished first: however long
       -- that takes when idle, ten seconds when told to go
       shutdown grace = do
@@ -604,45 +662,59 @@ runHolder HoldOpts{..} = do
                       | h <- held, let c = heldConfig h ] ]
   _ <- installHandler sigTERM (Catch (void (forkIO (shutdown (Just 10))))) Nothing
   _ <- installHandler sigHUP (Catch (void (forkIO (shutdown (Just 10))))) Nothing
+  -- a status asked, or a run only seeing that a holder answers, is no
+  -- activity: only a call keeps a holder that holds nothing
   _ <- forkIO $ forever $ do
     r <- try (N.accept lsock)
     case r of
       Left (_ :: SomeException) -> threadDelay 100000
       Right (s, _) -> do
         atomically (modifyTVar' clients (+ 1))
-        getMonotonicTime >>= writeIORef lastSeen
         void $ forkIO $
-          serveClient mux status s `finally` do
+          serveClient mux (Served status drain touch hoVersion) s `finally` do
             N.close s `catch` \(_ :: SomeException) -> pure ()
-            getMonotonicTime >>= writeIORef lastSeen
             atomically (modifyTVar' clients (subtract 1))
   _ <- forkIO $ forever $ do
     threadDelay 1000000
-    sweep mux hoHoldFor
+    d <- readIORef draining
+    sweep mux (if d then Just 0 else Nothing)
     n <- readTVarIO clients
     (busy, lastCall) <- muxActive mux
     held <- heldCount mux
     seen <- readIORef lastSeen
     now <- getMonotonicTime
-    when (n == 0 && busy == 0 && held == 0 && now - max seen lastCall >= hoHoldFor) (shutdown Nothing)
+    when (n == 0 && busy == 0 && held == 0 && (d || now - max seen lastCall >= hoHoldFor)) (shutdown Nothing)
   takeMVar done
   exitSuccess
 
+-- | What a request may ask of the holder beside a call.
+data Served = Served
+  { svStatus  :: IO Value   -- ^ what it holds
+  , svDrain   :: IO ()      -- ^ let go of the socket and wind down
+  , svTouch   :: IO ()      -- ^ a call came or went
+  , svVersion :: Text       -- ^ the synapse the holder is
+
+  }
+
 -- | One run's request: read it, say it is taken, relay the call, say how
--- it ended — or, asked for it, the status. The run closing its end
--- cancels the call.
-serveClient :: Mux -> IO Value -> N.Socket -> IO ()
-serveClient mux status s = do
+-- it ended — or, asked for it, the status, or drain. The run closing its
+-- end cancels the call.
+serveClient :: Mux -> Served -> N.Socket -> IO ()
+serveClient mux sv s = do
   rd <- newLineReader s
   line <- timeout 30000000 (readLine rd)
   case line >>= id >>= decodeStrict of
     Nothing -> pure ()
-    Just v | isStatusRequest v -> status >>= sendLine s
+    Just v | isStatusRequest v -> svStatus sv >>= sendLine s
+    Just v | isDrainRequest v -> do
+      svDrain sv
+      sendLine s (object ["t" .= ("draining" :: Text)])
     Just v -> case decodeRequest v of
       Nothing -> sendLine s (object ["t" .= ("error" :: Text), "why" .= ("synapse holder: a request it cannot read" :: Text)])
-      Just (agent, cfg, method, params) -> do
-        sendLine s (object ["t" .= ("taken" :: Text)])
-        let call = muxCallAs mux agent cfg
+      Just (agent, holdFor, cfg, method, params) -> flip finally (svTouch sv) $ do
+        svTouch sv
+        sendLine s (object ["t" .= ("taken" :: Text), "v" .= svVersion sv])
+        let call = muxCallAs mux agent holdFor cfg
               (sendLine s (object ["t" .= ("sub" :: Text)]))
               method params
               (\i -> sendLine s (object ["t" .= ("item" :: Text), "i" .= i]))
@@ -703,7 +775,13 @@ busy e = case fromException e of
 -- the request (the request did not go out); after that, what the holder
 -- reports.
 holderCall :: FilePath -> Text -> SubstrateConfig -> ST.CallRoute
-holderCall path agent cfg0 onSub method params onItem = do
+holderCall path agent = holderCallAs path agent Nothing (const (pure ()))
+
+-- | 'holderCall', the connection kept for @holdFor@ seconds idle (else the
+-- holder's own @--hold-for@), and @onTaken@ told the holder's synapse
+-- version when it takes the request.
+holderCallAs :: FilePath -> Text -> Maybe Double -> (Text -> IO ()) -> SubstrateConfig -> ST.CallRoute
+holderCallAs path agent holdFor onTaken cfg0 onSub method params onItem = do
   -- a CA file named relative to this run's directory is named whole: the
   -- holder runs in / and serves every run
   cfg <- case substrateTls cfg0 of
@@ -714,7 +792,7 @@ holderCall path agent cfg0 onSub method params onItem = do
     Left (e :: SomeException) -> throwIO (HolderGone (T.pack (show e)))
     Right s -> pure s
   flip finally (N.close s `catch` \(_ :: SomeException) -> pure ()) $ do
-    sent <- try (sendLine s (encodeRequest agent cfg method params))
+    sent <- try (sendLine s (encodeRequest agent holdFor cfg method params))
     case sent of
       Left (e :: SomeException) -> throwIO (HolderGone (T.pack (show e)))
       Right () -> pure ()
@@ -726,7 +804,9 @@ holderCall path agent cfg0 onSub method params onItem = do
               | taken -> throwIO (LostConnection "the connection holder went away" True)
               | otherwise -> throwIO (HolderGone "the holder closed before taking the request")
             Just (Object o) -> case KM.lookup "t" o of
-              Just (String "taken") -> loop True
+              Just (String "taken") -> do
+                mapM_ (\case { String v -> onTaken v; _ -> pure () }) (KM.lookup "v" o)
+                loop True
               Just (String "sub") -> onSub >> loop True
               Just (String "item") -> do
                 case fromJSON <$> KM.lookup "i" o of
@@ -758,6 +838,40 @@ holderStatus path = do
     Left (_ :: SomeException) -> Nothing
     _ -> Nothing
 
+-- | SYNAPSE-40: is synapse version @a@ older than @b@? (Unreadable: no.)
+olderThan :: Text -> Text -> Bool
+olderThan a b = case (parts a, parts b) of
+  (Just x, Just y) -> x < y
+  _ -> False
+  where
+    parts :: Text -> Maybe [Int]
+    parts v = case T.splitOn "." (T.strip v) of
+      [""] -> Nothing
+      ps -> mapM (readMaybe . T.unpack) ps
+
+-- | SYNAPSE-40: a run newer than the holder puts its own in its place.
+-- Under the socket's lock, the holder is asked its version again; still
+-- older, it is told to drain (it lets go of the socket at once, closes
+-- what is idle, finishes what is open, and exits), and this run's binary
+-- starts in its stead. A run of an older synapse never replaces a newer
+-- holder, so the newest in use serves every run and two never take turns.
+replaceHolder :: FilePath -> Double -> Text -> IO ()
+replaceHolder path holdFor ours = void $ (try :: IO a -> IO (Either SomeException a)) $ do
+  privateDir (takeDirectory path)
+  withLock (path <> ".lock") $ do
+    st <- holderStatus path
+    case st of
+      Just (Object o) | Just (String v) <- KM.lookup "version" o, olderThan v ours -> do
+        drained <- try $ bracket (openHolder path) N.close $ \s -> do
+          sendLine s (object ["drain" .= True])
+          rd <- newLineReader s
+          timeout 5000000 (readLine rd)
+        case drained of
+          Right (Just (Just _)) -> void (spawnHolder path holdFor)
+          Left (_ :: SomeException) -> pure ()
+          _ -> pure ()
+      _ -> pure ()
+
 -- | SYNAPSE-40: the one holder's socket:
 -- @$XDG_RUNTIME_DIR/synapse/holder-2.sock@ (a temporary directory of the
 -- user's own without one) — one per user and 'holdProtocol'.
@@ -783,7 +897,11 @@ ensureHolder path holdFor = do
   privateDir (takeDirectory path)
   withLock (path <> ".lock") $ do
     up <- answers path
-    if up then pure True else do
+    if up then pure True else spawnHolder path holdFor
+
+-- | Start a holder at the socket and wait for it (the socket's lock held).
+spawnHolder :: FilePath -> Double -> IO Bool
+spawnHolder path holdFor = do
       removeIfExists path
       exe <- getExecutablePath
       devnull <- openFile "/dev/null" ReadWriteMode
@@ -793,7 +911,7 @@ ensureHolder path holdFor = do
       -- SYNAPSE-40: the one holder outlives the run that starts it, so it
       -- takes nothing of that run's it does not need: not its directory (a
       -- worktree it would keep in use), nor a secret in its environment
-      env <- filter ((`notElem` secrets) . fst) <$> getEnvironment
+      env <- filter ((`notElem` notForTheHolder) . fst) <$> getEnvironment
       let args = ["_hold", "--socket", path, "--hold-for", show holdFor]
           -- the holder keeps nothing of the run's but its own socket: every
           -- descriptor past stderr is closed before it starts. close_fds
@@ -817,11 +935,12 @@ ensureHolder path holdFor = do
                 Nothing -> threadDelay 5000 >> wait (n - 1)
       wait 600   -- 3 s
 
--- | What a run may carry in its environment that the holder never needs:
+-- | What a run may carry in its environment that the holder must not take:
 -- a key's seed, a session, a token (the holder signs nothing in; every
--- request brings its credential).
-secrets :: [String]
-secrets = ["PLEXUS_KEY", "PLEXUS_SESSION", "SYNAPSE_TOKEN"]
+-- request brings its credential), and one run's keepalive (off, say), which
+-- would be every connection's.
+notForTheHolder :: [String]
+notForTheHolder = ["PLEXUS_KEY", "PLEXUS_SESSION", "SYNAPSE_TOKEN", "PLEXUS_KEEPALIVE"]
 
 -- | A shell's start for the holder: close every descriptor past stderr
 -- that is open, then exec the holder (the arguments after @$0@).
@@ -851,7 +970,8 @@ data RouterOpts = RouterOpts
     -- glances at); Nothing at all: this process's multiplexer alone
     -- (@--no-hold@)
   , roSocket  :: FilePath   -- ^ the holder's socket ('holderSocketPath')
-  , roHoldFor :: Double
+  , roHoldFor :: Double     -- ^ how long a connection is kept idle, sent with each call
+  , roVersion :: Text       -- ^ this synapse's version: an older holder is replaced
   }
 
 -- | Route every call of this process: through the holder (started when
@@ -861,11 +981,12 @@ installRouter ro = do
   mux <- newMux
   broken <- newIORef False
   agents <- newIORef Map.empty
-  ST.setCallRouter (\cfg -> Just (routedCall ro mux broken agents cfg))
+  replaced <- newIORef False
+  ST.setCallRouter (\cfg -> Just (routedCall ro mux broken agents replaced cfg))
   pure mux
 
-routedCall :: RouterOpts -> Mux -> IORef Bool -> IORef (Map.Map ConnKey (Maybe Text)) -> SubstrateConfig -> ST.CallRoute
-routedCall ro mux broken agents cfg onSub method params onItem = do
+routedCall :: RouterOpts -> Mux -> IORef Bool -> IORef (Map.Map ConnKey (Maybe Text)) -> IORef Bool -> SubstrateConfig -> ST.CallRoute
+routedCall ro mux broken agents replaced cfg onSub method params onItem = do
   b <- readIORef broken
   agent <- case roHold ro of
     Just agentFor | not b -> do
@@ -882,10 +1003,20 @@ routedCall ro mux broken agents cfg onSub method params onItem = do
   ours <- if fits then maybe (pure False) (const (dirIsOurs (takeDirectory path))) agent else pure False
   case agent of
     Just a | ours -> do
-      let via = holderCall path a cfg onSub method params onItem
+      seen <- newIORef Nothing
+      let via = holderCallAs path a (Just (roHoldFor ro)) (writeIORef seen . Just) cfg onSub method params onItem
+          -- an older holder answered: once a run, this run's takes its place
+          newer = do
+            v <- readIORef seen
+            done <- readIORef replaced
+            case v of
+              Just old | not done, olderThan old (roVersion ro) -> do
+                writeIORef replaced True
+                replaceHolder path (roHoldFor ro) (roVersion ro)
+              _ -> pure ()
       r <- try via
       case r of
-        Right () -> pure ()
+        Right () -> newer
         Left (HolderGone _) -> do
           ok <- ensureHolder path (roHoldFor ro)
           if not ok then local' else do

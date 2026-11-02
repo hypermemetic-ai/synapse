@@ -29,7 +29,7 @@ module Main (main) where
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (mapConcurrently, async, cancel)
 import Control.Exception (SomeException, bracket, finally, try, fromException)
-import Control.Monad (filterM, forM, forM_, replicateM_, void, when)
+import Control.Monad (filterM, forM, forM_, forever, replicateM_, void, when)
 import Data.Char (isDigit)
 import Data.List (isInfixOf, isPrefixOf, isSuffixOf, nub, sort)
 import Data.Maybe (isJust)
@@ -43,7 +43,7 @@ import qualified Data.Vector as V
 import GHC.Clock (getMonotonicTime)
 import qualified Network.Socket as N
 import qualified Network.Socket.ByteString as NB
-import System.Directory (doesDirectoryExist, doesFileExist, createDirectoryIfMissing, findExecutable, listDirectory)
+import System.Directory (doesDirectoryExist, doesFileExist, createDirectoryIfMissing, findExecutable, getSymbolicLinkTarget, listDirectory)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>), takeFileName)
@@ -248,6 +248,22 @@ main = hspec $ do
         waitFor ((== o0) <$> readIORef connectionsOpen)
         fmap heldOf <$> Hold.holderStatus sock `shouldReturn` Just []
 
+    it "keeps a connection only as long as its call's --hold-for says" $
+      withHolder 60 0 $ \sock -> withMockService todaysService $ \port -> do
+        collect (Hold.holderCallAs sock "a1" (Just 1) (const (pure ())) (serviceAt port)) "menger.call" (getTicket "MENGER-12")
+          >>= (`shouldSatisfy` any isTicket)
+        fmap heldOf <$> Hold.holderStatus sock `shouldReturn` Just [(port, "a1")]
+        waitFor (maybe False (null . heldOf) <$> Hold.holderStatus sock)
+
+    it "exits when it holds nothing however often its status is asked" $
+      withSystemTempDirectory "hold" $ \dir -> do
+        let sock = dir </> "h.sock"
+        _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 1) `catchAll` const (pure ())
+        waitFor (doesFileExist sock)
+        poller <- async $ forever $ Hold.holderStatus sock >> threadDelay 200000
+        waitFor (not <$> doesFileExist sock)
+        cancel poller
+
     it "says what it holds, never a credential" $
       withHolder 30 0 $ \sock -> withMockService todaysService $ \port -> do
         let cfg = (serviceAt port) { substrateHeaders = [("Authorization", "Bearer mgs_s3cret")] }
@@ -419,6 +435,46 @@ oneHolderSpec exe = do
         call s6   -- and s4 the one idle longest
         held `shouldReturn` Right (sort [s3, s5, s6])
       _ -> expectationFailure "six services"
+
+  it "puts its own holder in the place of an older one, never of a newer one" $ do
+    (_, v, _) <- readCreateProcessWithExitCode (proc exe ["--version"]) ""
+    let ours = takeWhile (/= '\n') v
+        sockIn dir = dir </> "run" </> "synapse" </> "holder-2.sock"
+        versionIn dir = fmap (\st -> case st of { Object o | Just (String x) <- KM.lookup "version" o -> T.unpack x; _ -> "" }) <$> holderStatusIn dir
+    -- an older holder (3.16.0, here in this process) is drained and replaced by the run's
+    withHome [] $ \dir env -> withMockService todaysService $ \port -> do
+      _ <- forkIO $ Hold.runHolder (Hold.holdOpts (sockIn dir) 30) { Hold.hoVersion = "3.16.0" } `catchAll` const (pure ())
+      waitFor (doesFileExist (sockIn dir))
+      (code, out, _) <- runIn exe env [] port
+      (code, "MENGER-12" `isInfixOf` out) `shouldBe` (ExitSuccess, True)
+      versionIn dir `shouldReturn` Right ours
+      hs <- holdersUnder dir
+      length hs `shouldBe` 1
+      -- and the next run keeps it: no turns taken
+      (code', _, _) <- runIn exe env [] port
+      code' `shouldBe` ExitSuccess
+      holdersUnder dir `shouldReturn` hs
+    -- a newer one (99.0.0) serves the run and stays
+    withHome [] $ \dir env -> withMockService todaysService $ \port -> do
+      _ <- forkIO $ Hold.runHolder (Hold.holdOpts (sockIn dir) 30) { Hold.hoVersion = "99.0.0" } `catchAll` const (pure ())
+      waitFor (doesFileExist (sockIn dir))
+      (code, out, _) <- runIn exe env [] port
+      (code, "MENGER-12" `isInfixOf` out) `shouldBe` (ExitSuccess, True)
+      versionIn dir `shouldReturn` Right "99.0.0"
+      holdersUnder dir `shouldReturn` []
+
+  it "starts its holder in /, without the run's keepalive or secrets" $
+    withHome [("PLEXUS_KEEPALIVE", "off"), ("SYNAPSE40_MARK", "kept")] $ \dir env -> withMockService todaysService $ \port -> do
+      (code, _, _) <- runIn exe env [] port
+      code `shouldBe` ExitSuccess
+      hs <- holdersUnder dir
+      case hs of
+        [h] -> do
+          environ <- map BS8.unpack . BS.split 0 <$> BS.readFile ("/proc" </> show h </> "environ")
+          getSymbolicLinkTarget ("/proc" </> show h </> "cwd") `shouldReturn` "/"
+          any ("PLEXUS_KEEPALIVE=" `isPrefixOf`) environ `shouldBe` False
+          ("SYNAPSE40_MARK=kept" `elem` environ) `shouldBe` True
+        other -> expectationFailure ("holders: " <> show other)
 
   it "keeps a live connection for about 100 kB (what its cap is set by)" $ do
     n <- maybe 100 read <$> lookupEnv "SYNAPSE40_HELD"
