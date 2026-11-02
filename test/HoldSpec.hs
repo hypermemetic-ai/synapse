@@ -15,22 +15,40 @@
 --   exactly one; a method the service renamed falls back to the probe and the
 --   fetch, then answers; a method the service no longer has is refused after
 --   the fallback, as it always was.
+-- * SYNAPSE-40, the built synapse again: one holder process for the user,
+--   however many addresses and agents call, a connection for each (address,
+--   agent), never one shared by two agents; a connection whose server
+--   stopped is gone within 10 s while the rest are kept; the cap closes the
+--   longest idle first; and a loop of calls against short-lived servers
+--   (@SYNAPSE40_LOOP@, 500) runs through one holder that holds nothing 10 s
+--   after the last server stops, its memory flat. What the holder holds is
+--   asked of it on its socket (@{"status":true}@); every holder a test
+--   started is stopped by pid when the test ends.
 module Main (main) where
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Async (mapConcurrently, async, cancel)
-import Control.Exception (SomeException, try, fromException)
-import Control.Monad (forM_, replicateM_, void)
+import Control.Exception (SomeException, bracket, finally, try, fromException)
+import Control.Monad (filterM, forM, forM_, replicateM_, void, when)
+import Data.Char (isDigit)
+import Data.List (isInfixOf, isPrefixOf, isSuffixOf, nub, sort)
 import Data.Maybe (isJust)
-import Data.Aeson (Value(..))
+import Data.Aeson (Value(..), decodeStrict)
 import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
 import Data.IORef
 import qualified Data.Text as T
-import System.Directory (doesFileExist, createDirectoryIfMissing, findExecutable)
-import System.Environment (getEnvironment)
+import qualified Data.Vector as V
+import GHC.Clock (getMonotonicTime)
+import qualified Network.Socket as N
+import qualified Network.Socket.ByteString as NB
+import System.Directory (doesDirectoryExist, doesFileExist, createDirectoryIfMissing, findExecutable, listDirectory)
+import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
+import System.Posix.Signals (signalProcess, sigKILL, sigTERM)
 import System.Process (CreateProcess(..), proc, readCreateProcessWithExitCode)
 import Test.Hspec
 
@@ -166,6 +184,12 @@ main = hspec $ do
       Nothing -> it "(the synapse executable is not on PATH)" $ pendingWith "cabal test puts it there"
       Just exe -> cliSpec exe
 
+  describe "one holder for the user (SYNAPSE-40)" $ do
+    synapse <- runIO (findExecutable "synapse")
+    case synapse of
+      Nothing -> it "(the synapse executable is not on PATH)" $ pendingWith "cabal test puts it there"
+      Just exe -> oneHolderSpec exe
+
 cliSpec :: FilePath -> Spec
 cliSpec exe = do
   it "is this build" $ do
@@ -259,7 +283,206 @@ cliSpec exe = do
           run' extra args = readCreateProcessWithExitCode
             (proc exe (extra ++ ["--url", "ws://127.0.0.1:" <> show port <> "/ws", "menger"] ++ args)) { env = Just env } ""
       writeIORef renamedGet False
-      act (run' []) run'
+      act (run' []) run' `finally` stopHolders dir
+
+-- | SYNAPSE-40: the built synapse, every run as the user it is, through one
+-- holder (each test a home and runtime directory of its own, the holder told
+-- to wait 60 s, so what it lets go it lets go by itself).
+oneHolderSpec :: FilePath -> Spec
+oneHolderSpec exe = do
+  it "runs one holder process however many addresses and agents call, with a connection for each" $
+    withHome [] $ \dir env -> withServices 3 $ \ps -> do
+      forM_ ps $ \p -> forM_ ["a1", "a2"] $ \a -> do
+        (code, out, _) <- runIn exe env ["--as", a] p
+        code `shouldBe` ExitSuccess
+        out `shouldContain` "MENGER-12"
+      length <$> holdersUnder dir `shouldReturn` 1
+      st <- holderStatusIn dir
+      fmap (sort . heldOf) st `shouldBe` Right (sort [ (p, a) | p <- ps, a <- ["a1", "a2"] ])
+
+  it "never lets two agents share a connection to one address" $
+    withHome [] $ \dir env -> withMockService todaysService $ \p -> do
+      c0 <- readIORef connectionsAccepted
+      forM_ ["a1", "a2", "a1", "a2"] $ \a -> do
+        (code, _, _) <- runIn exe env ["--as", a] p
+        code `shouldBe` ExitSuccess
+      c1 <- readIORef connectionsAccepted
+      (c1 - c0) `shouldBe` 2
+      st <- holderStatusIn dir
+      fmap (sort . heldOf) st `shouldBe` Right [(p, "a1"), (p, "a2")]
+
+  it "lets a connection go within 10 s of its server stopping, and keeps the others" $
+    withHome [] $ \dir env -> withMockService todaysService $ \live -> do
+      (code0, _, _) <- runIn exe env [] live
+      code0 `shouldBe` ExitSuccess
+      forM_ [1 .. 3 :: Int] $ \_ -> withEphemeralService todaysService $ \p -> do
+        (code, out, _) <- runIn exe env [] p
+        code `shouldBe` ExitSuccess
+        out `shouldContain` "MENGER-12"
+      -- all three have stopped: within 10 s the holder holds the live one alone
+      st <- waitStatus 10 (\v -> map fst (heldOf v) == [live]) dir
+      fmap (map fst . heldOf) st `shouldBe` Right [live]
+      length <$> holdersUnder dir `shouldReturn` 1
+
+  it "holds no more than its cap, closing the longest idle first" $
+    withHome [("SYNAPSE_HOLD_MAX", "3")] $ \dir env -> withServices 6 $ \ps -> case ps of
+      [s1, s2, s3, s4, s5, s6] -> do
+        let call p = runIn exe env [] p >>= \(code, _, _) -> code `shouldBe` ExitSuccess
+            held = fmap (sort . map fst . heldOf) <$> holderStatusIn dir
+        mapM_ call [s1, s2, s3, s4, s5]
+        held `shouldReturn` Right (sort [s3, s4, s5])
+        call s3   -- s3 is the one used last now
+        call s6   -- and s4 the one idle longest
+        held `shouldReturn` Right (sort [s3, s5, s6])
+      _ -> expectationFailure "six services"
+
+  it "runs a loop of calls against short-lived servers through one holder, which holds nothing 10 s on, its memory flat" $ do
+    n <- maybe 500 read <$> lookupEnv "SYNAPSE40_LOOP"
+    withHome [] $ \dir env -> do
+      seen <- newIORef []
+      samples <- newIORef []
+      t0 <- getMonotonicTime
+      forM_ [1 .. n :: Int] $ \i -> do
+        withEphemeralService todaysService $ \p -> do
+          (code, out, err) <- runIn exe env [] p
+          when (code /= ExitSuccess || not ("MENGER-12" `isInfixOf` out)) $
+            expectationFailure ("call " <> show i <> ": " <> show code <> " " <> err)
+        hs <- holdersUnder dir
+        modifyIORef' seen (nub . (hs ++))
+        when (i `mod` max 1 (n `div` 10) == 0) $ case hs of
+          [h] -> do
+            rss <- rssKb h
+            st <- holderStatusIn dir
+            modifyIORef' samples (++ [(i, rss, either (const (-1)) (length . heldOf) st)])
+          _ -> pure ()
+      t1 <- getMonotonicTime
+      pids <- readIORef seen
+      length pids `shouldBe` 1
+      st <- waitStatus 10 (null . heldOf) dir
+      fmap heldOf st `shouldBe` Right []
+      ss <- readIORef samples
+      putStrLn $ "      " <> show n <> " calls against " <> show n <> " servers in "
+        <> show (round (t1 - t0) :: Int) <> " s; holder " <> show pids
+        <> "; (call, RSS kB, connections held): " <> show ss
+      case ss of
+        (_ : (_, early, _) : _) -> do
+          let (_, late, _) = last ss
+          -- flat: what it had grown to by a fifth of the way, within 4 MB, at the end
+          late `shouldSatisfy` (<= early + 4096)
+        _ -> pure ()
+      -- never more held than the servers that stopped in its last second or so
+      maximum (0 : [ h | (_, _, h) <- ss ]) `shouldSatisfy` (<= 20)
+
+-- | SYNAPSE-40: a home, a cache and a runtime directory of the test's own,
+-- and the environment a run is given there (no keychain, a holder that
+-- waits 60 s unless told otherwise); every holder a run started there is
+-- stopped by pid when the action ends.
+withHome :: [(String, String)] -> (FilePath -> [(String, String)] -> IO a) -> IO a
+withHome extra act = withSystemTempDirectory "synapse40" $ \dir -> do
+  forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
+  env0 <- getEnvironment
+  let ours = ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION"
+             , "SYNAPSE_NO_HOLD", "SYNAPSE_HOLD_FOR", "SYNAPSE_HOLD_MAX"]
+      env = [ (k, v) | (k, v) <- env0, k `notElem` ours ]
+         ++ [ ("HOME", dir </> "home"), ("XDG_CACHE_HOME", dir </> "cache"), ("XDG_RUNTIME_DIR", dir </> "run")
+            , ("PLEXUS_KEYCHAIN", "off") ]
+         ++ [ ("SYNAPSE_HOLD_FOR", "60s") | "SYNAPSE_HOLD_FOR" `notElem` map fst extra ]
+         ++ extra
+  act dir env `finally` stopHolders dir
+
+-- | One run of the built synapse: @tickets get@ at the service on the port.
+runIn :: FilePath -> [(String, String)] -> [String] -> Int -> IO (ExitCode, String, String)
+runIn exe env extra port = readCreateProcessWithExitCode
+  (proc exe (extra ++ ["--url", "ws://127.0.0.1:" <> show port <> "/ws", "menger", "tickets", "get", "--id", "MENGER-12"]))
+    { env = Just env } ""
+
+-- | Services on fresh ports, all up for the action.
+withServices :: Int -> ([Int] -> IO a) -> IO a
+withServices 0 act = act []
+withServices k act = withMockService todaysService $ \p -> withServices (k - 1) (act . (p :))
+
+-- | The holder processes (pids) whose socket lies under the directory.
+holdersUnder :: FilePath -> IO [Int]
+holdersUnder dir = do
+  pids <- filter (all isDigit) <$> listDirectory "/proc"
+  fmap concat $ forM pids $ \p -> do
+    r <- try (BS.readFile ("/proc" </> p </> "cmdline"))
+    pure $ case r of
+      Left (_ :: SomeException) -> []
+      Right bs ->
+        let args = map BS8.unpack (BS.split 0 bs)
+        in [ read p | "_hold" `elem` args, any (dir `isInfixOf`) args ]
+
+-- | Stop every holder under the directory, by pid: SIGTERM, then SIGKILL
+-- for any still there 3 s on.
+stopHolders :: FilePath -> IO ()
+stopHolders dir = do
+  ps <- holdersUnder dir
+  forM_ ps $ \p -> void (try (signalProcess sigTERM (fromIntegral p)) :: IO (Either SomeException ()))
+  let alive p = doesDirectoryExist ("/proc" </> show p)
+      wait (0 :: Int) = pure ()
+      wait k = do
+        left <- filterM alive ps
+        if null left then pure () else threadDelay 50000 >> wait (k - 1)
+  wait 60
+  left <- holdersUnder dir
+  forM_ left $ \p -> void (try (signalProcess sigKILL (fromIntegral p)) :: IO (Either SomeException ()))
+
+-- | A process's resident memory, in kB.
+rssKb :: Int -> IO Int
+rssKb pid = do
+  s <- BS8.unpack <$> BS.readFile ("/proc" </> show pid </> "status")
+  pure $ case [ read (words l !! 1) | l <- lines s, "VmRSS:" `isPrefixOf` l ] of
+    (kb : _) -> kb
+    [] -> 0
+
+-- | What the holder under the directory says it holds: its one socket,
+-- asked for its status.
+holderStatusIn :: FilePath -> IO (Either String Value)
+holderStatusIn dir = do
+  let sdir = dir </> "run" </> "synapse"
+  r <- try (listDirectory sdir)
+  case filter (".sock" `isSuffixOf`) (either (\(_ :: SomeException) -> []) id r) of
+    [one] -> askStatus (sdir </> one)
+    other -> pure (Left ("not one holder's socket: " <> show other))
+
+-- | The holder's status: @{"status":true}@ sent, a line of JSON back,
+-- @{"t":"status", "held": [{"host", "port", "agent", …}, …], …}@.
+askStatus :: FilePath -> IO (Either String Value)
+askStatus path = do
+  r <- try $ bracket (N.socket N.AF_UNIX N.Stream N.defaultProtocol) N.close $ \s -> do
+    N.connect s (N.SockAddrUnix path)
+    NB.sendAll s "{\"status\":true}\n"
+    let go acc = do
+          chunk <- NB.recv s 65536
+          if BS.null chunk || BS8.elem '\n' chunk then pure (acc <> chunk) else go (acc <> chunk)
+    BS8.takeWhile (/= '\n') <$> go BS.empty
+  pure $ case r of
+    Left (e :: SomeException) -> Left (show e)
+    Right line -> case decodeStrict line of
+      Just v@(Object o) | KM.lookup "t" o == Just (String "status") -> Right v
+      _ -> Left ("not a status: " <> BS8.unpack line)
+
+-- | Ask until the status satisfies the test, or the seconds run out; the
+-- last answer.
+waitStatus :: Double -> (Value -> Bool) -> FilePath -> IO (Either String Value)
+waitStatus secs ok dir = do
+  t0 <- getMonotonicTime
+  let go = do
+        st <- holderStatusIn dir
+        now <- getMonotonicTime
+        case st of
+          Right v | ok v -> pure st
+          _ | now - t0 >= secs -> pure st
+            | otherwise -> threadDelay 200000 >> go
+  go
+
+-- | The connections a status says are held: (port, agent) each.
+heldOf :: Value -> [(Int, T.Text)]
+heldOf (Object o) | Just (Array hs) <- KM.lookup "held" o =
+  [ (round n, a) | Object h <- V.toList hs
+                 , Just (Number n) <- [KM.lookup "port" h], Just (String a) <- [KM.lookup "agent" h] ]
+heldOf _ = []
 
 -- ---------------------------------------------------------------------------
 
