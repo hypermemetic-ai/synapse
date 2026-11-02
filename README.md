@@ -799,8 +799,9 @@ Every schema is read whole or refused; nothing is dropped. The reader
   anyOf enum const format minimum maximum exclusiveMinimum exclusiveMaximum
   minLength maxLength pattern minItems maxItems default description title
   examples deprecated $schema $defs definitions x-plexus-source
-  x-plexus-values`; any other (`allOf`, `multipleOf`, …) is
-  refused by name.
+  x-plexus-values`, and `allOf` as IR 3.0 reads it (`allOf: [X]` is X;
+  `allOf: [{"$ref": S}]` beside a tag is a newtype variant over S); any
+  other (`multipleOf`, an `allOf` of more, …) is refused by name.
 - **Where a shared type lives.** The same type (name and structure) in
   several namespaces is kept once, in the namespace whose methods and types
   refer to it most; a tie goes to the namespace that is an ancestor of the
@@ -814,6 +815,24 @@ menger's 2026-10-29 schemas (`test/fixtures/ir-coverage`), with no network;
 `ir-coverage-test` holds one fixture per construct, menger whole (21
 refusals; the IR equal to `menger-2026-10-29.ir-2.1.json`), and the guard
 that every construct 2.0 already typed serializes as before.
+
+### Where IR 3.0 is built (RETURNS-36)
+
+- The types and the version: `src/Synapse/IR/Types.hs` — `IR`,
+  `MethodDef` (`mdReturns`, `mdError`, `mdProgress`, `mdCardinality`),
+  `TypeDef`/`TypeKind`/`TypeRef`, and `currentIrVersion = "3.0"`, which
+  `emptyIR` and the metadata's `gmIrVersion` carry.
+- The reader: `src/Synapse/IR/Read.hs` (`readRoot`, `readDefs`,
+  `readType`, `rootNamed`) — each schema position read whole or refused.
+- The builder: `src/Synapse/IR/Builder.hs` — `buildIR` (a walk),
+  `buildIRFromSchema backend path schema` (pure: one `PluginSchema`, no
+  metadata), `finalizeIR` (placement, dangling refs to `RefUnknown`,
+  refusals sorted), `checkTitles` (one title, one type: `TitleCollision`).
+- The golden: `test/IR3Spec.hs` builds `buildIRFromSchema "conformance"
+  ["conformance"]` from `plexus-macros/fixtures/conformance/expected/schema.json`
+  and compares it byte for byte (keys sorted, two-space indent, one
+  newline) with `ir.json` beside it; `CONFORMANCE_FIXTURE_DIR` points it
+  at a copy, `SYNAPSE_GOLDEN_ACCEPT=1` rewrites `ir.json`.
 
 ## Client Generation (synapse-cc)
 
