@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            3.17.3
+version:            3.17.4
 synopsis:           Schema-driven CLI for Plexus RPC servers
 description:        Synapse is the command-line frontend for Plexus RPC. It discovers a
                     server's methods at runtime and builds its commands, help text,
@@ -635,7 +635,11 @@ test-suite hold-test
   -- at the mock service), a stream abandoned is unsubscribed, the holder exits
   -- idle; and the built synapse, end to end: cold fills the cache on one
   -- connection, warm opens none and fetches nothing, --no-hold opens one,
-  -- a renamed method falls back and answers.
+  -- a renamed method falls back and answers. SYNAPSE-40: one holder process
+  -- for the user (counted in /proc), a connection per address and agent,
+  -- one whose server stopped let go within 10 s, the cap closing the longest
+  -- idle first, and a loop against short-lived servers (SYNAPSE40_LOOP,
+  -- 500) through one holder whose memory stays flat.
   type:             exitcode-stdio-1.0
   main-is:          HoldSpec.hs
   other-modules:    MockService
@@ -653,6 +657,7 @@ test-suite hold-test
     process >= 1.6 && < 1.7,
     temporary >= 1.3 && < 1.4,
     text >= 2.0 && < 2.2,
+    unix >= 2.7 && < 2.9,
     vector >= 0.12 && < 0.14,
     websockets >= 0.13 && < 0.14,
     hspec >= 2.10 && < 2.12
