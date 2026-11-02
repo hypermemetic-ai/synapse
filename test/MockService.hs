@@ -35,6 +35,9 @@ module MockService
   , dropNext
     -- * RETURNS-36: a service on the published 0.7.0 line
   , served070
+    -- * RETURNS-40: a service that writes its own IR
+  , irAnswer
+  , irAsked
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -135,6 +138,19 @@ dropNext = unsafePerformIO (newIORef [])
 {-# NOINLINE served070 #-}
 served070 :: IORef Bool
 served070 = unsafePerformIO (newIORef False)
+
+-- | RETURNS-40: when set, the service writes its own IR: @menger.ir@
+-- answers this (@{"ok": IR}@ or @{"err": …}@) as plexus 0.8's does. Unset,
+-- it has no @ir@ — every 0.7.0 service — and the call fails as an unknown
+-- method does.
+{-# NOINLINE irAnswer #-}
+irAnswer :: IORef (Maybe Value)
+irAnswer = unsafePerformIO (newIORef Nothing)
+
+-- | RETURNS-40: the params of every @menger.ir@ the services took, in order.
+{-# NOINLINE irAsked #-}
+irAsked :: IORef [Value]
+irAsked = unsafePerformIO (newIORef [])
 
 mockCode, mockState :: Text
 mockCode = "c_19ab"
@@ -262,6 +278,12 @@ handleCall sc c next signedIn _o rid method params = do
         "tickets.ask" -> void $ forkIO (askBack emit meta dat err >> done)
         -- SYNAPSE-28: a stream that never ends by itself (until unsubscribed)
         "tickets.watch" -> dat "tickets.watch" (object ["type" .= ("watching" :: Text)])
+        "menger.ir" -> do
+          atomicModifyIORef' irAsked (\as -> (as ++ [maybe (Object KM.empty) id (KM.lookup "params" params)], ()))
+          answer <- readIORef irAnswer
+          case answer of
+            Just v -> dat "menger.ir" v >> done
+            Nothing -> err "Method not found: menger.ir" [] >> done
         "tickets.get" | renamed -> err "Method not found: tickets.get" [] >> done
         "tickets.fetch" | renamed -> callMethod sc signedIn "tickets.get" args dat err >> done
         "tickets.schema" | renamed, scView sc /= AnonymousView, not (scCatalog sc) ->

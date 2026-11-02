@@ -19,7 +19,7 @@ import Data.Aeson.Encode.Pretty (Config(..), defConfig, encodePretty')
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy.Char8 as BL
-import Data.IORef (writeIORef)
+import Data.IORef (readIORef, writeIORef)
 import Data.List (isInfixOf, sort)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (isJust)
@@ -400,6 +400,73 @@ main = hspec $ do
           case eitherDecode (BL.pack out) :: Either String IR of
             Left e -> expectationFailure ("stdout is not an IR: " <> e <> "\n" <> take 400 out)
             Right ir -> map rfSite (irRefusals ir) `shouldBe` ["tickets.Thing.bare", "tickets.Thing.list[]", "tickets.Thing.mixed"]
+
+  -- RETURNS-40: synapse asks the service for its IR first — one call — and
+  -- walks the raw schemas only when the service has no `ir`.
+  describe "synapse -i, a service that writes its IR" $ do
+    exe <- runIO builtSynapse
+    case exe of
+      Nothing -> it "asks ir" $ pendingWith "the built synapse is not on PATH (cabal test puts it there)"
+      Just bin -> do
+        let runI args = withSystemTempDirectory "r40-cli" $ \dir -> withMockService todaysService $ \port -> do
+              forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
+              env0 <- getEnvironment
+              let env = [ (k, v) | (k, v) <- env0, k `notElem` ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION"] ]
+                     ++ [ ("HOME", dir </> "home"), ("XDG_CACHE_HOME", dir </> "cache"), ("XDG_RUNTIME_DIR", dir </> "run")
+                        , ("PLEXUS_KEYCHAIN", "off"), ("SYNAPSE_HOLD_FOR", "3s") ]
+              writeIORef callsMade []
+              writeIORef irAsked []
+              r <- readCreateProcessWithExitCode
+                (proc bin (["--url", "ws://127.0.0.1:" <> show port <> "/ws", "-i", "menger"] <> args)) { env = Just env } ""
+              calls <- readIORef callsMade
+              asked <- readIORef irAsked
+              pure (r, calls, asked)
+            served = emptyIR
+              { irBackend = "theirs", irHash = Just "h-r40"
+              , irPlugins = Map.fromList [("tickets", ["get"])]
+              , irRefusals = [] }
+            sameIR a b = (irTypes a, irMethods a, irPlugins a, irHash a, irRefusals a) `shouldBe` (irTypes b, irMethods b, irPlugins b, irHash b, irRefusals b)
+        it "one call, ir, and its IR — named for the backend, with synapse's metadata" $ do
+          writeIORef irAnswer (Just (Aeson.object ["ok" Aeson..= served]))
+          ((code, out, err), calls, asked) <- runI []
+          writeIORef irAnswer Nothing
+          (code, err) `shouldBe` (ExitSuccess, "")
+          calls `shouldBe` ["menger.ir"]
+          asked `shouldBe` [Aeson.object []]
+          case eitherDecode (BL.pack out) :: Either String IR of
+            Left e -> expectationFailure ("stdout is not an IR: " <> e)
+            Right ir -> do
+              ir `sameIR` served
+              irBackend ir `shouldBe` "menger"
+              irMetadata ir `shouldSatisfy` isJust
+        it "a path is the namespace asked for" $ do
+          writeIORef irAnswer (Just (Aeson.object ["ok" Aeson..= served]))
+          (_, calls, asked) <- runI ["tickets"]
+          writeIORef irAnswer Nothing
+          calls `shouldBe` ["menger.ir"]
+          asked `shouldBe` [Aeson.object ["namespaces" Aeson..= (["tickets"] :: [Text])]]
+        it "a refusal is the service's, said as the walk would say it, and nothing walked" $ do
+          writeIORef irAnswer (Just (Aeson.object ["err" Aeson..= Aeson.object
+            [ "type" Aeson..= ("title_collision" :: Text)
+            , "message" Aeson..= ("IR: two different types are titled \"Thing\" in namespace \"tickets\": method a (returns) and method b (returns). One title in one namespace is one type; rename one of them." :: Text) ]]))
+          ((code, _, err), calls, _) <- runI []
+          writeIORef irAnswer Nothing
+          code `shouldNotBe` ExitSuccess
+          err `shouldSatisfy` ("two different types are titled \"Thing\"" `isInfixOf`)
+          calls `shouldBe` ["menger.ir"]
+        it "an IR of another version is not read: the walk builds it" $ do
+          writeIORef irAnswer (Just (Aeson.object ["ok" Aeson..= served { irVersion = "2.1" }]))
+          ((code, out, _), calls, _) <- runI []
+          writeIORef irAnswer Nothing
+          code `shouldBe` ExitSuccess
+          take 2 calls `shouldBe` ["menger.ir", "menger.schema"]
+          fmap irVersion (eitherDecode (BL.pack out) :: Either String IR) `shouldBe` Right currentIrVersion
+        it "a service with no ir (0.7.0): the walk, as before" $ do
+          ((code, out, _), calls, _) <- runI []
+          code `shouldBe` ExitSuccess
+          take 2 calls `shouldBe` ["menger.ir", "menger.schema"]
+          length (filter (".schema" `T.isSuffixOf`) calls) `shouldSatisfy` (> 1)
+          fmap irVersion (eitherDecode (BL.pack out) :: Either String IR) `shouldBe` Right currentIrVersion
 
 -- ---------------------------------------------------------------------------
 

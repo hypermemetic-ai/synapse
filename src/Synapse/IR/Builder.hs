@@ -25,6 +25,7 @@ module Synapse.IR.Builder
     buildIR
   , buildIRRaw
   , buildIRFromSchema
+  , buildIRFromSchemas
   , finalizeIR
 
     -- * Errors
@@ -82,6 +83,11 @@ data IRBuildError
     -- ^ Two different shapes carry one name in one namespace (RETURNS-13).
     --   One name in one namespace is one Rust type, so this is a conflict
     --   the activation's author resolves; the IR never picks one.
+  | MissingSchema
+      { msPath :: Path             -- ^ A walk's root no schema was given for
+      }
+    -- ^ RETURNS-40: 'buildIRFromSchemas' was asked for a root it has no
+    --   schema of (a walk from there would fail its first fetch).
   deriving stock (Show, Eq)
 
 -- | Where a 'TypeDef' was read: a method, and which of its schemas.
@@ -103,6 +109,8 @@ renderIRBuildError TitleCollision{..} =
       | T.null ns = "(root)"
       | otherwise = "\"" <> ns <> "\""
     renderSource TypeSource{..} = "method " <> tsMethod <> " (" <> tsSchema <> ")"
+renderIRBuildError MissingSchema{..} =
+  "IR: no schema at " <> (if null msPath then "the root" else T.intercalate "." msPath)
 
 -- | Raise an 'IRBuildError' in 'SynapseM'.
 liftBuild :: Either IRBuildError a -> SynapseM a
@@ -181,6 +189,34 @@ buildIRFromSchema backend path schema = do
     { irBackend = backend
     , irMetadata = Nothing
     }
+
+-- | RETURNS-40: what 'buildIR' builds for a walk from each of @roots@,
+--   with every schema it would fetch given (by path, the root at @[]@),
+--   less 'irMetadata': the walk's own fold — a node's IR from its schema and
+--   its children's, in its @children@ order, a child no schema is given for
+--   skipped as a walk skips one whose fetch failed — each root's IR merged
+--   left to right, then 'finalizeIR'. One root is exactly what
+--   @synapse -i <backend> <root>@ prints. The IR a service writes itself
+--   (plexus-core's @<service>.ir@) is held equal to it.
+buildIRFromSchemas
+  :: Text                      -- ^ Backend name ('irBackend')
+  -> [Path]                    -- ^ The walks' roots
+  -> Map Path PluginSchema     -- ^ Every schema the walks read, by path
+  -> Either IRBuildError IR
+buildIRFromSchemas backend roots schemas = do
+  irs <- traverse walk roots
+  let raw = foldr mergeIR emptyIR irs
+  pure $ (finalizeIR raw)
+    { irBackend = backend
+    , irMetadata = Nothing
+    }
+  where
+    walk path = case Map.lookup path schemas of
+      Nothing -> Left (MissingSchema path)
+      Just schema -> do
+        let kids = [ path ++ [csNamespace c] | c <- fromMaybe [] (psChildren schema), Map.member (path ++ [csNamespace c]) schemas ]
+        childIRs <- traverse walk kids
+        pluginIR path schema childIRs
 
 -- | SYNAPSE-CC-8: the walk's IR made whole — shared types deduplicated and
 --   placed where they are referred to most, every ref that names no type

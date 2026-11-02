@@ -11,6 +11,13 @@
 --     with the checked-in @expected/ir.json@ beside it. Run with
 --     @SYNAPSE_GOLDEN_ACCEPT=1@ to (re)write that file instead.
 --   * Then one test per row of RETURNS-13's Required behavior table.
+--   * RETURNS-40: the IR of a whole service, built from every schema the
+--     walk reads ('buildIRFromSchemas') — the fixture
+--     @../plexus-macros/fixtures/ir-service/expected/@: @schemas.json@ in,
+--     @ir.json@ (the service), @ir.alpha.json@ (its @alpha@ subtree) and
+--     @clash.error.txt@ (a title collision's refusal) out. The service writes
+--     its own IR (@<service>.ir@, plexus-core), held equal to these files.
+--     @SYNAPSE_GOLDEN_ACCEPT=1@ rewrites them too.
 module Main where
 
 import Control.Monad (forM_, unless)
@@ -24,6 +31,7 @@ import Data.List (isInfixOf)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Text.Encoding as TE
 import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 import Test.Hspec
@@ -33,6 +41,7 @@ import Synapse.IR.Builder
   ( IRBuildError(..)
   , TypeSource(..)
   , buildIRFromSchema
+  , buildIRFromSchemas
   , renderIRBuildError
   )
 import Synapse.IR.Types
@@ -74,9 +83,70 @@ main = do
       putStrLn $ "wrote " <> irPath
     _ -> pure ()
   golden <- LBS.readFile irPath
+  service <- serviceGoldens (accept == Just "1")
   hspec $ do
     goldenSpec schemaPath irPath ir golden
     tableSpec ir
+    service
+
+-- ============================================================================
+-- RETURNS-40: a whole service's IR
+-- ============================================================================
+
+-- | The service fixture's directory: by sibling path, or wherever
+--   @IR_SERVICE_FIXTURE_DIR@ says.
+serviceDirIO :: IO FilePath
+serviceDirIO = maybe (".." </> "plexus-macros" </> "fixtures" </> "ir-service" </> "expected") id
+  <$> lookupEnv "IR_SERVICE_FIXTURE_DIR"
+
+-- | Schemas by dotted path (@""@ the root), as the fixture keeps them.
+readSchemas :: FilePath -> IO (Map.Map [Text] PluginSchema)
+readSchemas path = do
+  bytes <- LBS.readFile path
+  byName <- either (fail . ((path <> ": ") <>)) pure (eitherDecode bytes) :: IO (Map.Map Text PluginSchema)
+  pure (Map.mapKeys (\k -> if T.null k then [] else T.splitOn "." k) byName)
+
+-- | Each golden of the service fixture: built, written when accepting, and
+--   compared byte for byte.
+serviceGoldens :: Bool -> IO Spec
+serviceGoldens acceptIt = do
+  dir <- serviceDirIO
+  schemas <- readSchemas (dir </> "schemas.json")
+  clash <- readSchemas (dir </> "clash.schemas.json")
+  let builds =
+        [ ("ir.json", "the whole service", buildIRFromSchemas "irsvc" [[]] schemas)
+        , ("ir.alpha.json", "its alpha subtree", buildIRFromSchemas "irsvc" [["alpha"]] schemas)
+        ]
+      refusal = either (\e -> LBS.fromStrict (TE.encodeUtf8 (renderIRBuildError e)) <> "\n") (const "built") (buildIRFromSchemas "clashsvc" [[]] clash)
+  irs <- traverse (\(file, what, built) -> do
+           ir <- either (fail . T.unpack . renderIRBuildError) pure built
+           pure (file, what, ir)) builds
+  if acceptIt
+    then do
+      mapM_ (\(file, _, ir) -> LBS.writeFile (dir </> file) (renderIR ir) >> putStrLn ("wrote " <> dir </> file)) irs
+      LBS.writeFile (dir </> "clash.error.txt") refusal
+    else pure ()
+  goldens <- traverse (\(file, what, ir) -> (\g -> (file, what, ir, g)) <$> LBS.readFile (dir </> file)) irs
+  clashGolden <- LBS.readFile (dir </> "clash.error.txt")
+  pure $ describe "golden: the ir-service fixture's IR (RETURNS-40)" $ do
+    forM_ goldens $ \(file, what, ir, g) -> do
+      it (what <> " equals " <> file <> " byte for byte") $
+        unless (renderIR ir == g) $ expectationFailure $
+          "IR built from " <> dir </> "schemas.json" <> " differs from " <> file
+            <> " (regenerate with SYNAPSE_GOLDEN_ACCEPT=1 and read the diff)"
+      -- (Not "decodes back to the same IR": the root's call.params has
+      -- "default": null, which the IR writes as pdDefault null — the same
+      -- null an absent default writes — and reads back as no default.)
+      it (what <> ": " <> file <> " decodes") $
+        (eitherDecode g :: Either String IR) `shouldSatisfy` either (const False) (const True)
+      it (what <> ": no RefNamed dangles") $
+        danglingRefs ir `shouldBe` []
+    it "the whole service carries the reader's refusals" $
+      case [ ir | (f, _, ir, _) <- goldens, f == "ir.json" ] of
+        (ir : _) -> null (irRefusals ir) `shouldBe` False
+        [] -> expectationFailure "no ir.json"
+    it "the clash service is refused, as clash.error.txt says" $
+      refusal `shouldBe` clashGolden
 
 -- ============================================================================
 -- Golden
@@ -457,8 +527,10 @@ danglingRefs ir =
       KindEnum _ vs _ -> map fdType (concatMap vdFields vs) ++ [ t | Just t <- map vdRef vs ]
       KindAlias t -> [t]
       _ -> []
+    -- as irTypes keys a type: the root's are ".Name" (qualifiedNameFull
+    -- would say "Name")
     names = \case
-      RefNamed qn -> [qualifiedNameFull qn]
+      RefNamed qn -> [qnNamespace qn <> "." <> qnLocalName qn]
       RefArray t -> names t
       RefOptional t -> names t
       _ -> []
