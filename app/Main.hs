@@ -902,7 +902,9 @@ run mode backend ep args = do
     Right () -> do
       -- AUTH-8: a refusal was shown — the call did not happen
       refused' <- Session.wasRefused
-      if refused' then exitWith (ExitFailure refusedExit) else exitSuccess
+      if refused' then exitWith (ExitFailure refusedExit) else do
+        failed <- Session.hasFailed
+        if failed then exitFailure else exitSuccess
   where
     isStaleError = \case
       Left (StaleSchema _) -> True
@@ -1913,7 +1915,15 @@ printResult json raw cfg item = case itemRefusal item of
     case item of
       ServiceError _ _ err _ | json, toFile -> hPutStrLn stderr $ "Error: " <> T.unpack err
       _ -> pure ()
+    if itemFailed item then Session.noteFailed else pure ()
     printResult' json raw cfg item
+
+-- | Did this item say the call failed? An error item, or data whose content
+-- is an event of @type: error@ (a service's in-band error).
+itemFailed :: ServiceStreamItem -> Bool
+itemFailed (ServiceError _ _ _ _) = True
+itemFailed (ServiceData _ _ _ (Object o)) = KM.lookup "type" o == Just (String "error")
+itemFailed _ = False
 
 printResult' :: Bool -> Bool -> RendererConfig -> ServiceStreamItem -> IO ()
 printResult' True _ _ item = LBS.putStrLn $ encode item
