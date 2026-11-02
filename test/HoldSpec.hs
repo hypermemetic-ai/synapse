@@ -46,7 +46,7 @@ import qualified Network.Socket.ByteString as NB
 import System.Directory (doesDirectoryExist, doesFileExist, createDirectoryIfMissing, findExecutable, listDirectory)
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode(..))
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Signals (signalProcess, sigKILL, sigTERM)
 import System.Process (CreateProcess(..), proc, readCreateProcessWithExitCode)
@@ -102,10 +102,10 @@ main = hspec $ do
     it "serves many runs' requests on one connection" $
       withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         let sock = dir </> "h.sock"
-        _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
+        _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
         before <- readIORef connectionsAccepted
-        let call = collect (Hold.holderCall sock (serviceAt port)) "menger.call" (getTicket "MENGER-12")
+        let call = collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (getTicket "MENGER-12")
         replicateM_ 3 (call >>= (`shouldSatisfy` any isTicket))
         rs <- mapConcurrently (const call) [1 .. 20 :: Int]
         all (any isTicket) rs `shouldBe` True
@@ -115,21 +115,21 @@ main = hspec $ do
     it "relays each item as the service sent it, and the end" $
       withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         let sock = dir </> "h.sock"
-        _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
+        _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
         direct <- Hold.newMux
         viaMux <- collect (Hold.muxCall direct (serviceAt port)) "menger.call" (getTicket "MENGER-12")
-        viaHolder <- collect (Hold.holderCall sock (serviceAt port)) "menger.call" (getTicket "MENGER-12")
+        viaHolder <- collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (getTicket "MENGER-12")
         viaHolder `shouldBe` viaMux
 
     it "ends the call of a run that goes away mid-stream" $
       withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         writeIORef unsubscribes []
         let sock = dir </> "h.sock"
-        _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
+        _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
         got <- newEmptyFlag
-        a <- async $ Hold.holderCall sock (serviceAt port) (pure ()) "menger.call" watch (\_ -> setFlag got)
+        a <- async $ Hold.holderCall sock "a1" (serviceAt port) (pure ()) "menger.call" watch (\_ -> setFlag got)
         waitFlag got
         cancel a
         waitFor ((== 1) . length <$> readIORef unsubscribes)
@@ -137,9 +137,9 @@ main = hspec $ do
     it "says a dial it could not make as connect does, so the run reads an outage" $
       withSystemTempDirectory "hold" $ \dir -> do
         let sock = dir </> "h.sock"
-        _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
+        _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
-        r <- try (collect (Hold.holderCall sock (serviceAt 1)) "menger.call" (getTicket "X"))
+        r <- try (collect (Hold.holderCall sock "a1" (serviceAt 1)) "menger.call" (getTicket "X"))
         case r of
           Left (e :: SomeException) -> do
             show e `shouldContain` "Connection failed"
@@ -149,34 +149,118 @@ main = hspec $ do
     it "carries a bidirectional request and its answer" $
       withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         let sock = dir </> "h.sock"
-        _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 30) `catchAll` const (pure ())
+        _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
         answered <- newIORef Nothing
         let onItem i = case i of
-              StreamRequest {} -> void $ collect (Hold.holderCall sock (serviceAt port)) "menger.respond"
+              StreamRequest {} -> void $ collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.respond"
                 (Object (KM.fromList [ ("request_id", String "req-1")
                                      , ("response_data", Object (KM.fromList [("type", String "confirmed"), ("value", Bool True)])) ]))
               StreamData _ _ "tickets.ask" v -> writeIORef answered (Just v)
               _ -> pure ()
-        Hold.holderCall sock (serviceAt port) (pure ()) "menger.call" (Object (KM.fromList [("method", String "tickets.ask")])) onItem
+        Hold.holderCall sock "a1" (serviceAt port) (pure ()) "menger.call" (Object (KM.fromList [("method", String "tickets.ask")])) onItem
         readIORef answered >>= (`shouldSatisfy` isJust)
 
-    it "exits when idle, and takes its socket with it" $
+    it "exits when it has held nothing for --hold-for, and takes its socket with it" $
       withSystemTempDirectory "hold" $ \dir -> do
         let sock = dir </> "h.sock"
-        _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 1) `catchAll` const (pure ())
+        _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 1) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
         waitFor (not <$> doesFileExist sock)
 
-  describe "a socket per address and agent" $ do
-    it "names the address, the agent and the version" $ do
-      p <- Hold.socketPathFor "3.17.1" "wss_app.menger.sh_443_ws" "builder"
-      p `shouldContain` "wss_app.menger.sh_443_ws@builder-3.17.1.sock"
-      q <- Hold.socketPathFor "3.17.1" "wss_app.menger.sh_443_ws" "pipeline"
-      q `shouldNotBe` p
-    it "stays short enough for a unix socket" $ do
-      p <- Hold.socketPathFor "3.17.1" (replicate 120 'h') "builder"
-      length p `shouldSatisfy` (< 108)
+    it "closes a connection idle for --hold-for, then exits" $
+      withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
+        let sock = dir </> "h.sock"
+        _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 1) `catchAll` const (pure ())
+        waitFor (doesFileExist sock)
+        collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (getTicket "MENGER-12") >>= (`shouldSatisfy` any isTicket)
+        waitFor (not <$> doesFileExist sock)
+
+  describe "the holder, one for every address and agent (SYNAPSE-40)" $ do
+    it "keeps a connection per agent at one address, never one for two" $
+      withHolder 30 0 $ \sock -> withMockService todaysService $ \port -> do
+        c0 <- readIORef connectionsAccepted
+        forM_ ["a1", "a2", "a1", "a2"] $ \a ->
+          collect (Hold.holderCall sock a (serviceAt port)) "menger.call" (getTicket "MENGER-12") >>= (`shouldSatisfy` any isTicket)
+        c1 <- readIORef connectionsAccepted
+        (c1 - c0) `shouldBe` 2
+        fmap (sort . heldOf) <$> Hold.holderStatus sock `shouldReturn` Just [(port, "a1"), (port, "a2")]
+
+    it "keeps a connection per credential too, as a re-login makes one" $
+      withHolder 30 0 $ \sock -> withMockService todaysService $ \port -> do
+        c0 <- readIORef connectionsAccepted
+        let as tok = (serviceAt port) { substrateHeaders = [("Authorization", "Bearer " <> tok)] }
+        forM_ ["t1", "t2", "t1"] $ \tok ->
+          collect (Hold.holderCall sock "a1" (as tok)) "menger.call" (getTicket "MENGER-12") >>= (`shouldSatisfy` any isTicket)
+        c1 <- readIORef connectionsAccepted
+        (c1 - c0) `shouldBe` 2
+
+    it "lets a connection go within two seconds of its server stopping, and keeps the others" $
+      withHolder 30 0 $ \sock -> withMockService todaysService $ \live -> do
+        let call port = collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (getTicket "MENGER-12")
+        call live >>= (`shouldSatisfy` any isTicket)
+        gone <- withEphemeralService todaysService $ \port -> do
+          call port >>= (`shouldSatisfy` any isTicket)
+          fmap (sort . map fst . heldOf) <$> Hold.holderStatus sock `shouldReturn` Just (sort [live, port])
+          pure port
+        t0 <- getMonotonicTime
+        waitFor (maybe False ((== [live]) . map fst . heldOf) <$> Hold.holderStatus sock)
+        t1 <- getMonotonicTime
+        (t1 - t0) `shouldSatisfy` (< 2.5)
+        gone `shouldNotBe` live
+
+    it "dials again, on the next call, an address whose server came back" $
+      withHolder 30 0 $ \sock -> do
+        port <- withEphemeralService todaysService $ \p -> do
+          collect (Hold.holderCall sock "a1" (serviceAt p)) "menger.call" (getTicket "MENGER-12") >>= (`shouldSatisfy` any isTicket)
+          pure p
+        waitFor (maybe False (null . heldOf) <$> Hold.holderStatus sock)
+        withMockServiceOn port $
+          collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (getTicket "MENGER-12") >>= (`shouldSatisfy` any isTicket)
+
+    it "closes the connection idle longest when it holds its cap, never one carrying a call" $
+      withHolder 30 2 $ \sock -> withServices 4 $ \ps -> case ps of
+        [s1, s2, s3, s4] -> do
+          let call p = collect (Hold.holderCall sock "a1" (serviceAt p)) "menger.call" (getTicket "MENGER-12") >>= (`shouldSatisfy` any isTicket)
+              held = fmap (sort . map fst . heldOf) <$> Hold.holderStatus sock
+          -- s1 carries a stream throughout: never the one closed
+          got <- newEmptyFlag
+          w <- async $ Hold.holderCall sock "a1" (serviceAt s1) (pure ()) "menger.call" watch (\_ -> setFlag got)
+          waitFlag got
+          call s2
+          call s3
+          held `shouldReturn` Just (sort [s1, s3])
+          call s4
+          held `shouldReturn` Just (sort [s1, s4])
+          cancel w
+        _ -> expectationFailure "four services"
+
+    it "leaves nothing open for a run that went away while its connection was being made" $
+      withHolder 30 0 $ \sock -> withMockService todaysService $ \port -> do
+        o0 <- readIORef connectionsOpen
+        writeIORef upgradeDelay 1000000
+        a <- async $ collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (getTicket "MENGER-12")
+        threadDelay 300000   -- the dial is under way
+        cancel a
+        writeIORef upgradeDelay 0
+        -- the dial ends a moment on: closed at once, nothing open, nothing held
+        threadDelay 1000000
+        waitFor ((== o0) <$> readIORef connectionsOpen)
+        fmap heldOf <$> Hold.holderStatus sock `shouldReturn` Just []
+
+    it "says what it holds, never a credential" $
+      withHolder 30 0 $ \sock -> withMockService todaysService $ \port -> do
+        let cfg = (serviceAt port) { substrateHeaders = [("Authorization", "Bearer mgs_s3cret")] }
+        collect (Hold.holderCall sock "a1" cfg) "menger.call" (getTicket "MENGER-12") >>= (`shouldSatisfy` any isTicket)
+        st <- Hold.holderStatus sock
+        fmap heldOf st `shouldBe` Just [(port, "a1")]
+        show st `shouldNotContain` "s3cret"
+
+  describe "one socket for the user" $ do
+    it "is holder-2.sock in the runtime directory, whatever the address or agent" $ do
+      p <- Hold.holderSocketPath
+      takeFileName p `shouldBe` "holder-2.sock"
+      Hold.holdProtocol `shouldBe` 2
 
   describe "the CLI, sending first" $ do
     synapse <- runIO (findExecutable "synapse")
@@ -336,6 +420,26 @@ oneHolderSpec exe = do
         held `shouldReturn` Right (sort [s3, s5, s6])
       _ -> expectationFailure "six services"
 
+  it "keeps a live connection for about 100 kB (what its cap is set by)" $ do
+    n <- maybe 100 read <$> lookupEnv "SYNAPSE40_HELD"
+    withHome [("SYNAPSE_HOLD_MAX", "0"), ("SYNAPSE_HOLD_FOR", "600s")] $ \dir env -> withServices (n + 3) $ \ps -> do
+      let call p = runIn exe env [] p >>= \(code, _, _) -> code `shouldBe` ExitSuccess
+          (warm, rest) = splitAt 3 ps
+      mapM_ call warm
+      hs <- holdersUnder dir
+      case hs of
+        [h] -> do
+          r0 <- rssKb h
+          mapM_ call rest
+          r1 <- rssKb h
+          st <- holderStatusIn dir
+          fmap (length . heldOf) st `shouldBe` Right (n + 3)
+          let per = (r1 - r0) `div` n
+          putStrLn $ "      " <> show (n + 3) <> " connections held: " <> show r0 <> " kB with 3, "
+            <> show r1 <> " kB with " <> show (n + 3) <> ": about " <> show per <> " kB each"
+          per `shouldSatisfy` (< 200)
+        other -> expectationFailure ("holders: " <> show other)
+
   it "runs a loop of calls against short-lived servers through one holder, which holds nothing 10 s on, its memory flat" $ do
     n <- maybe 500 read <$> lookupEnv "SYNAPSE40_LOOP"
     withHome [] $ \dir env -> do
@@ -483,6 +587,15 @@ heldOf (Object o) | Just (Array hs) <- KM.lookup "held" o =
   [ (round n, a) | Object h <- V.toList hs
                  , Just (Number n) <- [KM.lookup "port" h], Just (String a) <- [KM.lookup "agent" h] ]
 heldOf _ = []
+
+-- | A holder in this process for the action: its socket, waiting the
+-- seconds, keeping at most the cap (0: none).
+withHolder :: Double -> Int -> (FilePath -> IO a) -> IO a
+withHolder secs cap act = withSystemTempDirectory "hold" $ \dir -> do
+  let sock = dir </> "h.sock"
+  _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock secs) { Hold.hoCap = cap } `catchAll` const (pure ())
+  waitFor (doesFileExist sock)
+  act sock
 
 -- ---------------------------------------------------------------------------
 

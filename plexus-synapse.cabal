@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            3.17.3
+version:            3.17.4
 synopsis:           Schema-driven CLI for Plexus RPC servers
 description:        Synapse is the command-line frontend for Plexus RPC. It discovers a
                     server's methods at runtime and builds its commands, help text,

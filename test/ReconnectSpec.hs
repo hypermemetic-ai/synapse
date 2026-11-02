@@ -216,7 +216,7 @@ main = hspec $ do
       withService [Answer] $ \h -> do
         sock <- holderSocket
         acc <- newIORef (0 :: Int)
-        Hold.holderCall sock (cfgFor (servicePort h)) (pure ()) "t.call" (object ["method" .= ("t.m" :: Text)])
+        Hold.holderCall sock "test" (cfgFor (servicePort h)) (pure ()) "t.call" (object ["method" .= ("t.m" :: Text)])
           (\i -> if isData i then modifyIORef' acc (+ 1) else pure ())
         readIORef acc `shouldReturn` 1
     outageSpec
@@ -365,11 +365,11 @@ holderSocket = do
 throughHolder :: IO ()
 throughHolder = do
   sock <- holderSocket
-  _ <- forkIO $ Hold.runHolder (Hold.HoldOpts sock 600) `catch'` ()
+  _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 600) `catch'` ()
   let wait (0 :: Int) = pure ()
       wait n = doesFileExist sock >>= \ok -> if ok then pure () else threadDelay 20000 >> wait (n - 1)
   wait 250
-  _ <- Hold.installRouter Hold.RouterOpts { Hold.roHold = Just (const (pure (Just sock))), Hold.roHoldFor = 600 }
+  _ <- Hold.installRouter Hold.RouterOpts { Hold.roHold = Just (const (pure (Just "test"))), Hold.roSocket = sock, Hold.roHoldFor = 600 }
   pure ()
   where
     catch' act v = void (try act :: IO (Either SomeException ())) >> pure v

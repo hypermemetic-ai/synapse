@@ -1004,10 +1004,12 @@ isStaleItem item = case itemRefusal item of
       , "errCode = -32601", "missing field", "unknown field", "invalid type", "unknown variant" ]
     _ -> False
 
--- | SYNAPSE-28: route every call through the connection holder for its
--- address and agent (started by the first run), or — with --no-hold, a
--- credential of the call's own, or no holder to be had — over one
--- connection of this process's own.
+-- | SYNAPSE-28: route every call through the connection holder (started
+-- by the first run), or — with --no-hold, a credential of the call's own,
+-- or no holder to be had — over one connection of this process's own.
+-- SYNAPSE-40: one holder for the user, every address and agent; each call
+-- names the agent it is made as, and the holder keeps a connection per
+-- address, agent and credential.
 installCallRouter :: SynapseOpts -> IO ()
 installCallRouter opts = do
   noHoldEnv <- lookupEnv "SYNAPSE_NO_HOLD"
@@ -1024,19 +1026,20 @@ installCallRouter opts = do
               || explicit || holdFor <= 0
   st <- Store.systemStoreEnv
   asked <- askedAgent opts
-  let version = T.pack (showVersion Meta.version)
-      cp = soEndpoint opts
+  sock <- Hold.holderSocketPath
+  let cp = soEndpoint opts
       viaRegistry = Store.addressKey cp == Store.addressKey (plainAt defaultHost defaultPort)
-      socketFor cfg = do
+      agentFor cfg = do
         let ep = endpointOfConfig cfg
         -- the run's own address is held — or, reached through the
         -- registry, whatever it names; a registry the run only glances at
         -- (the auto-registration's probe) is not
         if not viaRegistry && Store.addressKey ep /= Store.addressKey cp then pure Nothing else do
           agent <- maybe (Store.readDefaultAgent st ep) (pure . Just) asked
-          Just <$> Hold.socketPathFor version (E.dirName ep) (fromMaybe "anonymous" agent)
+          pure (Just (fromMaybe "anonymous" agent))
   _ <- Hold.installRouter Hold.RouterOpts
-         { Hold.roHold = if off then Nothing else Just socketFor
+         { Hold.roHold = if off then Nothing else Just agentFor
+         , Hold.roSocket = sock
          , Hold.roHoldFor = holdFor }
   pure ()
 
@@ -1051,14 +1054,30 @@ endpointOfConfig c = Endpoint
   }
 
 -- | SYNAPSE-28: @synapse _hold --socket PATH --hold-for SECS@ — the
--- connection holder (a run starts it; it exits when idle).
+-- connection holder (a run starts it; it exits when it has held nothing
+-- for SECS). SYNAPSE-40: one for the user; it keeps at most
+-- @SYNAPSE_HOLD_MAX@ connections (256; 0: no cap), the longest idle closed
+-- first. @synapse _hold status@ prints what it holds (JSON: each
+-- connection's address, agent, calls and seconds idle — never a
+-- credential), or exits 1 when no holder answers.
 runHold :: [Text] -> IO ()
 runHold rest = case rest of
   ["--socket", path, "--hold-for", secs]
-    | Just d <- (readMaybe (T.unpack secs) :: Maybe Double) ->
-        Hold.runHolder Hold.HoldOpts { Hold.hoSocket = T.unpack path, Hold.hoHoldFor = d }
+    | Just d <- (readMaybe (T.unpack secs) :: Maybe Double) -> do
+        capEnv <- lookupEnv "SYNAPSE_HOLD_MAX"
+        let cap = fromMaybe Hold.defaultCap (capEnv >>= \c -> readMaybe c >>= \n -> if n >= 0 then Just n else Nothing)
+        Hold.runHolder (Hold.holdOpts (T.unpack path) d)
+          { Hold.hoCap = cap, Hold.hoVersion = T.pack (showVersion Meta.version) }
+  ["status"] -> do
+    sock <- Hold.holderSocketPath
+    st <- Hold.holderStatus sock
+    case st of
+      Just v -> LBS.putStrLn (encode v) >> exitSuccess
+      Nothing -> do
+        hPutStrLn stderr ("synapse: no holder answers at " <> sock)
+        exitWith (ExitFailure 1)
   _ -> do
-    hPutStrLn stderr "synapse _hold --socket PATH --hold-for SECS (started by synapse itself)"
+    hPutStrLn stderr "synapse _hold status | _hold --socket PATH --hold-for SECS (started by synapse itself)"
     exitWith (ExitFailure 2)
 
 -- | AUTH-8: the exit status of a call the service refused (sysexits' EX_NOPERM).
@@ -1654,12 +1673,15 @@ metaCommands =
       , "                      --cacert FILE trusts a local CA too. Sessions are kept per"
       , "                      URL, so _login and every call take the same options"
       , ""
-      , "A connection held between runs (SYNAPSE-28):"
-      , "  the first call to a backend starts a holder that keeps the signed-in socket"
-      , "  open ($XDG_RUNTIME_DIR/synapse/, one per address and agent); later calls cost"
-      , "  one round trip. It exits after --hold-for (10m) with nothing to do; --no-hold"
-      , "  dials a connection of the run's own. A call is sent from the schema cache"
-      , "  (~/.cache/synapse/schemas) and checked against the server only when it fails"
+      , "A connection held between runs (SYNAPSE-28, SYNAPSE-40):"
+      , "  the first call starts the holder, one process for all your calls"
+      , "  ($XDG_RUNTIME_DIR/synapse/holder-2.sock), which keeps a signed-in socket per"
+      , "  address and agent; later calls cost one round trip. A socket whose server is"
+      , "  gone is let go at once, one idle for --hold-for (10m) closed, past 256 the"
+      , "  longest idle first; the holder exits when it has held nothing for --hold-for."
+      , "  --no-hold dials a connection of the run's own; synapse _hold status says what"
+      , "  is held. A call is sent from the schema cache (~/.cache/synapse/schemas) and"
+      , "  checked against the server only when it fails"
       , ""
       , "Meta-commands:"
       , ""

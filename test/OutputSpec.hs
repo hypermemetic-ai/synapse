@@ -55,7 +55,7 @@ outputSpec :: FilePath -> Spec
 outputSpec exe = describe "synapse -o FILE (SYNAPSE-39)" $ do
   it "is this build" $ do
     (_, out, _) <- readProcessWithExitCode exe ["--version"] ""
-    out `shouldStartWith` "3.17.3"
+    out `shouldStartWith` "3.17.4"
 
   forM_ [ ([], "", ["tickets", "get", "--id", "MENGER-12"])
         , (["-j"], " with -j", ["tickets", "get", "--id", "MENGER-12"])

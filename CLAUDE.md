@@ -147,9 +147,8 @@ file".
 A warm call is one round trip and the server's time (`tickets health` against
 app.menger.sh: 81 ms, ping 77 ms; 4.6 s in 3.15.0). Every request a run makes
 goes through plexus-protocol's `Plexus.Transport.setCallRouter` (0.5.3) to
-`Synapse.Hold`: the **holder** for its address and agent (`synapse _hold`,
-started by the first run; `$XDG_RUNTIME_DIR/synapse/ADDRESS@AGENT-VERSION.sock`,
-0600; exits idle after `--hold-for`, 10m; `--no-hold` / `SYNAPSE_NO_HOLD=1`
+`Synapse.Hold`: the **holder** (`synapse _hold`, started by the first run;
+since SYNAPSE-40 one per user, below; `--no-hold` / `SYNAPSE_NO_HOLD=1`
 skip it), else the run's own **multiplexer** — one connection per address
 and credential, every call on it, schema and `_info` reads asked once however
 many wait. Failures read as a connection of the run's own reports them
@@ -167,6 +166,39 @@ call again the old way (`slowPath`), which fills the cache. Help, listings,
 `test/MockService.hs` (cold: one connection; warm: none, no probe, no fetch;
 `--no-hold`: one; a renamed method falls back and answers); `ReconnectSpec`
 runs every outage again through a holder. README "One round trip a call".
+
+## One holder for the user (SYNAPSE-40, 3.17.4)
+
+One `synapse _hold` process holds every connection a user's runs keep, at
+`$XDG_RUNTIME_DIR/synapse/holder-2.sock` (`Hold.holderSocketPath`; the 2 is
+`Hold.holdProtocol` — bump it with any change to the run↔holder wire or to
+what the holder does with a request, the relay of plexus-protocol's
+`PlexusStreamItem` included, so a run never talks to a holder that reads it
+otherwise). A run sends each request with the agent it calls as
+(`RouterOpts.roHold` answers the agent per address; the run's own address,
+or through the registry what it names); the `Mux` keys connections by
+`ConnKey` (agent, config without its backend: address and the credential in
+its headers), so two agents never share a connection, even with no
+credential. The holder's `sweep` (every second) lets go at once a
+connection whose `connectionLost` is filled (a close, a reset, the
+keepalive), closes one idle past `--hold-for` or superseded by a newer
+credential of the same agent and address, and trims to the cap
+(`defaultCap` 256, `SYNAPSE_HOLD_MAX`, 0 = none; ~96 kB a connection
+measured) the longest idle first — a connection carrying a call is never
+closed (`upClosing`, claimed only at zero calls, so a pick and a close never
+race). It exits once it has held nothing, with no run on it, for
+`--hold-for`; SIGTERM gives open calls 10 s. `{"status":true}` on the
+socket answers what it holds (`synapse _hold status`: address, agent,
+calls, idle — never a credential). A run never waits on a holder that died
+before answering (`ensureHolder` watches the process) and skips one whose
+socket path cannot fit a unix socket. Older binaries' holders
+(`ADDRESS@AGENT-VERSION.sock`, 3.16.0–3.17.3) share the directory and are
+never touched. `test/HoldSpec.hs` (hold-test): the built synapse counted in
+`/proc` — one holder for 3 addresses × 2 agents, two connections for two
+agents, a stopped server let go within 10 s, the cap, a loop of 500 calls to
+500 short-lived servers (`SYNAPSE40_LOOP`) through one holder, its memory
+flat; in process, the same and a status that names no credential.
+`MockService.withEphemeralService` stops as a process does.
 
 ## Credentials & `_self`
 
