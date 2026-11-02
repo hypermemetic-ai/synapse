@@ -12,7 +12,7 @@
 --   per user__ (and per 'holdProtocol'), in the manner of ssh's
 --   ControlMaster. It keeps signed-in WebSockets open between runs, one per
 --   address, agent and credential, and listens on a unix socket
---   (@$XDG_RUNTIME_DIR/synapse/holder-2.sock@, 0600, in a 0700 directory).
+--   (@$XDG_RUNTIME_DIR/synapse/holder-3.sock@, 0600, in a 0700 directory).
 --   A run hands it each request, with the agent it calls as, and reads the
 --   reply back, so a warm call costs local IPC and one round trip. The
 --   first run starts it. A connection whose server has gone is let go at
@@ -503,9 +503,12 @@ heldCount mux = sum . map length . Map.elems <$> readMVar (muxUps mux)
 -- (the relay of items included: a holder built against another
 -- plexus-protocol relays its 'PlexusStreamItem'). 1 was SYNAPSE-28's holder
 -- per address and agent (@ADDRESS\@AGENT-VERSION.sock@, synapse 3.16.0 to
--- 3.17.3); 2 is one holder per user, the agent in each request.
+-- 3.17.3); 2 is one holder per user, the agent in each request (3.17.4);
+-- 3 is 2 relaying plexus 0.8's items (RETURNS-36, synapse 4.0: the typed
+-- error and progress), so a 4.0 holder never serves a 3.x run nor the
+-- reverse.
 holdProtocol :: Int
-holdProtocol = 2
+holdProtocol = 3
 
 encodeRequest :: Text -> Maybe Double -> SubstrateConfig -> Text -> Value -> Value
 encodeRequest agent holdFor c method params = object $
@@ -873,7 +876,7 @@ replaceHolder path holdFor ours = void $ (try :: IO a -> IO (Either SomeExceptio
       _ -> pure ()
 
 -- | SYNAPSE-40: the one holder's socket:
--- @$XDG_RUNTIME_DIR/synapse/holder-2.sock@ (a temporary directory of the
+-- @$XDG_RUNTIME_DIR/synapse/holder-3.sock@ (a temporary directory of the
 -- user's own without one) — one per user and 'holdProtocol'.
 holderSocketPath :: IO FilePath
 holderSocketPath = (</> ("holder-" <> show holdProtocol <> ".sock")) <$> runtimeDir

@@ -170,7 +170,7 @@ runs every outage again through a holder. README "One round trip a call".
 ## One holder for the user (SYNAPSE-40, 3.17.4)
 
 One `synapse _hold` process holds every connection a user's runs keep, at
-`$XDG_RUNTIME_DIR/synapse/holder-2.sock` (`Hold.holderSocketPath`; the 2 is
+`$XDG_RUNTIME_DIR/synapse/holder-3.sock` (`Hold.holderSocketPath`; the 2 is
 `Hold.holdProtocol` — bump it with any change to the run↔holder wire or to
 what the holder does with a request, the relay of plexus-protocol's
 `PlexusStreamItem` included, so a run never talks to a holder that reads it

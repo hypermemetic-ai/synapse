@@ -644,7 +644,7 @@ Two things make it so:
 - **A connection held between runs**, as ssh's ControlMaster holds one. The
   first call starts a holder (`synapse _hold`, a process of synapse's own)
   that keeps the signed-in WebSocket open and listens on a unix socket:
-  `$XDG_RUNTIME_DIR/synapse/holder-2.sock` (0600, in a 0700 directory of
+  `$XDG_RUNTIME_DIR/synapse/holder-3.sock` (0600, in a 0700 directory of
   yours). Later runs hand it their requests and read the replies back, so
   the TCP, TLS and upgrade handshakes (about 0.3 s to a hosted service) are
   paid once. Since 3.17.4 it is **one holder for all your calls**
@@ -703,7 +703,7 @@ living its 10 idle minutes after its server had gone; a test loop calling
 throwaway servers on fresh ports left one per port, 1,634 of them (24.9 GB)
 on 2026-11-02. Now one process holds every connection your runs keep,
 however many services and agents you call — `synapse _hold`, at
-`$XDG_RUNTIME_DIR/synapse/holder-2.sock` — and inside it a connection per
+`$XDG_RUNTIME_DIR/synapse/holder-3.sock` — and inside it a connection per
 address, agent and credential. A call as one agent never rides another
 agent's connection, even when neither carries a credential; a session made
 again from the key is a connection beside the old one, which closes once
