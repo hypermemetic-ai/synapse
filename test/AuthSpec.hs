@@ -185,7 +185,7 @@ spec = do
       case item of
         StreamError _ _ err _ -> do
           err `shouldBe` Forbidden (MissingGrant "tickets.set_status" "IDENTITY" ["editor", "admin"] ["MENGER"])
-          renderRemoteError err `shouldBe` "forbidden: needs tickets.set_status on IDENTITY"
+          renderRemoteError err `shouldBe` "forbidden: needs `tickets.set_status` on `IDENTITY`"
         _ -> expectationFailure "a refusal is still an error item"
     it "the typed error alone names the same refusal" $ do
       let typed = parse [aesonQQ|{"type":"error","recoverable":false,
