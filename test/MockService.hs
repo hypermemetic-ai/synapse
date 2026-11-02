@@ -17,6 +17,8 @@ module MockService
   , ViewMode(..)
   , todaysService
   , withMockService
+  , withEphemeralService
+  , withMockServiceOn
   , serveMockService
   , mockCode
   , mockState
@@ -29,6 +31,9 @@ module MockService
   , renamedGet
     -- * SYNAPSE-CC-8: a service serving schemas a test gives it
   , schemaOverride
+    -- * SYNAPSE-40: a dial that takes its time, and what is left open
+  , upgradeDelay
+  , connectionsOpen
     -- * SYNAPSE-26: what a closed stdout cost the service
   , callsMade
   , floodsEnded
@@ -40,7 +45,7 @@ module MockService
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, tryPutMVar, tryTakeMVar)
 import System.Timeout (timeout)
-import Control.Exception (SomeException, bracket, try)
+import Control.Exception (SomeException, bracket, finally, try)
 import Control.Monad (forever, void)
 import Data.Aeson
 import qualified Data.Aeson.Key as K
@@ -111,6 +116,17 @@ renamedGet = unsafePerformIO (newIORef False)
 schemaOverride :: IORef (Maybe [(Text, Value)])
 schemaOverride = unsafePerformIO (newIORef Nothing)
 
+-- | SYNAPSE-40: microseconds each service waits before it answers a
+-- WebSocket upgrade (a dial under way that long).
+{-# NOINLINE upgradeDelay #-}
+upgradeDelay :: IORef Int
+upgradeDelay = unsafePerformIO (newIORef 0)
+
+-- | SYNAPSE-40: WebSocket connections open at the services now.
+{-# NOINLINE connectionsOpen #-}
+connectionsOpen :: IORef Int
+connectionsOpen = unsafePerformIO (newIORef 0)
+
 -- | SYNAPSE-26: the method of every @menger.call@ the services took, in order.
 {-# NOINLINE callsMade #-}
 callsMade :: IORef [Text]
@@ -150,8 +166,43 @@ withMockService sc act = bracket open (N.close . fst) (\(_, port) -> act port)
       N.bind sock (N.SockAddrInet 0 (N.tupleToHostAddress (127, 0, 0, 1)))
       N.listen sock 16
       port <- fromIntegral <$> N.socketPort sock
-      void $ forkIO $ acceptLoop sc sock
+      void $ forkIO $ acceptLoop (const (pure ())) sc sock
       pure (sock, port)
+
+-- | SYNAPSE-40: today's service on a port already chosen (one a stopped
+-- service had: a server come back).
+withMockServiceOn :: Int -> IO a -> IO a
+withMockServiceOn port act = bracket open N.close (const act)
+  where
+    open = do
+      sock <- N.socket N.AF_INET N.Stream N.defaultProtocol
+      N.setSocketOption sock N.ReuseAddr 1
+      N.bind sock (N.SockAddrInet (fromIntegral port) (N.tupleToHostAddress (127, 0, 0, 1)))
+      N.listen sock 16
+      void $ forkIO $ acceptLoop (const (pure ())) todaysService sock
+      pure sock
+
+-- | SYNAPSE-40: a service that stops as a process does. When the action
+-- ends, its listener closes and so does every connection it accepted (a
+-- FIN, as the kernel sends for a process that exits), so a client still
+-- holding one sees its server go.
+withEphemeralService :: Scenario -> (Int -> IO a) -> IO a
+withEphemeralService sc act = do
+  accepted <- newIORef []
+  bracket (open accepted) (stop accepted) (\(_, port) -> act port)
+  where
+    open accepted = do
+      sock <- N.socket N.AF_INET N.Stream N.defaultProtocol
+      N.setSocketOption sock N.ReuseAddr 1
+      N.bind sock (N.SockAddrInet 0 (N.tupleToHostAddress (127, 0, 0, 1)))
+      N.listen sock 16
+      port <- fromIntegral <$> N.socketPort sock
+      void $ forkIO $ acceptLoop (\c -> atomicModifyIORef' accepted (\cs -> (c : cs, ()))) sc sock
+      pure (sock, port)
+    stop accepted (sock, _) = do
+      N.close sock
+      cs <- readIORef accepted
+      mapM_ (\c -> void (try (N.shutdown c N.ShutdownBoth) :: IO (Either SomeException ()))) cs
 
 -- | Serve until killed, printing the port (for transcripts by hand).
 serveMockService :: Scenario -> IO ()
@@ -160,25 +211,28 @@ serveMockService sc = withMockService sc $ \port -> do
   hFlush stdout
   forever (threadDelay 1000000)
 
-acceptLoop :: Scenario -> N.Socket -> IO ()
-acceptLoop sc sock = do
+acceptLoop :: (N.Socket -> IO ()) -> Scenario -> N.Socket -> IO ()
+acceptLoop onAccept sc sock = do
   r <- try (N.accept sock)
   case r of
     Left (_ :: SomeException) -> pure ()   -- the service was closed
     Right (conn, _) -> do
+      onAccept conn
       void $ forkIO $ do
         _ <- try (session conn) :: IO (Either SomeException ())
         N.close conn
-      acceptLoop sc sock
+      acceptLoop onAccept sc sock
   where
     session conn = do
       pending <- WS.makePendingConnection conn WS.defaultConnectionOptions
       -- the credential the upgrade carried, if any
       let bearer = lookup "Authorization" (WS.requestHeaders (WS.pendingRequest pending))
+      readIORef upgradeDelay >>= \d -> if d > 0 then threadDelay d else pure ()
       c <- WS.acceptRequest pending
       atomicModifyIORef' connectionsAccepted (\n -> (n + 1, ()))
+      atomicModifyIORef' connectionsOpen (\n -> (n + 1, ()))
       next <- newIORef (100 :: Int)
-      forever $ do
+      flip finally (atomicModifyIORef' connectionsOpen (\n -> (n - 1, ()))) $ forever $ do
         msg <- WS.receiveData c
         case decode msg of
           Just (Object o) -> handle sc c next (isBearer bearer) o
