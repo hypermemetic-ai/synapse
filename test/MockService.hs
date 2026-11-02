@@ -33,6 +33,8 @@ module MockService
   , callsMade
   , floodsEnded
   , dropNext
+    -- * RETURNS-36: a service on the published 0.7.0 line
+  , served070
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -126,6 +128,14 @@ floodsEnded = unsafePerformIO (newIORef 0)
 dropNext :: IORef [Text]
 dropNext = unsafePerformIO (newIORef [])
 
+-- | RETURNS-36: when set, the services answer as one on the published 0.7.0
+-- line does — every schema as written (a method's @streaming@, no
+-- @cardinality@), every error frame spec/05's fields alone (@message@,
+-- @code@, @error_kind@ and a refusal's fields, no typed @error@).
+{-# NOINLINE served070 #-}
+served070 :: IORef Bool
+served070 = unsafePerformIO (newIORef False)
+
 mockCode, mockState :: Text
 mockCode = "c_19ab"
 mockState = "s_7f2c"
@@ -200,13 +210,18 @@ handleCall sc c next signedIn _o rid method params = do
       meta = object ["provenance" .= (["menger"] :: [Text]), "plexus_hash" .= ("h0" :: Text), "timestamp" .= (0 :: Int)]
       -- RETURNS-36: a schema as plexus 0.7 states it (its methods' cardinality and returns)
       dat :: Text -> Value -> IO ()
-      dat ct v = emit (object ["type" .= ("data" :: Text), "metadata" .= meta, "content_type" .= ct
-                              , "content" .= (if ".schema" `T.isSuffixOf` ct then withContract v else v)])
+      dat ct v = do
+        as070 <- readIORef served070
+        emit (object ["type" .= ("data" :: Text), "metadata" .= meta, "content_type" .= ct
+                     , "content" .= (if ".schema" `T.isSuffixOf` ct && not as070 then withContract v else v)])
       -- RETURNS-36: plexus 0.7's error frame — the typed RemoteError the
       -- message names, and AUTH-2's refusal fields beside it
       err :: Text -> [(K.Key, Value)] -> IO ()
-      err m extra = emit (Object (KM.fromList (
-        [("type", "error"), ("metadata", meta), ("error", remoteError m extra), ("recoverable", Bool False)] <> extra)))
+      err m extra = do
+        as070 <- readIORef served070
+        emit (Object (KM.fromList (if as070
+          then [("type", "error"), ("metadata", meta), ("message", String m), ("code", String (code070 m extra)), ("recoverable", Bool False)] <> extra
+          else [("type", "error"), ("metadata", meta), ("error", remoteError m extra), ("recoverable", Bool False)] <> extra)))
       done = emit (object ["type" .= ("done" :: Text), "metadata" .= meta])
   case method of
     "_info" -> do
@@ -279,6 +294,13 @@ remoteError m extra
   | otherwise = object [ "kind" .= ("execution" :: Text), "message" .= m ]
   where
     field k = maybe (String "") id (lookup k extra)
+
+-- | The JSON-RPC code a 0.7.0 service puts on an error frame.
+code070 :: Text -> [(K.Key, Value)] -> Text
+code070 m extra
+  | lookup "error_kind" extra == Just (String "forbidden") = "-32003"
+  | "not found" `T.isInfixOf` m = "-32601"
+  | otherwise = "-32000"
 
 -- | SCAFFOLD-21: the answers to 'askBack's requests (@menger.respond@'s
 -- @response_data@), as they arrive on any connection.

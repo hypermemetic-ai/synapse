@@ -39,7 +39,7 @@ import Synapse.SchemaStore (Plan(..), Store(..), readPlan, writePlan)
 import Plexus.Schema.Recursive (MethodSchema(..))
 
 import IRFixture
-import Plexus07 (methodAs07, withContract)
+import Plexus07 (methodAs07, renameParamsDef, withContract)
 import Synapse.IR.Builder (IRBuildError(..), TypeSource(..), buildIRFromSchema)
 import MockService
 
@@ -235,6 +235,29 @@ main = hspec $ do
         let refused = Set.fromList (map rfSite (irRefusals ir))
             typesLeftOut = [ r | r <- Set.toList refused, not (Map.member r (irTypes ir)), not (T.any (`elem` (" (" :: String)) r) ]
         [ s | s <- unknownSites ir, not (Set.member s refused), null typesLeftOut ] `shouldBe` []
+
+  -- RETURNS-36: synapse 4.0 reads the published 0.7.0 line too. The capture
+  -- as menger served it — no cardinality, a streaming flag on each method —
+  -- builds IR 3.0 whose every cardinality is that method's own flag.
+  describe "menger, 2026-10-29, as served (0.7.0)" $
+    it "every method's mdCardinality is its own streaming flag" $ do
+      rows <- map (either error id . eitherDecode) . filter (not . BL.null) . BL.lines . GZ.decompress <$> BL.readFile menger20261029 :: IO [Value]
+      let served = [ (p, if p == ["chats", "inputs"] then renameParamsDef "Message" "MessageText" sch else sch)
+                   | Object r <- rows, Just pv <- [KM.lookup "path" r], Aeson.Success p <- [Aeson.fromJSON pv]
+                   , Just sch <- [KM.lookup "schema" r] ]
+          flags = [ (T.intercalate "." p <> "." <> n, st)
+                  | (p, Object sch) <- served, Just (Array ms) <- [KM.lookup "methods" sch]
+                  , Object m <- foldr (:) [] ms, Just (String n) <- [KM.lookup "name" m]
+                  , let st = KM.lookup "streaming" m == Just (Bool True) ]
+      schemas <- mapM (\(p, v) -> case Aeson.fromJSON v of
+                          Aeson.Success sch -> pure (p, sch)
+                          Aeson.Error e -> fail (T.unpack (T.intercalate "." p) <> ": " <> e)) served
+      env <- envWithSchemas "menger" schemas
+      ir <- buildFixtureIR env []
+      length flags `shouldSatisfy` (> 100)
+      [ (path, st) | (path, st) <- flags
+                   , fmap mdCardinality (Map.lookup path (irMethods ir)) /= Just (if st then CardinalityMany else CardinalityOne) ]
+        `shouldBe` []
 
   describe "menger, 2026-10-29, whole" $ do
     -- RETURNS-13: one title in one namespace is one type. The capture's

@@ -212,6 +212,43 @@ outputSpec exe = describe "synapse -o FILE (SYNAPSE-39)" $ do
       doesFileExist file >>= (`shouldBe` False)
       leftovers dir "answer.out" >>= (`shouldBe` [])
 
+  -- RETURNS-36: synapse 4.0 reads the published 0.7.0 line too — every
+  -- server running today: its methods' streaming flags, its error frames'
+  -- spec/05 fields
+  describe "against a service on the published 0.7.0 line" $ do
+    let as070 act = do
+          writeIORef served070 True
+          r <- try act
+          writeIORef served070 False
+          either (\(e :: SomeException) -> ioError (userError (show e))) pure r
+    it "an answer, and the same in FILE" $ as070 $
+      withRun $ \dir spawn -> do
+        (code0, onStdout, err0) <- reading (spawn []) ["tickets", "get", "--id", "MENGER-12"]
+        (code0, err0) `shouldBe` (ExitSuccess, "")
+        onStdout `shouldContain` "MENGER-12"
+        let file = dir </> "answer.out"
+        (code, out, err) <- reading (spawn ["-o", file]) ["tickets", "get", "--id", "MENGER-12"]
+        (code, out, err) `shouldBe` (ExitSuccess, "", "")
+        readFile file >>= (`shouldBe` onStdout)
+    it "a stream's items in FILE (its streaming flag says many)" $ as070 $
+      withRun $ \dir spawn -> do
+        let file = dir </> "answer.out"
+        (Just inp, Just out, Just err, ph) <- createProcess (spawn ["-j", "-o", file] ["tickets", "flood"])
+        hClose inp
+        got <- waitUpTo 10 (doesFileExist file >>= \e -> if e then ("\"tick\"" `isInfixOf`) <$> readFile' file else pure False)
+        terminateProcess ph
+        _ <- timeout 5000000 (waitForProcess ph)
+        _ <- BS.hGetContents out
+        _ <- BS.hGetContents err
+        got `shouldBe` True
+    it "a refusal: exit 77, the grant said" $ as070 $
+      withRunS (Scenario CallerView False True mockState False) $ \dir spawn -> do
+        let file = dir </> "answer.out"
+        (code, out, err) <- reading (spawn ["-j", "-o", file]) ["tickets", "set_status", "--id", "IDENTITY-3"]
+        (code, out) `shouldBe` (ExitFailure 77, "")
+        err `shouldContain` "tickets.set_status"
+        doesFileExist file >>= (`shouldBe` False)
+
   it "a two-way request's line goes to stderr, its answer to FILE" $
     withRun $ \dir spawn -> do
       warm spawn
