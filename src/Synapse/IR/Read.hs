@@ -31,11 +31,15 @@ module Synapse.IR.Read
   , readDefs
   , readRoot
   , RootRead(..)
+  , rootNamed
+  , readKindIn
     -- * Type positions
   , readType
     -- * Sites
   , siteParam
   , siteReturns
+  , siteError
+  , siteProgress
   , siteInput
     -- * The vocabulary
   , knownKeywords
@@ -96,9 +100,10 @@ refuse site kw variant detail = SchemaRead $ \s ->
   (# (), s { rsRefusals = Refusal site kw variant detail : rsRefusals s } #)
 
 -- | A named root read before. One name in one namespace is one type: the
---   first schema read under it is the type, as the first of a name in
---   @$defs@ is (and as IR 2.0 kept it), so a later root of the same name is
---   not read again (comparing the schemas cost more than the read).
+--   builder refuses two shapes under one name before reading
+--   (RETURNS-13's 'Synapse.IR.Builder.TitleCollision'), so the first schema
+--   read under a name stands for every later root of it, which is not read
+--   again.
 rootSeen :: Text -> Value -> SchemaRead (Maybe (Maybe TypeKind))
 rootSeen site _ = SchemaRead $ \s -> case Map.lookup site (rsRoots s) of
   Just (_, k) -> (# Just k, s #)
@@ -120,23 +125,27 @@ unknownAt site kw variant detail = RefUnknown <$ refuse site kw variant detail
 data Doc = Doc
   { docNamespace :: Text
   , docDefs      :: KM.KeyMap Value
+  , docRoot      :: Maybe Text  -- ^ The root's name: what @"$ref": "#"@ names (RETURNS-13)
   }
 
 docOf :: Text -> KM.KeyMap Value -> Doc
-docOf ns o = Doc ns $ case KM.lookup "$defs" o of
-  Just (Object d) -> d
-  _ -> case KM.lookup "definitions" o of
-    Just (Object d) -> d
-    _ -> KM.empty
+docOf ns o = Doc ns defs Nothing
+  where
+    defs = case KM.lookup "$defs" o of
+      Just (Object d) -> d
+      _ -> case KM.lookup "definitions" o of
+        Just (Object d) -> d
+        _ -> KM.empty
 
 -- | One namespace's documents as one: every @$defs@ entry of them, the
 --   first of each name winning (as the types the builder kept always did).
 --   Read once, a namespace's definitions are read once, not once a method.
 sharedDoc :: Text -> [KM.KeyMap Value] -> Doc
-sharedDoc ns docs = Doc ns (foldl (\acc o -> KM.union acc (docDefs (docOf ns o))) KM.empty docs)
+sharedDoc ns docs = Doc ns (foldl (\acc o -> KM.union acc (docDefs (docOf ns o))) KM.empty docs) Nothing
 
 -- | The definition a @$ref@ names, in this document.
 lookupDef :: Doc -> Text -> Maybe Value
+lookupDef _ "#" = Nothing
 lookupDef doc ref = KM.lookup (K.fromText (refName ref)) (docDefs doc)
 
 refName :: Text -> Text
@@ -145,6 +154,10 @@ refName ref = case T.splitOn "/" ref of
   [] -> ref
 
 qualified :: Doc -> Text -> TypeRef
+qualified doc "#" = case docRoot doc of
+  -- RETURNS-13: @"#"@ is the document's root, by its name
+  Just root -> RefNamed QualifiedName { qnNamespace = docNamespace doc, qnLocalName = root }
+  Nothing -> RefNamed QualifiedName { qnNamespace = docNamespace doc, qnLocalName = "#" }
 qualified doc ref = RefNamed QualifiedName { qnNamespace = docNamespace doc, qnLocalName = refName ref }
 
 typeSite :: Doc -> Text -> Text
@@ -155,6 +168,12 @@ siteParam path name = path <> "(" <> name <> ")"
 
 siteReturns :: Text -> Text
 siteReturns path = path <> " returns"
+
+siteError :: Text -> Text
+siteError path = path <> " error"
+
+siteProgress :: Text -> Text
+siteProgress path = path <> " progress"
 
 siteInput :: Text -> Text
 siteInput path = path <> " input"
@@ -168,7 +187,7 @@ siteInput path = path <> " input"
 knownKeywords :: Set.Set Text
 knownKeywords = Set.fromList
   [ "type", "$ref", "properties", "required", "additionalProperties", "items", "prefixItems"
-  , "oneOf", "anyOf", "enum", "const", "format"
+  , "oneOf", "anyOf", "allOf", "enum", "const", "format"
   , "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"
   , "minLength", "maxLength", "pattern", "minItems", "maxItems"
   , "default", "description", "title", "examples", "deprecated"
@@ -193,7 +212,7 @@ keywordsOk site o
 isJsonSchema :: KM.KeyMap Value -> Bool
 isJsonSchema o = not (any (`KM.member` o) structural) || allSix
   where
-    structural = ["type", "$ref", "properties", "additionalProperties", "items", "prefixItems", "oneOf", "anyOf", "enum", "const"]
+    structural = ["type", "$ref", "properties", "additionalProperties", "items", "prefixItems", "oneOf", "anyOf", "allOf", "enum", "const"]
     allSix = case KM.lookup "type" o of
       Just (Array ts) ->
         Set.fromList [ t | String t <- V.toList ts ] == jsonTypes
@@ -232,6 +251,10 @@ readType doc site = \case
 readTypeObject :: Doc -> Text -> KM.KeyMap Value -> SchemaRead TypeRef
 readTypeObject doc site o
   | Just (String ref) <- KM.lookup "$ref" o = pure (if isJsonRef ref then RefJson else qualified doc ref)
+  | Just members <- allOfOf o = case members of
+      -- RETURNS-13: @allOf [X]@ is X (draft-07 tooling wraps a ref so)
+      [x] | not (any (`KM.member` o) ["properties", "type", "oneOf", "anyOf"]) -> readType doc site x
+      _ -> unknownAt site "allOf" Nothing "allOf is read only as one schema, or beside a tag as a newtype variant's struct"
   | Just (kw, members) <- unionOf o = readInlineUnion doc site kw members
   | Just (Array ts) <- KM.lookup "type" o =
       let types = [ t | String t <- V.toList ts ]
@@ -357,6 +380,21 @@ formatBounds = \case
 -- Unions
 -- ============================================================================
 
+-- | A schema's @allOf@ members.
+allOfOf :: KM.KeyMap Value -> Maybe [Value]
+allOfOf o = case KM.lookup "allOf" o of
+  Just (Array ms) -> Just (V.toList ms)
+  _ -> Nothing
+
+-- | What a newtype variant (or a struct) wraps: a @$ref@ beside its
+--   properties (2020-12), or @allOf [{"$ref": …}]@ (draft-07) — RETURNS-13.
+wrappedRef :: KM.KeyMap Value -> Maybe Value
+wrappedRef m = case KM.lookup "$ref" m of
+  Just r -> Just r
+  Nothing -> case allOfOf m of
+    Just [Object x] | Just r@(String _) <- KM.lookup "$ref" x -> Just r
+    _ -> Nothing
+
 -- | A schema's union: its keyword and members.
 unionOf :: KM.KeyMap Value -> Maybe (Text, [Value])
 unionOf o = case (KM.lookup "oneOf" o, KM.lookup "anyOf" o) of
@@ -475,7 +513,7 @@ variantShape doc depth member@(Object m)
   | Just (Object props) <- KM.lookup "properties" m = Just VariantShape
       { vsProps    = [ (K.toText k, v) | (k, v) <- KM.toList props ]
       , vsRequired = requiredOf m
-      , vsWrapped  = KM.lookup "$ref" m
+      , vsWrapped  = wrappedRef m
       , vsDesc     = descriptionOf member
       }
 variantShape _ _ _ = Nothing
@@ -654,7 +692,7 @@ readKindObject doc site o
       when (maybe False (\ap -> ap /= Bool False) (KM.lookup "additionalProperties" o)) $
         refuse site "additionalProperties" Nothing "a map beside properties (a flattened map) has no IR form"
       fields <- fieldsOf doc site (requiredOf o) (propsOf o)
-      wrapped <- case KM.lookup "$ref" o of
+      wrapped <- case wrappedRef o of
         Nothing -> pure []
         Just w -> wrappedFields doc site w
       pure (Just (KindStruct (nubBy (\a b -> fdName a == fdName b) (fields ++ wrapped))))
@@ -679,29 +717,56 @@ readKindObject doc site o
 -- A document's root
 -- ============================================================================
 
--- | What a document's root (a method's @returns@ or @input@) reads as.
+-- | What a document's root (a method's @returns@, @error@, @progress@ or
+--   @input@) reads as.
 data RootRead = RootRead
   { rrTypes     :: Map Text TypeDef   -- ^ its @$defs@, and the root's own type when it is named
   , rrRef       :: TypeRef            -- ^ the root as a ref
-  , rrStreaming :: Bool               -- ^ a union of more than one non-error variant
   }
 
+-- | A document's root as a type of its own, when it is one: its name (its
+--   title, else @fallback@) and its schema less its @$defs@. A struct, an
+--   enum and a union (not a nullable) are named; so is a @$ref@ under a
+--   title of its own, as an alias (RETURNS-13). Anything else — a
+--   primitive, an array, a nullable, @{}@ — is a plain ref, whatever
+--   schemars titles it (@String@, @Array_of_T@).
+rootNamed :: Text -> Value -> Maybe (Text, Value)
+rootNamed fallback = \case
+  Object o
+    | named -> Just (name, body)
+    | Just (String ref) <- KM.lookup "$ref" o, not (KM.member "properties" o)
+    , Just t <- title, t /= refName ref, ref /= "#" -> Just (t, body)
+    where
+      title = case KM.lookup "title" o of
+        Just (String t) | not (T.null t) -> Just t
+        _ -> Nothing
+      name = fromMaybe fallback title
+      named = isJust (unionOf o) && isNothing (nullableMember (maybe [] snd (unionOf o)))
+           || KM.member "properties" o
+           || KM.member "enum" o
+      body = Object (KM.delete "$defs" (KM.delete "definitions" o))
+  _ -> Nothing
+
+-- | A named type's kind read alone, in its own document (a method's schema
+--   whose @$defs@ its refs resolve against), its refusals dropped: what the
+--   builder compares when two schemas give one name two different bodies.
+readKindIn :: Text -> KM.KeyMap Value -> Text -> Value -> Maybe TypeKind
+readKindIn namespace docObj name v =
+  let doc = (docOf namespace docObj) { docRoot = Just name }
+  in fst (runRead (readKind doc (typeSite doc name) v))
+
 -- | A document's root: a titled (or else @fallback@-named) struct, enum or
---   union is a type of its own; anything else is the plain ref.
+--   union, or a titled @$ref@, is a type of its own ('rootNamed'); anything
+--   else is the plain ref. Nothing is inferred from it: a method's
+--   cardinality is its schema's (RETURNS-13).
 readRoot :: Maybe Doc -> Text -> Text -> Text -> Value -> SchemaRead RootRead
 readRoot shared namespace site fallback = \case
-  Object o -> do
-    let doc = maybe (docOf namespace o) id shared
-        name = case KM.lookup "title" o of
-          Just (String t) | not (T.null t) -> t
-          _ -> fallback
-        named = isJust (unionOf o) && isNothing (nullableMember (maybe [] snd (unionOf o)))
-             || KM.member "properties" o
-             || KM.member "enum" o
-    defs <- maybe (readDefs doc) (const (pure Map.empty)) shared
-    if named
-      then do
-        let body = Object (KM.delete "$defs" (KM.delete "definitions" o))
+  v@(Object o) -> do
+    let doc0 = maybe (docOf namespace o) id shared
+    defs <- maybe (readDefs doc0) (const (pure Map.empty)) shared
+    case rootNamed fallback v of
+      Just (name, body) -> do
+        let doc = doc0 { docRoot = Just name }
             tsite = typeSite doc name
         seen <- rootSeen tsite body
         kind <- case seen of
@@ -717,16 +782,11 @@ readRoot shared namespace site fallback = \case
             pure RootRead
               { rrTypes = Map.insert (tdFullName td) td defs
               , rrRef = ref
-              , rrStreaming = streams k
               }
-          Nothing -> pure RootRead { rrTypes = defs, rrRef = RefUnknown, rrStreaming = False }
-      else do
-        ref <- readType doc site (Object (KM.delete "$defs" (KM.delete "definitions" o)))
-        pure RootRead { rrTypes = defs, rrRef = ref, rrStreaming = False }
+          Nothing -> pure RootRead { rrTypes = defs, rrRef = RefUnknown }
+      Nothing -> do
+        ref <- readType doc0 site (Object (KM.delete "$defs" (KM.delete "definitions" o)))
+        pure RootRead { rrTypes = defs, rrRef = ref }
   other -> do
-    ref <- readType (Doc namespace KM.empty) site other
-    pure RootRead { rrTypes = Map.empty, rrRef = ref, rrStreaming = False }
-  where
-    streams = \case
-      KindEnum _ vs Internal -> length (filter ((/= "error") . vdName) vs) > 1
-      _ -> False
+    ref <- readType (Doc namespace KM.empty Nothing) site other
+    pure RootRead { rrTypes = Map.empty, rrRef = ref }

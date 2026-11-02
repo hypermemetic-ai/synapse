@@ -55,7 +55,7 @@ main = hspec $ do
 
   describe "buildParamValue with arrays" $ do
     let emptyIR = IR
-          { irVersion = "2.0"
+          { irVersion = "3.0"
           , irHash = Nothing
           , irTypes = Map.empty
           , irMethods = Map.empty
@@ -343,9 +343,11 @@ methodWith params = MethodDef
   , mdFullPath = "t.create"
   , mdNamespace = "t"
   , mdDescription = Nothing
-  , mdStreaming = False
   , mdParams = params
   , mdReturns = RefJson
+  , mdError = Nothing
+  , mdProgress = Nothing
+  , mdCardinality = CardinalityOne
   , mdBidirType = Nothing
   , mdBidirResponseType = Nothing
   , mdBidirResponseSchema = Nothing

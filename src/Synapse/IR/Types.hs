@@ -19,7 +19,9 @@
 --
 -- - Types are hoisted to top level and deduplicated by name
 -- - Methods reference types by name, not inline definitions
--- - Streaming is inferred from return type structure
+-- - A method's contract is read from its schema, never inferred: its item
+--   type ('mdReturns'), error type ('mdError'), progress type
+--   ('mdProgress') and cardinality ('mdCardinality') — IR 3.0, plexus 0.7
 -- - Discriminated unions are first-class
 module Synapse.IR.Types
   ( -- * Top-level IR
@@ -47,6 +49,7 @@ module Synapse.IR.Types
     -- * Method Definitions
   , MethodDef(..)
   , MethodRole(..)
+  , Cardinality(..)
   , ParamDef(..)
   , InjectedParam(..)
 
@@ -64,10 +67,6 @@ module Synapse.IR.Types
   , TypeRef(..)
   , typeRefName
   , typeRefChildren
-
-    -- * Utilities
-  , isStreaming
-  , inferStreaming
   ) where
 
 import Control.Applicative ((<|>))
@@ -81,17 +80,20 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Version (showVersion)
 import GHC.Generics (Generic)
 
-import Plexus.Schema.Recursive (DeprecationInfo(..), MethodRole(..))
+import Paths_plexus_synapse (version)
+import Plexus.Schema.Recursive (Cardinality(..), DeprecationInfo(..), MethodRole(..))
 
 -- ============================================================================
 -- Version Information
 -- ============================================================================
 
--- | Synapse version (from cabal file: plexus-synapse.cabal)
+-- | Synapse's own package version (@plexus-synapse.cabal@'s @version@), as
+--   recorded in 'GenerationMetadata'.
 synapseVersion :: Text
-synapseVersion = "0.2.0.0"
+synapseVersion = T.pack (showVersion version)
 
 -- ============================================================================
 -- Generation Metadata
@@ -185,10 +187,12 @@ instance FromJSON IR where
     <*> o .:? "irPluginRoles"
     <*> o .:? "irRefusals" .!= []
 
--- | The IR format this synapse writes (SYNAPSE-CC-8). A cache holding any
---   other is discarded and built again.
+-- | The IR format this synapse writes: 3.0 (RETURNS-13: a method's returns,
+--   error, progress and cardinality, read from the plexus 0.7 schema) over
+--   2.1's forms (SYNAPSE-CC-8). A cache holding any other is discarded and
+--   built again.
 currentIrVersion :: Text
-currentIrVersion = "2.1"
+currentIrVersion = "3.0"
 
 -- ============================================================================
 -- IR 2.1: refusals, injected params, refinements
@@ -284,7 +288,7 @@ instance FromJSON EnumRepr where
 -- | Empty IR for folding
 emptyIR :: IR
 emptyIR = IR
-  { irVersion = currentIrVersion  -- 2.1: SYNAPSE-CC-8 (2.0: TypeRef uses structured QualifiedName)
+  { irVersion = currentIrVersion  -- 3.0: MethodDef carries returns · error · progress · cardinality (plexus 0.7); 2.1's SYNAPSE-CC-8 forms kept
   , irBackend = ""  -- Will be set by buildIR
   , irHash = Nothing
   , irMetadata = Nothing
@@ -349,7 +353,7 @@ data TypeKind
       { ksFields :: [FieldDef]       -- ^ Struct fields
       }
   | KindEnum
-      { keDiscriminator :: Text      -- ^ Field that discriminates (e.g., "type"); @""@ when not 'Internal'
+      { keDiscriminator :: Text      -- ^ The tag: the property whose @const@ every variant carries (e.g., "type", "kind"); @""@ when not 'Internal'
       , keVariants :: [VariantDef]   -- ^ Possible variants
       , keRepr :: EnumRepr           -- ^ SYNAPSE-CC-8: internal (omitted), external or untagged
       }
@@ -388,7 +392,7 @@ data FieldDef = FieldDef
 data VariantDef = VariantDef
   { vdName        :: Text           -- ^ Variant name (the discriminator value)
   , vdDescription :: Maybe Text     -- ^ Documentation
-  , vdFields      :: [FieldDef]     -- ^ Fields specific to this variant
+  , vdFields      :: [FieldDef]     -- ^ The variant's fields, the tag aside; a newtype variant over a struct carries the struct's fields
   , vdRef         :: Maybe TypeRef  -- ^ SYNAPSE-CC-8: an untagged variant's type (omitted when absent)
   }
   deriving stock (Show, Eq, Generic)
@@ -404,14 +408,32 @@ instance ToJSON VariantDef where
 -- ============================================================================
 
 -- | A method definition
+--
+--   IR 3.0: a method's contract is four facts read from its 0.7
+--   'Plexus.Schema.Recursive.MethodSchema', never inferred — its item type
+--   ('mdReturns'), its error type when it can say no ('mdError'), its
+--   progress type when it reports progress ('mdProgress'), and whether it
+--   yields one item or many ('mdCardinality'). Every 'RefNamed' among them
+--   has a 'TypeDef' in 'irTypes'.
 data MethodDef = MethodDef
   { mdName        :: Text           -- ^ Method name (e.g., "chat")
   , mdFullPath    :: Text           -- ^ Full path (e.g., "cone.chat")
   , mdNamespace   :: Text           -- ^ Parent namespace (e.g., "cone")
   , mdDescription :: Maybe Text     -- ^ Documentation
-  , mdStreaming   :: Bool           -- ^ Does this method stream multiple events?
   , mdParams      :: [ParamDef]     -- ^ Input parameters
-  , mdReturns     :: TypeRef        -- ^ Return type reference
+  , mdReturns     :: TypeRef
+    -- ^ The item type @T@: what one success carries (for @Result<T, E>@ or
+    --   @Progress<T, P>@, @T@ alone). From @MethodSchema.returns@.
+  , mdError       :: Maybe TypeRef
+    -- ^ The error type @E@ of a @Result<T, E>@ item — what the activation
+    --   says when it says no. 'Nothing' when the method is infallible.
+    --   From @MethodSchema.error@.
+  , mdProgress    :: Maybe TypeRef
+    -- ^ The progress type @P@ its progress frames carry. 'Nothing' when the
+    --   method reports no progress. From @MethodSchema.progress@.
+  , mdCardinality :: Cardinality
+    -- ^ One item or many. From @MethodSchema.cardinality@ — never inferred
+    --   from the shape of 'mdReturns'.
   , mdBidirType   :: Maybe TypeRef
     -- ^ Bidirectional channel type parameter T, when the method uses
     -- BidirChannel<StandardRequest<T>, StandardResponse<T>>.
@@ -466,21 +488,24 @@ data MethodDef = MethodDef
   deriving stock (Show, Eq, Generic)
 
 -- | Manual JSON instances so @mdRole@ defaults to 'MethodRoleRpc' when
---   deserializing pre-IR-12 IR JSON (same back-compat posture as the
---   Rust @#[serde(default)]@ on @MethodDef.md_role@ in service-codegen).
+--   absent (same posture as the Rust @#[serde(default)]@ on
+--   @MethodDef.md_role@ in service-codegen).
 --
---   All other fields preserve the generic derivation defaults (field
---   names used verbatim as JSON keys; @Maybe@ fields omitted when
---   @Nothing@ to match aeson's legacy behaviour).
+--   Field names are the JSON keys; a 'Nothing' is written as @null@, as
+--   the generic derivation always has. @mdCardinality@ is @"one"@ /
+--   @"many"@ (the schema's own spelling) and is required: IR 3.0 does not
+--   read 2.0's @mdStreaming@ (RETURNS-1 decision 12, no back-compat).
 instance ToJSON MethodDef where
   toJSON MethodDef{..} = object $
     [ "mdName"                .= mdName
     , "mdFullPath"            .= mdFullPath
     , "mdNamespace"           .= mdNamespace
     , "mdDescription"         .= mdDescription
-    , "mdStreaming"           .= mdStreaming
     , "mdParams"              .= mdParams
     , "mdReturns"             .= mdReturns
+    , "mdError"               .= mdError
+    , "mdProgress"            .= mdProgress
+    , "mdCardinality"         .= mdCardinality
     , "mdBidirType"           .= mdBidirType
     , "mdBidirResponseType"   .= mdBidirResponseType
     , "mdBidirResponseSchema" .= mdBidirResponseSchema
@@ -502,9 +527,11 @@ instance FromJSON MethodDef where
     <*> o .:  "mdFullPath"
     <*> o .:  "mdNamespace"
     <*> o .:? "mdDescription"
-    <*> o .:  "mdStreaming"
     <*> o .:  "mdParams"
     <*> o .:  "mdReturns"
+    <*> o .:? "mdError"
+    <*> o .:? "mdProgress"
+    <*> o .:  "mdCardinality"
     <*> o .:? "mdBidirType"
     <*> o .:? "mdBidirResponseType"
     <*> o .:? "mdBidirResponseSchema"
@@ -627,23 +654,3 @@ typeRefChildren = \case
 typeRefName :: TypeRef -> Maybe Text
 typeRefName (RefNamed qn) = Just (qualifiedNameFull qn)
 typeRefName _ = Nothing
-
--- ============================================================================
--- Utilities
--- ============================================================================
-
--- | Check if a method definition is streaming
-isStreaming :: MethodDef -> Bool
-isStreaming = mdStreaming
-
--- | Infer streaming from a return type's structure
--- A method is streaming if its return type is an enum with more than 2 variants
--- (more than 1 success variant + error variant)
-inferStreaming :: TypeDef -> Bool
-inferStreaming td = case tdKind td of
-  KindEnum _ variants _ ->
-    let nonErrorVariants = filter (not . isErrorVariant) variants
-    in length nonErrorVariants > 1
-  _ -> False
-  where
-    isErrorVariant v = vdName v == "error"

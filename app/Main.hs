@@ -71,7 +71,7 @@ import Synapse.CLI.Parse (parseParams, parsePathAndParams, pairFlags)
 import qualified Synapse.CLI.Parse as Parse
 import Synapse.IR.Types (IR, irMethods, irRefusals, MethodDef)
 import qualified Synapse.IR.Types as IRT
-import Plexus.Schema.Recursive (DeprecationInfo)
+import Plexus.Schema.Recursive (Cardinality(..), DeprecationInfo)
 import qualified Data.Map.Strict as Map
 import qualified Synapse.CLI.Template as TemplateIR
 import Synapse.Deprecation (emitActivationWarning, emitMethodWarning)
@@ -1000,7 +1000,7 @@ isStaleItem item = case itemRefusal item of
   Just r -> refusalRoles r == ["admin"]
   Nothing -> case item of
     ServiceError _ _ msg _ -> any (`T.isInfixOf` msg)
-      [ "Method not found", "Activation not found", "Unknown method", "method not found"
+      [ "Method not found", "Activation not found", "Unknown method", "method not found", "activation not found"
       , "errCode = -32601", "missing field", "unknown field", "invalid type", "unknown variant" ]
     _ -> False
 
@@ -1512,7 +1512,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                 pure (Just (mergeUpgradeHeaders (seToken env') (seCookies env') (seHeaders env')))
       -- SYNAPSE-39: a stream has no end to wait for — with -o, its items
       -- go to FILE itself, each as it comes
-      when (methodStreaming method) $ liftIO Output.streaming
+      when (methodCardinality method == CardinalityMany) $ liftIO Output.streaming
       -- Use bidirectional streaming handler
       invokeStreamingWithBidir
         (Reconnect.callShape method)

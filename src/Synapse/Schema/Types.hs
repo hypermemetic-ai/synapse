@@ -1,4 +1,5 @@
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE ViewPatterns #-}
 
 -- | Core types for Synapse
 --
@@ -43,10 +44,16 @@ module Synapse.Schema.Types
   , SelectOption(..)
   ) where
 
-import Data.Aeson (Value)
+import Data.Aeson (Value(..), encode)
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
+import qualified Data.Text.Encoding as TE
 import Data.Int (Int64)
+import Data.Scientific (toRealFloat)
 import GHC.Generics (Generic)
+
+import Plexus.RemoteError (renderRemoteError)
 
 -- Re-export from plexus-protocol
 import Plexus.Schema.Recursive
@@ -112,13 +119,33 @@ type ServiceStreamItem = PlexusStreamItem
 pattern ServiceData :: Text -> Provenance -> Text -> Value -> ServiceStreamItem
 pattern ServiceData hash prov contentType content = StreamData hash prov contentType content
 
--- | Pattern synonym for progress events
+-- | Pattern synonym for progress events: a message and a percentage.
+--
+--   Matching only (plexus 0.7: a progress frame carries the method's typed
+--   progress value). The default progress type, @Note@, gives its
+--   @message@ and @percentage@; any other value gives its JSON as the
+--   message. RETURNS-14 renders typed progress properly.
 pattern ServiceProgress :: Text -> Provenance -> Text -> Maybe Double -> ServiceStreamItem
-pattern ServiceProgress hash prov msg pct = StreamProgress hash prov msg pct
+pattern ServiceProgress hash prov msg pct <- StreamProgress hash prov _ (progressMessage -> (msg, pct))
 
--- | Pattern synonym for error events
+-- | Pattern synonym for error events: the call failure as one line.
+--
+--   Matching only (plexus 0.7: an error frame carries a typed
+--   'Plexus.RemoteError.RemoteError'); the message is its
+--   'renderRemoteError' line. RETURNS-14 renders call failures properly.
 pattern ServiceError :: Text -> Provenance -> Text -> Bool -> ServiceStreamItem
-pattern ServiceError hash prov err recoverable = StreamError hash prov err recoverable
+pattern ServiceError hash prov err recoverable <- StreamError hash prov (renderRemoteError -> err) recoverable
+
+-- | A progress value as the 0.6-style message and percentage.
+progressMessage :: Value -> (Text, Maybe Double)
+progressMessage (Object o)
+  | Just (String msg) <- KM.lookup "message" o =
+      ( msg
+      , case KM.lookup "percentage" o of
+          Just (Number n) -> Just (toRealFloat n)
+          _ -> Nothing
+      )
+progressMessage v = (TE.decodeUtf8 (LBS.toStrict (encode v)), Nothing)
 
 -- | Pattern synonym for done events
 pattern ServiceDone :: Text -> Provenance -> ServiceStreamItem

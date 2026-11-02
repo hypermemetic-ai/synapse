@@ -90,7 +90,7 @@ import System.IO (hFlush, stderr, stdout)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Process (exitImmediately)
 
-import Plexus.Schema.Recursive (MethodSchema(..))
+import Plexus.Schema.Recursive (Cardinality(..), MethodSchema(..))
 import qualified Plexus.Types as PT
 
 -- ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ data CallShape = CallShape
 -- and anything bidirectional — is a write, never sent twice.
 callShape :: MethodSchema -> CallShape
 callShape m = CallShape
-  { csStream = methodStreaming m
+  { csStream = methodCardinality m == CardinalityMany
   , csRead   = not (methodBidirectional m) && isRead
   , csSince  = takesSince (methodParams m)
   }

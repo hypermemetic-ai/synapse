@@ -3,19 +3,34 @@
 
 -- | IR Builder - walks schema tree and constructs the IR
 --
--- Uses the existing schema walker with a custom algebra that:
--- 1. Reads types from $defs in methodParams, methodReturns and methodInput
---    — whole, or refused by name (SYNAPSE-CC-8: "Synapse.IR.Read")
--- 2. Deduplicates types by content hash, placing each shared type in the
---    namespace that refers to it most (SYNAPSE-CC-8)
--- 3. Infers streaming from return type structure
--- 4. Builds method definitions with type references; server-injected params
---    go to 'mdInjected', never 'mdParams'
+-- IR 3.0 (plexus 0.7, RETURNS-13) over 2.1's reader (SYNAPSE-CC-8). The
+-- schema walker runs a custom algebra that, for every method, reads from
+-- the schema, never guessing:
+--
+-- 1. its item type (@returns@), error type (@error@) and progress type
+--    (@progress@), each a 'TypeRef' — a 'RefNamed' with a 'TypeDef', or a
+--    primitive / array / optional / JSON ref — and its params and @input@;
+--    every type in them read whole, or refused by name ("Synapse.IR.Read");
+-- 2. its cardinality (@cardinality@), as is ('mdCardinality');
+-- 3. its params, server-injected ones going to 'mdInjected', never
+--    'mdParams'.
+--
+-- One title in one namespace is one type: two methods whose schemas give a
+-- name the same shape share one 'TypeDef'; two shapes under one name fail
+-- the build ('TitleCollision'), naming both methods. Identical types in
+-- different namespaces are then deduplicated, each placed in the namespace
+-- that refers to it most (SYNAPSE-CC-8).
 module Synapse.IR.Builder
   ( -- * Building IR
     buildIR
   , buildIRRaw
+  , buildIRFromSchema
   , finalizeIR
+
+    -- * Errors
+  , IRBuildError(..)
+  , TypeSource(..)
+  , renderIRBuildError
 
     -- * Extraction (for testing)
   , extractTypesFromSchema
@@ -24,6 +39,9 @@ module Synapse.IR.Builder
   , schemaToTypeRef
   ) where
 
+import Control.Applicative ((<|>))
+import Control.Monad (foldM)
+import Control.Monad.Except (throwError)
 import Control.Monad.IO.Class (liftIO)
 import Control.Monad.Reader (asks)
 import Data.Aeson (Value(..))
@@ -48,6 +66,47 @@ import Synapse.IR.Types hiding (QualifiedName(..), qualifiedNameFull)
 import Synapse.IR.Types (QualifiedName(..), qualifiedNameFull, synapseVersion)
 import Synapse.IR.Read
 import Plexus.Schema.Recursive (DeprecationInfo, ParamSchema(..), paramValues)
+
+-- ============================================================================
+-- Errors
+-- ============================================================================
+
+-- | Why no IR can be built from a schema.
+data IRBuildError
+  = TitleCollision
+      { tcNamespace :: Text        -- ^ The namespace both types are in
+      , tcTitle     :: Text        -- ^ The name they share
+      , tcFirst     :: TypeSource  -- ^ Where the first shape was read
+      , tcSecond    :: TypeSource  -- ^ Where the second, different, shape was read
+      }
+    -- ^ Two different shapes carry one name in one namespace (RETURNS-13).
+    --   One name in one namespace is one Rust type, so this is a conflict
+    --   the activation's author resolves; the IR never picks one.
+  deriving stock (Show, Eq)
+
+-- | Where a 'TypeDef' was read: a method, and which of its schemas.
+data TypeSource = TypeSource
+  { tsMethod :: Text  -- ^ The method's name
+  , tsSchema :: Text  -- ^ @"params"@, @"returns"@, @"error"@, @"progress"@ or @"input"@
+  }
+  deriving stock (Show, Eq)
+
+-- | One line, naming the title and both methods.
+renderIRBuildError :: IRBuildError -> Text
+renderIRBuildError TitleCollision{..} =
+  "IR: two different types are titled \"" <> tcTitle <> "\" in namespace "
+    <> renderNamespace tcNamespace <> ": " <> renderSource tcFirst
+    <> " and " <> renderSource tcSecond
+    <> ". One title in one namespace is one type; rename one of them."
+  where
+    renderNamespace ns
+      | T.null ns = "(root)"
+      | otherwise = "\"" <> ns <> "\""
+    renderSource TypeSource{..} = "method " <> tsMethod <> " (" <> tsSchema <> ")"
+
+-- | Raise an 'IRBuildError' in 'SynapseM'.
+liftBuild :: Either IRBuildError a -> SynapseM a
+liftBuild = either (throwError . ValidationError . renderIRBuildError) pure
 
 -- ============================================================================
 -- Building IR
@@ -104,6 +163,25 @@ buildIR generatorInfoStrs path = do
 buildIRRaw :: Path -> SynapseM IR
 buildIRRaw = walkSchemaPar irAlgebra
 
+-- | Build IR from one plugin schema, with no backend: what 'buildIR' builds
+--   for a walk that starts at @path@ and finds this schema there, children
+--   aside (they are summaries; nothing fetches them). 'irMetadata' is
+--   'Nothing' — the toolchain and the clock are 'buildIR''s to record — so
+--   the result is a pure function of its arguments (RETURNS-13: the
+--   conformance fixture's golden @ir.json@ is built with it, and RETURNS-40's
+--   server-side IR is held equal to it).
+buildIRFromSchema
+  :: Text          -- ^ Backend name ('irBackend')
+  -> Path          -- ^ The path the schema sits at; its namespace is the path joined with "."
+  -> PluginSchema
+  -> Either IRBuildError IR
+buildIRFromSchema backend path schema = do
+  raw <- pluginIR path schema []
+  pure $ (finalizeIR raw)
+    { irBackend = backend
+    , irMetadata = Nothing
+    }
+
 -- | SYNAPSE-CC-8: the walk's IR made whole — shared types deduplicated and
 --   placed where they are referred to most, every ref that names no type
 --   turned to 'RefUnknown' (and refused, unless the type it names was), the
@@ -122,14 +200,36 @@ finalizeIR raw =
 -- - Build method definitions
 -- - Merge with child results
 irAlgebra :: SchemaF IR -> SynapseM IR
-irAlgebra (PluginF schema path childIRs) = do
+irAlgebra (PluginF schema path childIRs) = liftBuild (pluginIR path schema childIRs)
+
+irAlgebra (MethodF method namespace path) = liftBuild $ do
+  -- Single method node (shouldn't happen in normal walk, but handle it)
+  let fullPath = T.intercalate "." path
+  ((types, mdef), refusals) <- extractMethodDefR namespace fullPath method
+  pure $ IR
+    { irVersion = irVersion emptyIR  -- Use version from emptyIR
+    , irBackend = irBackend emptyIR  -- Will be set by buildIR
+    , irHash = Nothing  -- Methods don't carry hash
+    , irMetadata = Nothing  -- Will be set by buildIR
+    , irTypes = types
+    , irMethods = Map.singleton fullPath mdef
+    , irPlugins = Map.singleton namespace [methodName method]
+    , irPluginHashes = Nothing  -- Methods don't have plugin-level hashes
+    , irPluginRequests = Nothing  -- Methods don't carry request schemas
+    , irPluginRoles = Nothing  -- Methods don't carry roles
+    , irRefusals = refusals
+    }
+
+-- | One plugin node: its own types and methods, merged with its children's.
+pluginIR :: Path -> PluginSchema -> [IR] -> Either IRBuildError IR
+pluginIR path schema childIRs = do
   -- Use full path as namespace to avoid collisions
   -- e.g., "hyperforge.workspace.repos" instead of just "repos"
   let namespace = T.intercalate "." path
       pathPrefix = namespace  -- Same as namespace
 
   -- Extract types and methods from this plugin
-  let (localTypes, localMethods, localRefusals) = extractFromPlugin namespace pathPrefix schema
+  (localTypes, localMethods, localRefusals) <- extractFromPlugin namespace pathPrefix schema
 
   -- Merge with children
   let childIR = foldr mergeIR emptyIR childIRs
@@ -145,14 +245,12 @@ irAlgebra (PluginF schema path childIRs) = do
       childHashes = fromMaybe Map.empty (irPluginHashes childIR)
       allHashes = Map.insert namespace hashInfo childHashes
 
-  -- REQ-5: capture per-plugin PlexusRequest schema (psRequest from wire schema).
-  -- HEADERS-1 stub: plexus-protocol's PluginSchema does not yet expose
-  -- psRequest (cross-repo patch pending). Treat as always-Nothing so the
-  -- synapse binary builds; REQ-5 rendering becomes a no-op until the field
-  -- lands in plexus-protocol.
-  let _ = schema  -- suppress unused-binding warning when REQ-5 is stubbed
-      childRequests = fromMaybe Map.empty (irPluginRequests childIR)
-      allRequests = childRequests
+  -- REQ-5: capture per-plugin PlexusRequest schema (psRequest from the wire
+  -- schema, CONTEXT-5 — HEADERS-1's stub is gone now plexus-protocol reads it).
+  let childRequests = fromMaybe Map.empty (irPluginRequests childIR)
+      allRequests = case psRequest schema of
+        Just reqV -> Map.insert namespace reqV childRequests
+        Nothing   -> childRequests
 
   pure $ IR
     { irVersion = irVersion emptyIR  -- Use version from emptyIR
@@ -169,24 +267,6 @@ irAlgebra (PluginF schema path childIRs) = do
         (Nothing, childRoles) -> childRoles
         (Just roles, childRoles) -> Just (Map.insert namespace roles (fromMaybe Map.empty childRoles))
     , irRefusals = localRefusals <> irRefusals childIR
-    }
-
-irAlgebra (MethodF method namespace path) = do
-  -- Single method node (shouldn't happen in normal walk, but handle it)
-  let fullPath = T.intercalate "." path
-  let ((types, mdef), refusals) = extractMethodDefR namespace fullPath method
-  pure $ IR
-    { irVersion = irVersion emptyIR  -- Use version from emptyIR
-    , irBackend = irBackend emptyIR  -- Will be set by buildIR
-    , irHash = Nothing  -- Methods don't carry hash
-    , irMetadata = Nothing  -- Will be set by buildIR
-    , irTypes = types
-    , irMethods = Map.singleton fullPath mdef
-    , irPlugins = Map.singleton namespace [methodName method]
-    , irPluginHashes = Nothing  -- Methods don't have plugin-level hashes
-    , irPluginRequests = Nothing  -- Methods don't carry request schemas
-    , irPluginRoles = Nothing  -- Methods don't carry roles
-    , irRefusals = refusals
     }
 
 -- ============================================================================
@@ -263,7 +343,8 @@ refCounts contested ir
     names = concatMap methodNames (Map.elems (irMethods ir))
          ++ concatMap (kindNames . tdKind) (Map.elems (irTypes ir))
     methodNames md = concatMap refKeys
-      (map pdType (mdParams md) ++ [mdReturns md] ++ maybe [] pure (mdInput md) ++ maybe [] pure (mdBidirType md))
+      (map pdType (mdParams md) ++ [mdReturns md] ++ maybe [] pure (mdError md) ++ maybe [] pure (mdProgress md)
+        ++ maybe [] pure (mdInput md) ++ maybe [] pure (mdBidirType md))
     kindNames = \case
       KindStruct fs -> concatMap (refKeys . fdType) fs
       KindEnum _ vs _ -> concatMap (\v -> concatMap (refKeys . fdType) (vdFields v) ++ maybe [] refKeys (vdRef v)) vs
@@ -316,6 +397,8 @@ updateMethodRefs :: Map Text Text -> MethodDef -> MethodDef
 updateMethodRefs redirects md = md
   { mdParams = map (updateParamRefs redirects) (mdParams md)
   , mdReturns = updateTypeRef redirects (mdReturns md)
+  , mdError = fmap (updateTypeRef redirects) (mdError md)
+  , mdProgress = fmap (updateTypeRef redirects) (mdProgress md)
   , mdBidirType = fmap (updateTypeRef redirects) (mdBidirType md)
   , mdInput = fmap (updateTypeRef redirects) (mdInput md)
   -- mdRole, mdBidirResponse*: left unchanged via record-update syntax
@@ -409,10 +492,14 @@ unknownWhereUnnamed refused ir =
         let path = mdFullPath md
             ps = [ let (t, rs) = fix (siteParam path (pdName p)) (pdType p) in (p { pdType = t }, rs) | p <- mdParams md ]
             (ret, rr) = fix (siteReturns path) (mdReturns md)
-            (inp, ri) = case mdInput md of
+            optional site = \case
               Nothing -> (Nothing, [])
-              Just x -> let (x', rs) = fix (siteInput path) x in (Just x', rs)
-        in (md { mdParams = map fst ps, mdReturns = ret, mdInput = inp }, concatMap snd ps ++ rr ++ ri)
+              Just x -> let (x', rs) = fix site x in (Just x', rs)
+            (err, re) = optional (siteError path) (mdError md)
+            (prog, rp) = optional (siteProgress path) (mdProgress md)
+            (inp, ri) = optional (siteInput path) (mdInput md)
+        in ( md { mdParams = map fst ps, mdReturns = ret, mdError = err, mdProgress = prog, mdInput = inp }
+           , concatMap snd ps ++ rr ++ re ++ rp ++ ri )
       types' = Map.mapWithKey fixType (irTypes ir)
       methods' = Map.map fixMethod (irMethods ir)
   in ( ir { irTypes = Map.map fst types', irMethods = Map.map fst methods' }
@@ -424,10 +511,13 @@ unknownWhereUnnamed refused ir =
 
 -- | Extract all types and methods from a plugin schema
 -- Types are namespace-qualified to avoid collisions (e.g., "cone.ListResult")
-extractFromPlugin :: Text -> Text -> PluginSchema -> (Map Text TypeDef, Map Text MethodDef, [Refusal])
-extractFromPlugin namespace pathPrefix schema =
+--
+-- Fails when two of its schemas give one name two shapes ('TitleCollision').
+extractFromPlugin :: Text -> Text -> PluginSchema -> Either IRBuildError (Map Text TypeDef, Map Text MethodDef, [Refusal])
+extractFromPlugin namespace pathPrefix schema = do
+  checkTitles namespace (psMethods schema)
   let -- every method's documents share one namespace's $defs: read once
-      docs = [ o | m <- psMethods schema, Just (Object o) <- [methodParams m, methodReturns m, methodInput m] ]
+      docs = [ o | m <- psMethods schema, (_, Object o) <- methodDocs m ]
       shared = sharedDoc namespace docs
       ((defs, results), refusals) = runRead $ do
         ds <- readDefs shared
@@ -435,22 +525,107 @@ extractFromPlugin namespace pathPrefix schema =
         pure (ds, rs)
       allTypes = Map.unions (defs : map fst results)
       allMethods = Map.fromList [ (mdFullPath m, m) | (_, m) <- results ]
-  in (allTypes, allMethods, refusals)
+  pure (allTypes, allMethods, refusals)
 
 -- | Extract types and method def from a single method (its refusals dropped:
 --   'extractMethodDefR' keeps them).
-extractMethodDef :: Text -> Text -> MethodSchema -> (Map Text TypeDef, MethodDef)
-extractMethodDef namespace pathPrefix = fst . extractMethodDefR namespace pathPrefix
+--
+-- Fails when two of the method's own schemas give one name two shapes.
+extractMethodDef :: Text -> Text -> MethodSchema -> Either IRBuildError (Map Text TypeDef, MethodDef)
+extractMethodDef namespace pathPrefix = fmap fst . extractMethodDefR namespace pathPrefix
 
 -- | Extract types and method def from a single method, and every site the
 --   reader refused on the way.
-extractMethodDefR :: Text -> Text -> MethodSchema -> ((Map Text TypeDef, MethodDef), [Refusal])
-extractMethodDefR = extractMethodDefIn Nothing
+extractMethodDefR :: Text -> Text -> MethodSchema -> Either IRBuildError ((Map Text TypeDef, MethodDef), [Refusal])
+extractMethodDefR namespace pathPrefix method = do
+  checkTitles namespace [method]
+  pure (extractMethodDefIn Nothing namespace pathPrefix method)
 
 -- | 'extractMethodDefR', its $defs read from a namespace's shared document
 --   when one is given (and so not read here), else from its own documents.
 extractMethodDefIn :: Maybe Doc -> Text -> Text -> MethodSchema -> ((Map Text TypeDef, MethodDef), [Refusal])
 extractMethodDefIn shared namespace pathPrefix = runRead . methodDefRead shared namespace pathPrefix
+
+-- | A method's schema documents, each by the name 'TypeSource' gives it.
+methodDocs :: MethodSchema -> [(Text, Value)]
+methodDocs m =
+  [ (k, v)
+  | (k, Just v) <-
+      [ ("params", methodParams m)
+      , ("returns", Just (methodReturns m))
+      , ("error", methodError m)
+      , ("progress", methodProgress m)
+      , ("input", methodInput m)
+      ]
+  ]
+
+-- | The fallback name of a method's untitled named root, by schema.
+rootFallback :: MethodSchema -> Text -> Text
+rootFallback m = \case
+  "returns" -> methodName m <> "Result"
+  "error" -> methodName m <> "Error"
+  "progress" -> methodName m <> "Progress"
+  "input" -> methodName m <> "Input"
+  other -> methodName m <> other
+
+-- ============================================================================
+-- One name, one type (RETURNS-13)
+-- ============================================================================
+
+-- | RETURNS-13: one name in one namespace is one type. Every name the
+--   methods' schemas define — each @$defs@ entry, and each named root
+--   ('rootNamed') — in the methods' order, then params, returns, error,
+--   progress, input; where two give a name different bodies, both are read
+--   (each in its own document) and their kinds compared, descriptions aside.
+--   Two shapes are a 'TitleCollision' naming the first and the second; the
+--   same shape is one type (the reader keeps the first).
+--
+--   The bodies are compared as JSON first, so a namespace whose methods
+--   carry the same @$defs@ again and again (as schemars writes them) costs
+--   one equality test a copy, not a read.
+checkTitles :: Text -> [MethodSchema] -> Either IRBuildError ()
+checkTitles namespace methods = mapM_ checkName (Map.toList byName)
+  where
+    byName :: Map Text [(Value, KM.KeyMap Value, TypeSource)]
+    byName = Map.fromListWith (flip (++))
+      [ (name, [(body, docObj, TypeSource (methodName m) which)])
+      | m <- methods
+      , (which, doc@(Object docObj)) <- methodDocs m
+      , (name, body) <- defsOf docObj ++ rootOf m which doc
+      ]
+    defsOf docObj = case KM.lookup "$defs" docObj <|> KM.lookup "definitions" docObj of
+      Just (Object d) -> [ (K.toText k, v) | (k, v) <- KM.toList d ]
+      _ -> []
+    rootOf m which doc
+      | which == "params" = []
+      | otherwise = maybe [] pure (rootNamed (rootFallback m which) doc)
+
+    checkName (name, occurrences) = case occurrences of
+      [] -> Right ()
+      (first : rest) -> () <$ foldM (compareWith name) (first, Nothing) rest
+
+    -- the first occurrence, and its kind once read
+    compareWith name (first@(b0, d0, s0), k0) (b, d, s)
+      | b == b0 = Right (first, k0)
+      | otherwise =
+          let kind0 = maybe (readKindIn namespace d0 name b0) id k0
+              kind = readKindIn namespace d name b
+          in if sameShape kind0 kind
+               then Right (first, Just kind0)
+               else Left TitleCollision
+                 { tcNamespace = namespace, tcTitle = name, tcFirst = s0, tcSecond = s }
+
+-- | Two readings of a name are one type when they agree on everything but
+--   their documentation.
+sameShape :: Maybe TypeKind -> Maybe TypeKind -> Bool
+sameShape a b = fmap undocumented a == fmap undocumented b
+  where
+    undocumented = \case
+      KindStruct fields -> KindStruct (map field fields)
+      KindEnum disc variants repr -> KindEnum disc (map variant variants) repr
+      other -> other
+    field fd = fd { fdDescription = Nothing }
+    variant vd = vd { vdDescription = Nothing, vdFields = map field (vdFields vd) }
 
 methodDefRead :: Maybe Doc -> Text -> Text -> MethodSchema -> SchemaRead (Map Text TypeDef, MethodDef)
 methodDefRead shared namespace pathPrefix method = do
@@ -465,23 +640,26 @@ methodDefRead shared namespace pathPrefix method = do
     readParams shared namespace fullPath (methodParams method) (methodParamSchemas method)
 
   -- Returns: a child's is its client (SYNAPSE-CC-8's RefChild); an rpc
-  -- method's is read whole, and its absence is refused.
-  RootRead returnTypes returnRef streaming <- case methodRole method of
-    MethodRoleRpc -> case methodReturns method of
-      Just v -> readRoot shared namespace (siteReturns fullPath) (name <> "Result") v
-      Nothing -> do
-        refuse (siteReturns fullPath) "returns" Nothing "an rpc method with no returns schema"
-        pure (RootRead Map.empty RefUnknown False)
+  -- method's is read whole (plexus 0.7: every method states it).
+  RootRead returnTypes returnRef <- case methodRole method of
+    MethodRoleRpc ->
+      readRoot shared namespace (siteReturns fullPath) (rootFallback method "returns") (methodReturns method)
     _child -> do
       defs <- case (shared, methodReturns method) of
-        (Nothing, Just (Object o)) -> readDefs (docOf namespace o)
+        (Nothing, Object o) -> readDefs (docOf namespace o)
         _ -> pure Map.empty
-      pure (RootRead defs (RefChild fullPath) False)
+      pure (RootRead defs (RefChild fullPath))
+
+  -- RETURNS-13: the rest of the contract — the error type of a
+  -- Result<T, E> item and the progress type P, each its own document.
+  errorRead <- traverse (readRoot shared namespace (siteError fullPath) (rootFallback method "error")) (methodError method)
+  progressRead <- traverse (readRoot shared namespace (siteProgress fullPath) (rootFallback method "progress")) (methodProgress method)
 
   -- Input: reserved for BIDIR-6; read when a server says it.
-  inputRead <- traverse (readRoot shared namespace (siteInput fullPath) (name <> "Input")) (methodInput method)
+  inputRead <- traverse (readRoot shared namespace (siteInput fullPath) (rootFallback method "input")) (methodInput method)
 
-  let allTypes = Map.unions [paramTypes, returnTypes, maybe Map.empty rrTypes inputRead]
+  let allTypes = Map.unions
+        [paramTypes, returnTypes, maybe Map.empty rrTypes errorRead, maybe Map.empty rrTypes progressRead, maybe Map.empty rrTypes inputRead]
   pure
     ( allTypes
     , MethodDef
@@ -489,9 +667,12 @@ methodDefRead shared namespace pathPrefix method = do
         , mdFullPath = fullPath
         , mdNamespace = namespace
         , mdDescription = Just (methodDescription method)
-        , mdStreaming = streaming
         , mdParams = params
         , mdReturns = returnRef
+        , mdError = rrRef <$> errorRead
+        , mdProgress = rrRef <$> progressRead
+        , mdCardinality = methodCardinality method
+          -- RETURNS-13: the schema's cardinality, never inferred
         , mdBidirType = inferBidirType method
         , mdBidirResponseType = Nothing  -- TODO: could extract from response_type title
         , mdBidirResponseSchema = methodResponseType method

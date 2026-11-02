@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            3.17.3
+version:            4.0.0
 synopsis:           Schema-driven CLI for Plexus RPC servers
 description:        Synapse is the command-line frontend for Plexus RPC. It discovers a
                     server's methods at runtime and builds its commands, help text,
@@ -86,10 +86,13 @@ library
     Synapse.Auth.Loopback
     Synapse.Hold
     Synapse.SchemaStore
+  other-modules:    Paths_plexus_synapse
+  autogen-modules:  Paths_plexus_synapse
   build-depends:
     base >= 4.17 && < 5,
-    -- SYNAPSE-28: setCallRouter, substrateRpcSub, unsubscribe
-    plexus-protocol >= 0.5.5,
+    -- SYNAPSE-28: setCallRouter, substrateRpcSub, unsubscribe; RETURNS-12:
+    -- the plexus 0.7 schema and envelope
+    plexus-protocol >= 0.6,
     aeson >= 2.0 && < 2.3,
     aeson-pretty >= 0.8 && < 0.9,
     text >= 2.0 && < 2.2,
@@ -526,6 +529,33 @@ test-suite ir12-method-role-test
   default-language: GHC2021
   default-extensions:
     OverloadedStrings
+  ghc-options:      -threaded
+
+test-suite ir3-test
+  -- RETURNS-13: IR 3.0. The golden test reads RETURNS-7's conformance
+  -- fixture by sibling path (../plexus-macros/fixtures/conformance/expected/)
+  -- and compares the IR built from its schema.json with its ir.json;
+  -- SYNAPSE_GOLDEN_ACCEPT=1 rewrites ir.json instead. Then one test per row
+  -- of the ticket's Required behavior table.
+  type:             exitcode-stdio-1.0
+  main-is:          IR3Spec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    aeson-pretty >= 0.8 && < 0.9,
+    aeson-qq >= 0.8 && < 0.9,
+    bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
+    filepath >= 1.4 && < 1.6,
+    text >= 2.0 && < 2.2,
+    hspec >= 2.10 && < 2.12
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+    LambdaCase
   ghc-options:      -threaded
 
 test-suite keychain-test
