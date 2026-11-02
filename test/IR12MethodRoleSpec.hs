@@ -190,10 +190,11 @@ main = hspec $ do
           [ "name" .= ("set_status" :: String)
           , "description" .= ("Change a ticket's status" :: String)
           , "hash" .= ("h" :: String)
+          , "returns" .= object [], "cardinality" .= ("one" :: String)
           ] <> extra
         lifted j = case Aeson.fromJSON j :: Aeson.Result MethodSchema of
           Aeson.Error e -> error e
-          Aeson.Success ms -> snd (extractMethodDef "tickets" "tickets" ms)
+          Aeson.Success ms -> either (error . show) snd (extractMethodDef "tickets" "tickets" ms)
         keysOf v = case v of
           Object o -> o
           _ -> KM.empty

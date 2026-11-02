@@ -24,6 +24,7 @@ import qualified Data.Map.Strict as Map
 import Data.Text (Text)
 import qualified Katip
 
+import Plexus07 (renameParamsDef, withContract)
 import Synapse.IR.Builder (buildIR)
 import Synapse.IR.Types (IR)
 import qualified Synapse.Log as Log
@@ -35,8 +36,19 @@ menger20261029 = "test/fixtures/ir-coverage/menger-2026-10-29.schemas.jsonl.gz"
 
 data Row = Row Path PluginSchema
 
+-- | RETURNS-36: a row's schema as plexus 0.7 states it ('withContract': its
+--   methods' cardinality, and returns where a fixture states none; the
+--   captures are 0.6's). One more: menger's chats.inputs of 2026-10-29 names
+--   two types @Message@ — the vocabulary's string in its params, the chat's
+--   message in its returns — which IR 3.0 refuses (RETURNS-13's
+--   TitleCollision, held by IRCoverageSpec on the capture as it was); here
+--   the params' one is @MessageText@, as a 0.7 menger must name one of them.
 instance FromJSON Row where
-  parseJSON = withObject "Row" $ \o -> Row <$> o .: "path" <*> o .: "schema"
+  parseJSON = withObject "Row" $ \o -> do
+    v <- o .: "schema"
+    path <- o .: "path"
+    let v' = if path == ["chats", "inputs"] then renameParamsDef "Message" "MessageText" v else v
+    Row path <$> parseJSON (withContract v')
 
 -- | Every schema of a fixture, by path: a @.jsonl.gz@ one row a line
 --   (gunzipped), a @.json@ an array of rows.

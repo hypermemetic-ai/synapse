@@ -39,6 +39,8 @@ import Synapse.SchemaStore (Plan(..), Store(..), readPlan, writePlan)
 import Plexus.Schema.Recursive (MethodSchema(..))
 
 import IRFixture
+import Plexus07 (methodAs07, withContract)
+import Synapse.IR.Builder (IRBuildError(..), TypeSource(..), buildIRFromSchema)
 import MockService
 
 main :: IO ()
@@ -110,10 +112,18 @@ main = hspec $ do
       mdReturns <$> method ir "tickets.inputs" `shouldBe` Just (RefChild "tickets.inputs")
       irRefusals ir `shouldBe` []
 
-    it "an rpc method with no returns is refused" $ do
-      ir <- irOf "no-returns.json" ["x"]
-      irRefusals ir `shouldBe` [Refusal "x.schema returns" "returns" Nothing "an rpc method with no returns schema"]
-      mdReturns <$> method ir "x.schema" `shouldBe` Just RefUnknown
+    -- RETURNS-36: plexus 0.7 requires returns, so such a method is no 0.7
+    -- schema at all: refused by plexus-protocol before the builder sees it
+    it "an rpc method with no returns is no 0.7 schema: it does not parse" $ do
+      Right rows <- eitherDecode <$> BL.readFile (fixtures </> "no-returns.json") :: IO (Either String [Value])
+      let methodsOf = \case
+            Object r | Just (Object sch) <- KM.lookup "schema" r, Just (Array ms) <- KM.lookup "methods" sch -> foldr (:) [] ms
+            _ -> []
+          ms = map methodAs07 (concatMap methodsOf rows)
+      ms `shouldNotBe` []
+      forM_ ms $ \m -> case Aeson.fromJSON m :: Aeson.Result MethodSchema of
+        Aeson.Error e -> e `shouldContain` "returns"
+        Aeson.Success _ -> expectationFailure "a method with no returns parsed"
 
     it "a struct root is a type, and no RefNamed dangles" $ do
       ir <- irOf "hashes.json" ["tickets"]
@@ -139,10 +149,10 @@ main = hspec $ do
       encode plain `shouldNotSatisfy` (contains "mdInjected")
       kindOf ir "tickets.Token" `shouldSatisfy` isJust
       -- plexus-protocol reads it, and writes it back only when present
-      let Right ms = Aeson.eitherDecode "{\"name\":\"chat\",\"input\":{\"type\":\"string\"}}" :: Either String MethodSchema
+      let Right ms = Aeson.eitherDecode "{\"name\":\"chat\",\"returns\":{},\"cardinality\":\"one\",\"input\":{\"type\":\"string\"}}" :: Either String MethodSchema
       methodInput ms `shouldBe` Just (obj [("type", "string")])
       encode ms `shouldSatisfy` (contains "\"input\"")
-      let Right bare = Aeson.eitherDecode "{\"name\":\"plain\"}" :: Either String MethodSchema
+      let Right bare = Aeson.eitherDecode "{\"name\":\"plain\",\"returns\":{},\"cardinality\":\"one\"}" :: Either String MethodSchema
       encode bare `shouldNotSatisfy` (contains "\"input\"")
 
   describe "the JSON type (a serde_json::Value)" $ do
@@ -227,10 +237,29 @@ main = hspec $ do
         [ s | s <- unknownSites ir, not (Set.member s refused), null typesLeftOut ] `shouldBe` []
 
   describe "menger, 2026-10-29, whole" $ do
-    it "is refused at exactly the walk's 21 sites; the root's carriers are the JSON type" $ do
+    -- RETURNS-13: one title in one namespace is one type. The capture's
+    -- chats.inputs names two (Message: the vocabulary's string in params,
+    -- the chat's message in returns); 2.1 kept the first, 3.0 refuses.
+    -- mengerIR builds it with the params' one renamed (IRFixture).
+    it "as captured, chats.inputs puts two types under Message: the build fails naming both" $ do
+      rows <- map (either error id . eitherDecode) . filter (not . BL.null) . BL.lines . GZ.decompress <$> BL.readFile menger20261029 :: IO [Value]
+      let inputs = [ sch | Object r <- rows, KM.lookup "path" r == Just (toJSON (["chats", "inputs"] :: [Text])), Just sch <- [KM.lookup "schema" r] ]
+      [schema] <- pure [ ps | v <- inputs, Aeson.Success ps <- [Aeson.fromJSON (withContract v)] ]
+      case buildIRFromSchema "menger" ["chats", "inputs"] schema of
+        Left err -> do
+          (tcNamespace err, tcTitle err) `shouldBe` ("chats.inputs", "Message")
+          (tcFirst err, tcSecond err) `shouldBe` (TypeSource "list" "params", TypeSource "list" "returns")
+        Right _ -> expectationFailure "two types under one title built"
+    -- RETURNS-36: 2.1 refused the walk at the 21 schema methods' returns,
+    -- which 0.6 left unstated; a 0.7 schema states every method's returns
+    -- (the captures are given `{}` for them, 'withContract'), so the walk
+    -- is refused nowhere and those 21 return the JSON type.
+    it "is refused nowhere; the 21 schema methods 2.1 refused return the JSON type; the root's carriers are the JSON type" $ do
       ir <- mengerIR
-      map (\r -> (rfSite r, rfKeyword r)) (irRefusals ir) `shouldBe` expectedMengerRefusals
-      sort (unknownSites ir) `shouldBe` sort (map fst expectedMengerRefusals)
+      map (\r -> (rfSite r, rfKeyword r)) (irRefusals ir) `shouldBe` []
+      unknownSites ir `shouldBe` []
+      [ mdReturns <$> Map.lookup (T.dropEnd (T.length " returns") site) (irMethods ir) | (site, _) <- expectedMengerRefusals ]
+        `shouldBe` replicate 21 (Just RefJson)
       danglingRefs ir `shouldBe` []
       param ir ".call" "params" `shouldBe` Just RefJson
       fieldType ir ".PlexusStreamItem" "data" "content" `shouldBe` Just RefJson
@@ -253,9 +282,9 @@ main = hspec $ do
       length [ () | md <- Map.elems (irMethods ir), ip <- mdInjected md ] `shouldBe` 176
       [ pdName p | md <- Map.elems (irMethods ir), p <- mdParams md, pdName p `elem` ["auth", "user"] ] `shouldBe` []
 
-    it "equals its golden (menger-2026-10-29.ir-2.1.json)" $ do
+    it "equals its golden (menger-2026-10-29.ir-3.0.json)" $ do
       ir <- mengerIR
-      let golden = fixtures </> "menger-2026-10-29.ir-2.1.json"
+      let golden = fixtures </> "menger-2026-10-29.ir-3.0.json"
           bytes = encodePretty' defConfig { confCompare = compare } ir { irMetadata = Nothing }
       write <- lookupEnv "IR_GOLDEN_WRITE"
       exists <- doesFileExist golden
@@ -287,14 +316,23 @@ main = hspec $ do
                     Nothing -> moved n == moved v
             , not (any same candidates) ]
           moved = norm . dropKeys ["tdNamespace", "tdDescription"]
-      -- methods: the same JSON but for the keys 2.1 adds and the injected params it moves
+      -- methods: the same JSON but for the keys 2.1 adds and the injected
+      -- params it moves, and 3.0's contract in place of 2.0's streaming
+      -- guess (RETURNS-13: mdError, mdProgress, mdCardinality; the 2026-10-29
+      -- schemas state no error or progress)
           methodMismatches =
             [ "method " <> T.unpack key <> ":\n  old " <> show old' <> "\n  new " <> show new'
             | (k, v) <- KM.toList oldMethods
             , let key = K.toText k
-                  old' = norm (dropInjected v)
-                  new' = maybe Null (norm . dropKeys ["mdInjected", "mdInput"] . toJSON) (Map.lookup key (irMethods ir))
+                  old' = norm (dropKeys ["mdStreaming"] (dropInjected v))
+                  new' = maybe Null (norm . unrename . dropKeys ["mdInjected", "mdInput", "mdError", "mdProgress", "mdCardinality"] . toJSON) (Map.lookup key (irMethods ir))
             , not (changedIn20 (dropInjected v)), old' /= new' ]
+          -- the name IRFixture gave chats.inputs' params' Message, back
+          unrename = \case
+            String "MessageText" -> String "Message"
+            Object x -> Object (KM.map unrename x)
+            Array x -> Array (fmap unrename x)
+            x -> x
       mapM_ putStrLn (take 5 (typeMismatches ++ methodMismatches))
       (length typeMismatches, length methodMismatches) `shouldBe` (0, 0)
       -- and the guard is not vacuous: most of 2.0 was typed
@@ -305,7 +343,7 @@ main = hspec $ do
     it "a plan whose IR is 2.0 (3.16.0's) is read as no plan" $
       withSystemTempDirectory "cc8-store" $ \dir -> do
         let st = Store dir
-            Right ms = Aeson.eitherDecode "{\"name\":\"get\"}" :: Either String MethodSchema
+            Right ms = Aeson.eitherDecode "{\"name\":\"get\",\"returns\":{},\"cardinality\":\"one\"}" :: Either String MethodSchema
             plan v = Plan ms ["tickets", "get"] Nothing (Just emptyIR { irVersion = v })
         createDirectoryIfMissing True (dir </> "plans")
         writePlan st ["tickets", "get"] (plan "2.0")
@@ -355,7 +393,7 @@ smallFixtures :: [(FilePath, [Text])]
 smallFixtures =
   [ ("transition-field.json", ["tickets"]), ("answer-source.json", ["tickets"]), ("reply.json", ["tickets"])
   , ("hash-event.json", ["tickets"]), ("login-flow.json", ["auth"]), ("schema-result.json", ["tickets"])
-  , ("unreadable-oneof.json", ["tickets"]), ("static-child.json", ["tickets"]), ("no-returns.json", ["x"])
+  , ("unreadable-oneof.json", ["tickets"]), ("static-child.json", ["tickets"])
   , ("hashes.json", ["tickets"]), ("injected.json", ["tickets"])
   , ("untyped.json", ["tickets"]), ("json.json", ["tickets"]), ("theme-map.json", ["themes"])
   , ("component-preview.json", ["tickets"]), ("bounds.json", ["tickets"]), ("allof.json", ["tickets"])

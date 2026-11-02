@@ -35,6 +35,7 @@ import System.Environment (lookupEnv, setEnv)
 import Test.Hspec
 
 import Plexus.Auth
+import Plexus.RemoteError (DenyReason(..), RemoteError(..), renderRemoteError)
 import Plexus.Schema.Recursive (ChildSummary(..), MethodSchema(..), PluginSchema(..), MethodRole(..), hasAuthColumns)
 import Plexus.Types (PlexusStreamItem(..), itemRefusal)
 import Synapse.Endpoint (plainAt)
@@ -46,6 +47,7 @@ import qualified Synapse.Identity.Session as Session
 import qualified Synapse.Log as Log
 
 import MockService
+import Plexus07 (methodWithContract, withContract)
 
 main :: IO ()
 main = do
@@ -62,8 +64,10 @@ main = do
 -- Fixtures
 -- ============================================================================
 
+-- | A fixture as plexus 0.7 states it (RETURNS-36: each method's
+-- cardinality and returns; 'withContract'), parsed.
 parse :: A.FromJSON a => Value -> a
-parse v = case fromJSON v of
+parse v0 = let v = withContract v0 in case fromJSON v of
   Success x -> x
   Error e -> error e
 
@@ -99,12 +103,16 @@ worker = Whoami
   , whoName = Just "worker-1", whoAgent = Just "worker-1"
   , whoMemberships = [("editor", "MENGER")], whoCeiling = ["editor@MENGER-12"] }
 
--- AUTH-2's refusal, as the subscription notification's result carries it
+-- AUTH-2's refusal, as the subscription notification's result carries it:
+-- plexus 0.7's typed error (RETURNS-36: a missing grant is a forbidden
+-- RemoteError) with AUTH-2's own fields beside it
 refusalItem :: Value
-refusalItem = [aesonQQ|{"type":"error","error_kind":"forbidden",
+refusalItem = [aesonQQ|{"type":"error","recoverable":false,
+  "error":{"kind":"forbidden","reason":"missing_grant","grant":"tickets.set_status","scope":"IDENTITY",
+           "roles":["editor","admin"],"held_on":["MENGER"]},
+  "error_kind":"forbidden",
   "grant":"tickets.set_status","scope":"IDENTITY",
   "roles":["editor","admin"],"held_on":["MENGER"],
-  "message":"needs tickets.set_status on IDENTITY",
   "metadata":{"provenance":["menger"],"plexus_hash":"h","timestamp":0}}|]
 
 logger :: IO Log.Logger
@@ -139,7 +147,8 @@ spec = do
             "children":[{"namespace":"auth","methods":[{"name":"providers","public":true},{"name":"login","public":true}]}]}|] :: PluginSchema
       map csNamespace (maybe [] id (psChildren root)) `shouldBe` ["auth"]
       psVersion root `shouldBe` ""
-      let m = parse [aesonQQ|{"name":"login","public":true}|] :: MethodSchema
+      -- RETURNS-36: a 0.7 method states its contract even in the anonymous view
+      let m = parse (methodWithContract [aesonQQ|{"name":"login","public":true}|]) :: MethodSchema
       (methodName m, methodPublic m, methodDescription m, methodRole m) `shouldBe` ("login", True, "", MethodRoleRpc)
     it "writes the new fields back only when present" $ do
       let v = toJSON (methodNamed "set_status" todaysTickets)
@@ -174,18 +183,26 @@ spec = do
         , refusalRoles = ["editor", "admin"], refusalHeldOn = ["MENGER"], refusalCeiling = []
         , refusalMessage = "needs tickets.set_status on IDENTITY" }
       case item of
-        StreamError _ _ msg _ -> msg `shouldBe` "needs tickets.set_status on IDENTITY"
+        StreamError _ _ err _ -> do
+          err `shouldBe` Forbidden (MissingGrant "tickets.set_status" "IDENTITY" ["editor", "admin"] ["MENGER"])
+          renderRemoteError err `shouldBe` "forbidden: needs tickets.set_status on IDENTITY"
         _ -> expectationFailure "a refusal is still an error item"
+    it "the typed error alone names the same refusal" $ do
+      let typed = parse [aesonQQ|{"type":"error","recoverable":false,
+                    "error":{"kind":"forbidden","reason":"missing_grant","grant":"tickets.set_status","scope":"IDENTITY",
+                             "roles":["editor","admin"],"held_on":["MENGER"]},
+                    "metadata":{"provenance":["menger"],"plexus_hash":"h","timestamp":0}}|] :: PlexusStreamItem
+      itemRefusal typed `shouldBe` itemRefusal (parse refusalItem :: PlexusStreamItem)
     it "parses as written in the ticket, without metadata" $ do
       let bare = parse [aesonQQ|{"type":"error","error_kind":"forbidden","grant":"tickets.set_status",
                                  "scope":"IDENTITY","roles":["editor","admin"],"held_on":["MENGER"],
-                                 "message":"needs tickets.set_status on IDENTITY"}|] :: PlexusStreamItem
+                                 "error":{"kind":"forbidden","reason":"missing_grant","grant":"tickets.set_status","scope":"IDENTITY"}}|] :: PlexusStreamItem
       fmap refusalGrant (itemRefusal bare) `shouldBe` Just (Just "tickets.set_status")
     it "any other error has no refusal, and builds as before" $ do
-      let plain = parse [aesonQQ|{"type":"error","message":"Activation not found: auth",
+      let plain = parse [aesonQQ|{"type":"error","error":{"kind":"activation_not_found","activation":"auth"},
                     "metadata":{"provenance":["menger"],"plexus_hash":"h","timestamp":0},"recoverable":false}|]
       itemRefusal plain `shouldBe` Nothing
-      itemRefusal (StreamError "h" (parse [aesonQQ|["m"]|]) "boom" False) `shouldBe` Nothing
+      itemRefusal (StreamError "h" (parse [aesonQQ|["m"]|]) (Execution "boom") False) `shouldBe` Nothing
     it "keeps a refusal's fields when written back" $ do
       let item = parse refusalItem :: PlexusStreamItem
       fmap itemRefusal (decode (A.encode item)) `shouldBe` Just (itemRefusal item)

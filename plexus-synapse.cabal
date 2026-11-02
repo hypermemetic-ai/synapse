@@ -584,7 +584,7 @@ test-suite auth-test
   -- service in miniature (test/MockService.hs) on ports of their own.
   type:             exitcode-stdio-1.0
   main-is:          AuthSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
@@ -612,7 +612,7 @@ test-suite find-test
   -- terminal and piped; a caller's view; the IR cache's hash check.
   type:             exitcode-stdio-1.0
   main-is:          FindSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-depends:
     base >= 4.17 && < 5,
     plexus-synapse,
@@ -668,7 +668,7 @@ test-suite hold-test
   -- a renamed method falls back and answers.
   type:             exitcode-stdio-1.0
   main-is:          HoldSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -700,7 +700,7 @@ test-suite pipe-test
   -- resent, a write that went out exit 75).
   type:             exitcode-stdio-1.0
   main-is:          PipeSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -730,7 +730,7 @@ test-suite output-test
   -- nothing sent.
   type:             exitcode-stdio-1.0
   main-is:          OutputSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -777,7 +777,7 @@ test-suite tls-test
   -- name refused at the handshake. Pending without openssl.
   type:             exitcode-stdio-1.0
   main-is:          TlsSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
@@ -808,7 +808,7 @@ benchmark ir-bench
   -- 20 times from memory — median, p90, bytes allocated per build.
   type:             exitcode-stdio-1.0
   main-is:          IRBench.hs
-  other-modules:    IRFixture
+  other-modules:    IRFixture, Plexus07
   build-depends:
     base >= 4.17 && < 5,
     plexus-synapse,
@@ -833,7 +833,7 @@ test-suite ir-coverage-test
   -- bare object: exit 65.
   type:             exitcode-stdio-1.0
   main-is:          IRCoverageSpec.hs
-  other-modules:    IRFixture, MockService
+  other-modules:    IRFixture, MockService, Plexus07
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,

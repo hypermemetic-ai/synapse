@@ -614,7 +614,7 @@
         "type": "object"
        }
       ],
-      "title": "ThemesEvent"
+      "title": "ThemesGetEvent"
      },
      "role": {
       "kind": "rpc"

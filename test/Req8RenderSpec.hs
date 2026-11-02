@@ -100,7 +100,7 @@ main = do
         putStrLn $ "  [FAIL] " <> name <> ": " <> reason
         IORef.modifyIORef' failures (+ 1)
 
-  let (types, md) = extractMethodDef "svc" "svc" (head (psMethods fixture))
+  let (types, md) = either (error . show) id (extractMethodDef "svc" "svc" (head (psMethods fixture)))
       ir = emptyIR { irMethods = Map.singleton (mdFullPath md) md, irTypes = types }
       out = renderMethodHelp ir md
 

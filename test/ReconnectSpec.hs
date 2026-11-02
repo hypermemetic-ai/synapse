@@ -34,7 +34,7 @@ import System.Timeout (timeout)
 import Test.Hspec
 
 import Plexus.Client (SubstrateConfig(..))
-import Plexus.Schema.Recursive (MethodSchema(..), MethodRole(..))
+import Plexus.Schema.Recursive (Cardinality(..), MethodSchema(..), MethodRole(..))
 import qualified Plexus.Transport as ST
 import qualified Plexus.Types as PT
 import Synapse.Reconnect
@@ -151,7 +151,8 @@ sinceShape = CallShape True True True
 method :: Text -> Maybe Text -> Maybe Value -> MethodSchema
 method name grp params = MethodSchema
   { methodName = name, methodDescription = "", methodHash = "h", methodParams = params
-  , methodReturns = Nothing, methodStreaming = False, methodBidirectional = False
+  , methodReturns = Object mempty, methodError = Nothing, methodProgress = Nothing
+  , methodCardinality = CardinalityOne, methodBidirectional = False, methodHttpMethod = "POST"
   , methodRequestType = Nothing, methodResponseType = Nothing, methodDeprecation = Nothing
   , methodParamSchemas = Nothing, methodRole = MethodRoleRpc, methodLongDescription = Nothing
   , methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False

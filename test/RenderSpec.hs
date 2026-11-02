@@ -13,7 +13,7 @@
 -- service that says none of the new fields still renders sensibly.
 module Main (main) where
 
-import Data.Aeson (Value)
+import Data.Aeson (Value(..))
 import Data.Aeson.QQ.Simple (aesonQQ)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust)
@@ -22,7 +22,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import Test.Hspec
 
-import Plexus.Schema.Recursive (ChildSummary(..), MethodExample(..), MethodRole(..), MethodSchema(..), PluginSchema(..))
+import Plexus.Schema.Recursive (Cardinality(..), ChildSummary(..), MethodExample(..), MethodRole(..), MethodSchema(..), PluginSchema(..))
 import Synapse.Algebra.Render (Listing(..), renderListing, renderSchema, defaultStyle, summarize, fitText)
 import Synapse.CLI.Help (MethodPage(..), renderMethodPage, renderExample, shellQuote)
 import Synapse.IR.Builder (extractMethodDef)
@@ -31,7 +31,8 @@ import Synapse.IR.Types
 method :: Text -> Text -> Maybe Value -> MethodSchema
 method name desc params = MethodSchema
   { methodName = name, methodDescription = desc, methodHash = "h", methodParams = params
-  , methodReturns = Nothing, methodStreaming = True, methodBidirectional = False
+  , methodReturns = Object mempty, methodError = Nothing, methodProgress = Nothing
+  , methodCardinality = CardinalityMany, methodBidirectional = False, methodHttpMethod = "POST"
   , methodRequestType = Nothing, methodResponseType = Nothing, methodDeprecation = Nothing
   , methodParamSchemas = Nothing, methodRole = MethodRoleRpc
   , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False
@@ -127,7 +128,7 @@ setStatus = (method "set_status" "Set a ticket's status (not a doc's: a doc has 
 
 pageOf :: Bool -> MethodSchema -> (MethodDef, Text)
 pageOf caller ms =
-  let (types, md) = extractMethodDef "tickets" "tickets" ms
+  let (types, md) = either (error . show) id (extractMethodDef "tickets" "tickets" ms)
       ir = emptyIR { irMethods = Map.singleton (mdFullPath md) md, irTypes = types }
       page = MethodPage
         { mpProgram = "synapse -P 4455", mpTarget = "menger tickets " <> methodName ms
@@ -143,7 +144,7 @@ oldPage =
               "properties": {"id": {"type": "string", "description": "Ticket id, e.g. MNG-2"},
                              "status": {"type": "string", "description": "New status"}},
               "required": ["id", "status"]}|]))
-      (types, md) = extractMethodDef "tickets" "tickets" old
+      (types, md) = either (error . show) id (extractMethodDef "tickets" "tickets" old)
       ir = emptyIR { irMethods = Map.singleton (mdFullPath md) md, irTypes = types }
       page = MethodPage { mpProgram = "synapse", mpTarget = "menger tickets set_status", mpSchema = Nothing, mpCaller = False }
   in renderMethodPage page ir md

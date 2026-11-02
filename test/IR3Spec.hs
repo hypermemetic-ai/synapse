@@ -41,12 +41,12 @@ import Synapse.IR.Types
 -- The fixture
 -- ============================================================================
 
-fixtureDir :: FilePath
-fixtureDir = ".." </> "plexus-macros" </> "fixtures" </> "conformance" </> "expected"
-
-schemaPath, irPath :: FilePath
-schemaPath = fixtureDir </> "schema.json"
-irPath = fixtureDir </> "ir.json"
+-- | The fixture's directory: by sibling path, or wherever
+--   @CONFORMANCE_FIXTURE_DIR@ says (a copy, to check an ir.json before it
+--   is committed beside the fixture).
+fixtureDirIO :: IO FilePath
+fixtureDirIO = maybe (".." </> "plexus-macros" </> "fixtures" </> "conformance" </> "expected") id
+  <$> lookupEnv "CONFORMANCE_FIXTURE_DIR"
 
 -- | The fixture's IR: the activation at path @conformance@ — what
 --   @synapse -i <backend> conformance@ builds when a backend serves it there
@@ -61,6 +61,9 @@ renderIR ir = encodePretty' defConfig { confIndent = Spaces 2, confCompare = com
 
 main :: IO ()
 main = do
+  fixtureDir <- fixtureDirIO
+  let schemaPath = fixtureDir </> "schema.json"
+      irPath = fixtureDir </> "ir.json"
   schemaBytes <- LBS.readFile schemaPath
   schema <- either (fail . ((schemaPath <> ": ") <>)) pure (eitherDecode schemaBytes)
   ir <- either (fail . T.unpack . renderIRBuildError) pure (fixtureIR schema)
@@ -72,15 +75,15 @@ main = do
     _ -> pure ()
   golden <- LBS.readFile irPath
   hspec $ do
-    goldenSpec ir golden
+    goldenSpec schemaPath irPath ir golden
     tableSpec ir
 
 -- ============================================================================
 -- Golden
 -- ============================================================================
 
-goldenSpec :: IR -> LBS.ByteString -> Spec
-goldenSpec ir golden = describe "golden: the conformance fixture's IR" $ do
+goldenSpec :: FilePath -> FilePath -> IR -> LBS.ByteString -> Spec
+goldenSpec schemaPath irPath ir golden = describe "golden: the conformance fixture's IR" $ do
   it "equals expected/ir.json byte for byte" $
     unless (renderIR ir == golden) $ expectationFailure $
       "IR built from " <> schemaPath <> " differs from " <> irPath
@@ -97,8 +100,11 @@ goldenSpec ir golden = describe "golden: the conformance fixture's IR" $ do
       [ "conformance.count", "conformance.load", "conformance.lookup", "conformance.ping"
       , "conformance.scan", "conformance.schema", "conformance.warm" ]
 
-  it "carries the schema's own hash for the plugin" $
-    fmap phiHash (Map.lookup "conformance" =<< irPluginHashes ir) `shouldBe` Just "60d7e85ced34c0c7"
+  it "carries the schema's own hash for the plugin" $ do
+    -- the fixture's hash moves with every change to the fixture (RETURNS-10);
+    -- read it from schema.json rather than pin one
+    schema <- either fail pure . eitherDecode =<< LBS.readFile schemaPath
+    fmap phiHash (Map.lookup "conformance" =<< irPluginHashes ir) `shouldBe` Just (psHash schema)
 
   it "no MethodDef carries mdStreaming" $
     forM_ (Map.elems (irMethods ir)) $ \md -> case Aeson.toJSON md of
@@ -109,7 +115,7 @@ goldenSpec ir golden = describe "golden: the conformance fixture's IR" $ do
     danglingRefs ir `shouldBe` []
 
   it "reports synapse's own version" $
-    synapseVersion `shouldBe` "3.15.0"
+    synapseVersion `shouldBe` "4.0.0"
 
 -- ============================================================================
 -- The Required behavior table, one row at a time
@@ -150,9 +156,9 @@ tableSpec fixture = describe "IR 3.0 Required behavior" $ do
           { "type": "object", "properties": { "r": { "type": "number" }, "type": { "type": "string", "const": "circle" } }, "required": ["type", "r"] },
           { "type": "object", "properties": { "type": { "type": "string", "const": "dot" } }, "required": ["type"] } ] }|]]
       returnsOf ir `shouldBe` named "t" "Shape"
-      kindOf ir "t.Shape" `shouldBe` Just (KindEnum "type"
-        [ VariantDef "circle" Nothing [FieldDef "r" (RefPrimitive "number" Nothing) Nothing True Nothing]
-        , VariantDef "dot" Nothing [] ])
+      kindOf ir "t.Shape" `shouldBe` Just (taggedEnum "type"
+        [ variant "circle" Nothing [FieldDef "r" (RefPrimitive "number" Nothing) Nothing True Nothing]
+        , variant "dot" Nothing [] ])
 
     it "a string enum" $ do
       ir <- build [withReturns "one" [aesonQQ|{ "title": "Level", "type": "string", "enum": ["low", "high"] }|]]
@@ -191,32 +197,33 @@ tableSpec fixture = describe "IR 3.0 Required behavior" $ do
       returnsOf ir `shouldBe` RefOptional (named "t" "Pong")
       fmap isStruct (kindOf ir "t.Pong") `shouldBe` Just True
 
-    it "any value ({})" $ do
+    it "any value ({}): the JSON type (IR 2.1's RefJson)" $ do
       ir <- build [withReturns "one" [aesonQQ|{}|]]
-      returnsOf ir `shouldBe` RefAny
+      returnsOf ir `shouldBe` RefJson
       Map.keys (irTypes ir) `shouldBe` []
 
-    it "the fixture's schema method: SchemaResult, an untagged union, is a named alias to any; its members are TypeDefs" $ do
+    it "the fixture's schema method: SchemaResult, an untagged union of its members (IR 2.1's untagged form); its members are TypeDefs" $ do
       fmap mdReturns (Map.lookup "conformance.schema" (irMethods fixture))
         `shouldBe` Just (named "conformance" "SchemaResult")
-      kindOf fixture "conformance.SchemaResult" `shouldBe` Just (KindAlias RefAny)
+      kindOf fixture "conformance.SchemaResult" `shouldBe` Just (untaggedEnum
+        [ ("PluginSchema", named "conformance" "PluginSchema"), ("MethodSchema", named "conformance" "MethodSchema") ])
       fmap isStruct (kindOf fixture "conformance.PluginSchema") `shouldBe` Just True
       fmap isStruct (kindOf fixture "conformance.MethodSchema") `shouldBe` Just True
 
-    it "an untagged union is a named alias to any, never a partial enum" $ do
+    it "an untagged union is IR 2.1's untagged enum, each variant its type, never a partial enum" $ do
       ir <- build [withReturns "one" [aesonQQ|{ "title": "Either", "anyOf": [ { "$ref": "#/$defs/A" }, { "$ref": "#/$defs/B" } ],
           "$defs": { "A": { "type": "object", "properties": { "a": { "type": "string" } }, "required": ["a"] },
                      "B": { "type": "object", "properties": { "b": { "type": "string" } }, "required": ["b"] } } }|]]
       returnsOf ir `shouldBe` named "t" "Either"
-      kindOf ir "t.Either" `shouldBe` Just (KindAlias RefAny)
+      kindOf ir "t.Either" `shouldBe` Just (untaggedEnum [("A", named "t" "A"), ("B", named "t" "B")])
       danglingRefs ir `shouldBe` []
 
   describe "error present → mdError = Just ref with TypeDef; absent → Nothing" $ do
     it "lookup's error is conformance.LookupError, a tagged enum" $ do
       fmap mdError (Map.lookup "conformance.lookup" (irMethods fixture))
         `shouldBe` Just (Just (named "conformance" "LookupError"))
-      kindOf fixture "conformance.LookupError" `shouldBe` Just (KindEnum "type"
-        [ VariantDef "not_found" Nothing [FieldDef "id" (RefPrimitive "string" Nothing) Nothing True Nothing] ])
+      kindOf fixture "conformance.LookupError" `shouldBe` Just (taggedEnum "type"
+        [ variant "not_found" Nothing [FieldDef "id" (RefPrimitive "string" Nothing) Nothing True Nothing] ])
 
     it "scan's and load's errors have TypeDefs" $ do
       fmap mdError (Map.lookup "conformance.scan" (irMethods fixture)) `shouldBe` Just (Just (named "conformance" "ScanError"))
@@ -232,8 +239,8 @@ tableSpec fixture = describe "IR 3.0 Required behavior" $ do
     it "load's progress is conformance.LoadStep, a tagged enum" $ do
       fmap mdProgress (Map.lookup "conformance.load" (irMethods fixture))
         `shouldBe` Just (Just (named "conformance" "LoadStep"))
-      kindOf fixture "conformance.LoadStep" `shouldBe` Just (KindEnum "type"
-        [ VariantDef "batch" Nothing
+      kindOf fixture "conformance.LoadStep" `shouldBe` Just (taggedEnum "type"
+        [ variant "batch" Nothing
             [ FieldDef "done" (RefPrimitive "integer" (Just "uint32")) Nothing True Nothing
             , FieldDef "of" (RefPrimitive "integer" (Just "uint32")) Nothing True Nothing ] ])
 
@@ -248,10 +255,10 @@ tableSpec fixture = describe "IR 3.0 Required behavior" $ do
 
   describe "tagged enum with any tag name → keDiscriminator = the property whose const every variant carries" $ do
     it "plexus-core's MethodRole (in the fixture's SchemaResult) is tagged by kind" $
-      kindOf fixture "conformance.MethodRole" `shouldBe` Just (KindEnum "kind"
-        [ VariantDef "rpc" Nothing []
-        , VariantDef "static_child" Nothing []
-        , VariantDef "dynamic_child" Nothing
+      kindOf fixture "conformance.MethodRole" `shouldBe` Just (taggedEnum "kind"
+        [ variant "rpc" Nothing []
+        , variant "static_child" Nothing []
+        , variant "dynamic_child" Nothing
             [ FieldDef "list_method" (RefOptional (RefPrimitive "string" Nothing)) Nothing False Nothing
             , FieldDef "search_method" (RefOptional (RefPrimitive "string" Nothing)) Nothing False Nothing ] ])
 
@@ -259,26 +266,26 @@ tableSpec fixture = describe "IR 3.0 Required behavior" $ do
       ir <- build [withReturns "one" [aesonQQ|{ "title": "Event", "oneOf": [
           { "type": "object", "properties": { "kind": { "type": "string", "const": "created" }, "id": { "type": "string" } }, "required": ["kind", "id"] },
           { "type": "object", "properties": { "kind": { "type": "string", "const": "deleted" } }, "required": ["kind"] } ] }|]]
-      kindOf ir "t.Event" `shouldBe` Just (KindEnum "kind"
-        [ VariantDef "created" Nothing [FieldDef "id" (RefPrimitive "string" Nothing) Nothing True Nothing]
-        , VariantDef "deleted" Nothing [] ])
+      kindOf ir "t.Event" `shouldBe` Just (taggedEnum "kind"
+        [ variant "created" Nothing [FieldDef "id" (RefPrimitive "string" Nothing) Nothing True Nothing]
+        , variant "deleted" Nothing [] ])
 
     it "an adjacently tagged enum: the tag, with its content a field" $ do
       ir <- build [withReturns "one" [aesonQQ|{ "title": "Msg", "oneOf": [
           { "type": "object", "properties": { "t": { "type": "string", "const": "text" }, "c": { "type": "string" } }, "required": ["t", "c"] },
           { "type": "object", "properties": { "t": { "type": "string", "const": "count" }, "c": { "type": "integer" } }, "required": ["t", "c"] } ] }|]]
-      kindOf ir "t.Msg" `shouldBe` Just (KindEnum "t"
-        [ VariantDef "text" Nothing [FieldDef "c" (RefPrimitive "string" Nothing) Nothing True Nothing]
-        , VariantDef "count" Nothing [FieldDef "c" (RefPrimitive "integer" Nothing) Nothing True Nothing] ])
+      kindOf ir "t.Msg" `shouldBe` Just (taggedEnum "t"
+        [ variant "text" Nothing [FieldDef "c" (RefPrimitive "string" Nothing) Nothing True Nothing]
+        , variant "count" Nothing [FieldDef "c" (RefPrimitive "integer" Nothing) Nothing True Nothing] ])
 
     it "variants by $ref" $ do
       ir <- build [withReturns "one" [aesonQQ|{ "title": "Event", "oneOf": [ { "$ref": "#/$defs/Up" }, { "$ref": "#/$defs/Down" } ],
           "$defs": {
             "Up": { "type": "object", "properties": { "op": { "type": "string", "const": "up" }, "by": { "type": "integer" } }, "required": ["op", "by"] },
             "Down": { "type": "object", "properties": { "op": { "type": "string", "const": "down" } }, "required": ["op"] } } }|]]
-      kindOf ir "t.Event" `shouldBe` Just (KindEnum "op"
-        [ VariantDef "up" Nothing [FieldDef "by" (RefPrimitive "integer" Nothing) Nothing True Nothing]
-        , VariantDef "down" Nothing [] ])
+      kindOf ir "t.Event" `shouldBe` Just (taggedEnum "op"
+        [ variant "up" Nothing [FieldDef "by" (RefPrimitive "integer" Nothing) Nothing True Nothing]
+        , variant "down" Nothing [] ])
 
   describe "newtype variant over a struct → variant fields = the struct's fields (from $defs)" $ do
     it "the 2020-12 form: $ref beside the tag" $ do
@@ -286,24 +293,24 @@ tableSpec fixture = describe "IR 3.0 Required behavior" $ do
           { "type": "object", "properties": { "type": { "type": "string", "const": "moved" } }, "$ref": "#/$defs/Move", "required": ["type"] },
           { "type": "object", "properties": { "type": { "type": "string", "const": "stopped" } }, "required": ["type"] } ],
           "$defs": { "Move": { "type": "object", "properties": { "x": { "type": "integer" }, "note": { "type": ["string", "null"] } }, "required": ["x"] } } }|]]
-      kindOf ir "t.Event" `shouldBe` Just (KindEnum "type"
-        [ VariantDef "moved" Nothing
+      kindOf ir "t.Event" `shouldBe` Just (taggedEnum "type"
+        [ variant "moved" Nothing
             [ FieldDef "note" (RefOptional (RefPrimitive "string" Nothing)) Nothing False Nothing
             , FieldDef "x" (RefPrimitive "integer" Nothing) Nothing True Nothing ]
-        , VariantDef "stopped" Nothing [] ])
+        , variant "stopped" Nothing [] ])
 
     it "the allOf form" $ do
       ir <- build [withReturns "one" [aesonQQ|{ "title": "Event", "oneOf": [
           { "type": "object", "properties": { "type": { "type": "string", "const": "moved" } }, "allOf": [ { "$ref": "#/$defs/Move" } ], "required": ["type"] } ],
           "$defs": { "Move": { "type": "object", "properties": { "x": { "type": "integer" } }, "required": ["x"] } } }|]]
-      kindOf ir "t.Event" `shouldBe` Just (KindEnum "type"
-        [ VariantDef "moved" Nothing [FieldDef "x" (RefPrimitive "integer" Nothing) Nothing True Nothing] ])
+      kindOf ir "t.Event" `shouldBe` Just (taggedEnum "type"
+        [ variant "moved" Nothing [FieldDef "x" (RefPrimitive "integer" Nothing) Nothing True Nothing] ])
 
-    it "a newtype variant over something with no fields is not a partial enum" $ do
+    it "a newtype variant over something with no fields is not a silent partial enum: the site is refused (IR 2.1)" $ do
       ir <- build [withReturns "one" [aesonQQ|{ "title": "Event", "oneOf": [
           { "type": "object", "properties": { "type": { "type": "string", "const": "named" } }, "$ref": "#/$defs/Name", "required": ["type"] } ],
           "$defs": { "Name": { "type": "string" } } }|]]
-      kindOf ir "t.Event" `shouldBe` Just (KindAlias RefAny)
+      map rfSite (irRefusals ir) `shouldBe` ["t.Event.named"]
 
   describe "field not in required → fdRequired = False" $ do
     it "in a struct: Note's percentage" $
@@ -315,8 +322,8 @@ tableSpec fixture = describe "IR 3.0 Required behavior" $ do
     it "in a variant" $ do
       ir <- build [withReturns "one" [aesonQQ|{ "title": "Event", "oneOf": [
           { "type": "object", "properties": { "type": { "type": "string", "const": "seen" }, "at": { "type": "integer" }, "by": { "type": "string" } }, "required": ["type", "at"] } ] }|]]
-      kindOf ir "t.Event" `shouldBe` Just (KindEnum "type"
-        [ VariantDef "seen" Nothing
+      kindOf ir "t.Event" `shouldBe` Just (taggedEnum "type"
+        [ variant "seen" Nothing
             [ FieldDef "at" (RefPrimitive "integer" Nothing) Nothing True Nothing
             , FieldDef "by" (RefPrimitive "string" Nothing) Nothing False Nothing ] ])
 
@@ -391,7 +398,7 @@ buildIn ns methods = case traverse Aeson.fromJSON methods of
   Aeson.Success ms -> buildIRFromSchema "test" [ns] PluginSchema
     { psNamespace = ns, psVersion = "1", psDescription = "", psLongDescription = Nothing
     , psSelfHash = Nothing, psHash = "h", psMethods = ms, psChildren = Nothing
-    , psDeprecation = Nothing, psRequest = Nothing }
+    , psDeprecation = Nothing, psRequest = Nothing, psRoles = Nothing, psView = Nothing }
 
 build :: [Value] -> IO IR
 build = either (fail . T.unpack . renderIRBuildError) pure . buildIn "t"
@@ -409,13 +416,26 @@ returnsOf ir = maybe RefUnknown mdReturns (Map.lookup "t.m" (irMethods ir))
 named :: Text -> Text -> TypeRef
 named ns n = RefNamed (QualifiedName ns n)
 
+-- | An internally tagged enum's kind (IR 2.1's 'KindEnum' carries its
+--   representation; a tagged variant has no 'vdRef').
+taggedEnum :: Text -> [VariantDef] -> TypeKind
+taggedEnum tag vs = KindEnum tag vs Internal
+
+-- | A tagged variant: its name, description and fields.
+variant :: Text -> Maybe Text -> [FieldDef] -> VariantDef
+variant name desc fields = VariantDef name desc fields Nothing
+
+-- | IR 2.1's untagged union: each variant named by its type, its 'vdRef'.
+untaggedEnum :: [(Text, TypeRef)] -> TypeKind
+untaggedEnum vs = KindEnum "" [ VariantDef n Nothing [] (Just t) | (n, t) <- vs ] Untagged
+
 -- | A type's kind, descriptions aside (of its fields and variants too).
 kindOf :: IR -> Text -> Maybe TypeKind
 kindOf ir name = undocumented . tdKind <$> Map.lookup name (irTypes ir)
   where
     undocumented = \case
       KindStruct fs -> KindStruct (map field fs)
-      KindEnum d vs -> KindEnum d [ v { vdDescription = Nothing, vdFields = map field (vdFields v) } | v <- vs ]
+      KindEnum d vs r -> KindEnum d [ v { vdDescription = Nothing, vdFields = map field (vdFields v) } | v <- vs ] r
       k -> k
     field f
       | name == "conformance.Note" = f  -- this row checks the field docs too
@@ -434,7 +454,7 @@ danglingRefs ir =
     methodRefs md = mdReturns md : maybe [] pure (mdError md) ++ maybe [] pure (mdProgress md) ++ map pdType (mdParams md)
     typeRefs td = case tdKind td of
       KindStruct fs -> map fdType fs
-      KindEnum _ vs -> map fdType (concatMap vdFields vs)
+      KindEnum _ vs _ -> map fdType (concatMap vdFields vs) ++ [ t | Just t <- map vdRef vs ]
       KindAlias t -> [t]
       _ -> []
     names = \case
