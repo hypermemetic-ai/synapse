@@ -266,11 +266,13 @@ spec = do
       Session.isSessionEndedItem (frame08 "Authentication required: your sign-in has expired: sign in again" "-32001"
                                     [aesonQQ|{"kind":"unauthenticated"}|] "unauthenticated") `shouldBe` True
       Session.isSessionEndedItem (frame070 "Authentication required: you have signed out: sign in again" "-32001") `shouldBe` True
-    it "an unauthenticated call without that reason, or another error saying it, is not" $ do
+    -- re-review #6: main's behaviour wins — the text on any error, as main
+    -- matched it, beside the typed unauthenticated's reason
+    it "an unauthenticated call without that reason is not ended; any error saying it is, as main read it" $ do
       Session.isSessionEndedItem (frame08 "Authentication required: credentials required" "-32001"
                                     [aesonQQ|{"kind":"unauthenticated"}|] "unauthenticated") `shouldBe` False
       Session.isSessionEndedItem (frame08 "you have signed out" "-32000"
-                                    [aesonQQ|{"kind":"execution","message":"you have signed out"}|] "") `shouldBe` False
+                                    [aesonQQ|{"kind":"execution","message":"you have signed out"}|] "") `shouldBe` True
     it "a cache misled: a missing or unknown param, a method not found — 0.8 and 0.7.0" $ do
       Store.isStaleItem missingId08 `shouldBe` True
       Store.isStaleItem notFound08 `shouldBe` True
