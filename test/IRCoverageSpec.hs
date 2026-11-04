@@ -13,7 +13,7 @@ module Main where
 
 import Control.Monad (forM_, unless, when)
 import qualified Codec.Compression.GZip as GZ
-import Data.Aeson (Value(..), eitherDecode, encode, toJSON)
+import Data.Aeson (Value(..), eitherDecode, encode, toJSON, (.=))
 import qualified Data.Aeson as Aeson
 import Data.Aeson.Encode.Pretty (Config(..), defConfig, encodePretty')
 import qualified Data.Aeson.Key as K
@@ -400,28 +400,51 @@ main = hspec $ do
     exe <- runIO builtSynapse
     case exe of
       Nothing -> it "against a service with a bare object" $ pendingWith "the built synapse is not on PATH (cabal test puts it there)"
-      Just bin -> it "against a service with a bare object: the IR on stdout, the site on stderr, exit 65" $ do
-        rows <- loadSchemasValues (fixtures </> "untyped.json")
+      Just bin -> do
         let root = Object (KM.fromList
               [ ("namespace", String "menger"), ("version", String "1.0.0"), ("description", String "root")
               , ("hash", String "r-cc8"), ("methods", Array mempty)
               , ("children", toJSON [ Object (KM.fromList [("namespace", String "tickets"), ("description", String "t"), ("hash", String "t-cc8")]) ]) ])
-        writeIORef schemaOverride (Just (("", root) : rows))
-        withSystemTempDirectory "cc8-cli" $ \dir -> withMockService todaysService $ \port -> do
-          forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
-          env0 <- getEnvironment
-          let env = [ (k, v) | (k, v) <- env0, k `notElem` ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION"] ]
-                 ++ [ ("HOME", dir </> "home"), ("XDG_CACHE_HOME", dir </> "cache"), ("XDG_RUNTIME_DIR", dir </> "run")
-                    , ("PLEXUS_KEYCHAIN", "off"), ("SYNAPSE_HOLD_FOR", "3s") ]
-          (code, out, err) <- readCreateProcessWithExitCode
-            (proc bin ["--url", "ws://127.0.0.1:" <> show port <> "/ws", "-i", "menger"]) { env = Just env } ""
-          writeIORef schemaOverride Nothing
+            emitIR rows = do
+              writeIORef schemaOverride (Just (("", root) : rows))
+              withSystemTempDirectory "cc8-cli" $ \dir -> withMockService todaysService $ \port -> do
+                forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
+                env0 <- getEnvironment
+                let env = [ (k, v) | (k, v) <- env0, k `notElem` ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION"] ]
+                       ++ [ ("HOME", dir </> "home"), ("XDG_CACHE_HOME", dir </> "cache"), ("XDG_RUNTIME_DIR", dir </> "run")
+                          , ("PLEXUS_KEYCHAIN", "off"), ("SYNAPSE_HOLD_FOR", "3s") ]
+                r <- readCreateProcessWithExitCode
+                  (proc bin ["--url", "ws://127.0.0.1:" <> show port <> "/ws", "-i", "menger"]) { env = Just env } ""
+                writeIORef schemaOverride Nothing
+                pure r
+        it "against a service with a bare object: the IR on stdout, the site on stderr, exit 65" $ do
+          rows <- loadSchemasValues (fixtures </> "untyped.json")
+          (code, out, err) <- emitIR rows
           code `shouldBe` ExitFailure 65
           err `shouldSatisfy` ("tickets.Thing.bare" `isInfixOf`)
           err `shouldSatisfy` ("neither properties nor additionalProperties" `isInfixOf`)
+          -- nothing was left out: main's header
+          err `shouldSatisfy` ("nothing was dropped" `isInfixOf`)
           case eitherDecode (BL.pack out) :: Either String IR of
             Left e -> expectationFailure ("stdout is not an IR: " <> e <> "\n" <> take 400 out)
             Right ir -> map rfSite (irRefusals ir) `shouldBe` ["tickets.Thing.bare", "tickets.Thing.list[]", "tickets.Thing.mixed"]
+        -- RETURNS-36 review: a title collision leaves its activation out, so
+        -- the header says so, by namespace, and never "nothing was dropped"
+        it "against a service with two types under one title: the header says which activation was left out, exit 65" $ do
+          let pong props = object07 ["title" .= ("Pong" :: Text), "type" .= ("object" :: Text), "properties" .= props]
+              method n props = object07 [ "name" .= (n :: Text), "description" .= n, "hash" .= (n <> "0"), "streaming" .= False
+                                        , "returns" .= pong props ]
+              tickets = object07
+                [ "namespace" .= ("tickets" :: Text), "version" .= ("1" :: Text), "description" .= ("t" :: Text), "hash" .= ("t-cc8" :: Text)
+                , "methods" .= [ method "a" (object07 ["message" .= object07 ["type" .= ("string" :: Text)]])
+                               , method "b" (object07 ["reply" .= object07 ["type" .= ("integer" :: Text)]]) ] ]
+          (code, out, err) <- emitIR [("tickets", tickets)]
+          code `shouldBe` ExitFailure 65
+          err `shouldNotSatisfy` ("nothing was dropped" `isInfixOf`)
+          err `shouldSatisfy` ("left out: tickets" `isInfixOf`)
+          case eitherDecode (BL.pack out) :: Either String IR of
+            Left e -> expectationFailure ("stdout is not an IR: " <> e <> "\n" <> take 400 out)
+            Right ir -> map (\r -> (rfSite r, rfKeyword r)) (irRefusals ir) `shouldBe` [("tickets", "title")]
 
 -- ---------------------------------------------------------------------------
 
@@ -457,6 +480,9 @@ expectedMengerRefusals = sort $
 
 named :: Text -> Text -> TypeRef
 named ns n = RefNamed (QualifiedName ns n)
+
+object07 :: [(K.Key, Value)] -> Value
+object07 = Object . KM.fromList
 
 obj :: [(Text, Text)] -> Value
 obj kvs = Object (KM.fromList [ (K.fromText k, String v) | (k, v) <- kvs ])
