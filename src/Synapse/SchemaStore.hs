@@ -1,3 +1,4 @@
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -46,6 +47,8 @@ module Synapse.SchemaStore
 
     -- * Forgetting
   , forget
+    -- * A cache misled (SYNAPSE-28; RETURNS-36 review)
+  , isStaleItem
   ) where
 
 import Control.Exception (SomeException, catch, try)
@@ -69,6 +72,10 @@ import Plexus.Schema.Recursive (PluginSchema(..), MethodSchema, DeprecationInfo)
 import Synapse.Endpoint (Endpoint(..), dirName)
 import Synapse.Identity.Store (writePrivateFile)
 import Synapse.IR.Types
+import Plexus.Auth (Refusal(..))
+import Plexus.RemoteError (ParamProblem(..), RemoteError(..))
+import Plexus.Types (itemRefusal, pattern StreamError)
+import Synapse.Schema.Types (ServiceStreamItem, pattern ServiceError)
 
 -- | One backend's cache, as one agent sees it at one address.
 newtype Store = Store { storeDir :: FilePath }
@@ -248,3 +255,32 @@ forget st = do
       forM_ ps $ \f -> rm (plans </> f)
   where
     rm p = removeFile p `catch` \(_ :: SomeException) -> pure ()
+
+-- ============================================================================
+-- A cache misled
+-- ============================================================================
+
+-- | SYNAPSE-28: an answer that says the cache misled the call — the server
+-- refused before the method ran: a refusal only an admin holds (a method
+-- admin-only, unlisted), a method or activation not found, a param the
+-- server does not take or misses. RETURNS-36 review: by the typed error
+-- (a 0.8 server's, or a 0.7.0 frame's read from its fields), and by the
+-- server's words — both phrasings, main's ("missing field") and 0.8's
+-- ("missing `id`").
+isStaleItem :: ServiceStreamItem -> Bool
+isStaleItem item = case itemRefusal item of
+  Just r -> refusalRoles r == ["admin"]
+  Nothing -> case item of
+    StreamError _ _ err _ | typedStale err -> True
+    ServiceError _ _ msg _ -> any (`T.isInfixOf` msg) staleWords
+    _ -> False
+  where
+    typedStale = \case
+      MethodNotFound _ _ -> True
+      ActivationNotFound _ -> True
+      InvalidParams _ Missing -> True
+      InvalidParams _ (Malformed d) -> any (`T.isInfixOf` d) staleWords
+      _ -> False
+    staleWords =
+      [ "Method not found", "Activation not found", "Unknown method", "method not found", "activation not found"
+      , "errCode = -32601", "missing field", "missing `", "unknown field", "invalid type", "unknown variant" ]

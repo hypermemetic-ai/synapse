@@ -273,9 +273,11 @@ handleCall sc c next signedIn _o rid method params = do
       err :: Text -> [(K.Key, Value)] -> IO ()
       err m extra = do
         as070 <- readIORef served070
-        emit (Object (KM.fromList (if as070
-          then [("type", "error"), ("metadata", meta), ("message", String m), ("code", String (code070 m extra)), ("recoverable", Bool False)] <> extra
-          else [("type", "error"), ("metadata", meta), ("error", remoteError m extra), ("recoverable", Bool False)] <> extra)))
+        -- as plexus-core writes it: message, code and spec/05's fields
+        -- always; 0.8's typed error beside them (the 0.7.0 line has none)
+        emit (Object (KM.fromList (
+          [("type", "error"), ("metadata", meta), ("message", String m), ("code", String (code070 m extra)), ("recoverable", Bool False)]
+          <> [ ("error", remoteError m extra) | not as070 ] <> extra)))
       done = emit (object ["type" .= ("done" :: Text), "metadata" .= meta])
   case method of
     "_info" -> do
@@ -349,7 +351,7 @@ remoteError m extra
   where
     field k = maybe (String "") id (lookup k extra)
 
--- | The JSON-RPC code a 0.7.0 service puts on an error frame.
+-- | The JSON-RPC code a service puts on an error frame (spec/05).
 code070 :: Text -> [(K.Key, Value)] -> Text
 code070 m extra
   | lookup "error_kind" extra == Just (String "forbidden") = "-32003"

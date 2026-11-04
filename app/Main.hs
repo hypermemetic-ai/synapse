@@ -996,13 +996,7 @@ takeStale = do
   pure v
 
 isStaleItem :: ServiceStreamItem -> Bool
-isStaleItem item = case itemRefusal item of
-  Just r -> refusalRoles r == ["admin"]
-  Nothing -> case item of
-    ServiceError _ _ msg _ -> any (`T.isInfixOf` msg)
-      [ "Method not found", "Activation not found", "Unknown method", "method not found", "activation not found"
-      , "errCode = -32601", "missing field", "unknown field", "invalid type", "unknown variant" ]
-    _ -> False
+isStaleItem = SS.isStaleItem
 
 -- | SYNAPSE-28: route every call through the connection holder (started
 -- by the first run), or — with --no-hold, a credential of the call's own,
@@ -1925,7 +1919,7 @@ printResult json raw cfg item = case itemRefusal item of
     -- SYNAPSE-39: under -o the -j line goes with FILE when the run fails,
     -- so the refusal is said on stderr too
     toFile <- Output.active
-    if json then LBS.putStrLn (encode item) else pure ()
+    if json then LBS.putStrLn (jsonLine item) else pure ()
     if not json || toFile then do
       ceiling' <- Session.currentCeiling
       TIO.hPutStr stderr (renderRefusal ceiling' r)
@@ -1939,7 +1933,7 @@ printResult json raw cfg item = case itemRefusal item of
     printResult' json raw cfg item
 
 printResult' :: Bool -> Bool -> RendererConfig -> ServiceStreamItem -> IO ()
-printResult' True _ _ item = LBS.putStrLn $ encode item
+printResult' True _ _ item = LBS.putStrLn $ jsonLine item
 printResult' _ True _ item = case item of
   -- Raw mode: just output the content
   ServiceData _ _ _ dat -> do

@@ -79,6 +79,8 @@ import qualified Synapse.Endpoint as E
 import qualified Synapse.Log as Log
 import Synapse.Monad
 import Synapse.Schema.Types (ServiceStreamItem, pattern ServiceData, pattern ServiceError, pattern ServiceGuidance)
+import Plexus.RemoteError (RemoteError(..))
+import Plexus.Types (pattern StreamError)
 import Synapse.Transport (invoke)
 
 -- ============================================================================
@@ -458,11 +460,14 @@ storedFresher st active rec = do
 
 -- | The in-band error a service answers a call whose session has ended with.
 isSessionEndedItem :: ServiceStreamItem -> Bool
-isSessionEndedItem = \case
+isSessionEndedItem item = case item of
   ServiceData _ _ _ (Object o)
     | KM.lookup "type" o == Just (String "error")
     , Just (String m) <- KM.lookup "message" o -> isSessionEndedText m
-  ServiceError _ _ e _ -> isSessionEndedText e
+  -- RETURNS-36 review: decided by the typed error — unauthenticated, with
+  -- the server's reason (its message) saying the session ended
+  StreamError _ _ Unauthenticated _ | ServiceError _ _ m _ <- item -> isSessionEndedText m
+  StreamError _ _ _ _ -> False
   _ -> False
 
 isSessionEndedText :: Text -> Bool
