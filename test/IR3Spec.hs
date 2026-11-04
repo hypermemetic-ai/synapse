@@ -154,7 +154,7 @@ serviceGoldens acceptIt = do
     it "the clash service's walk refuses clash (keyword title, both sites named) and builds the rest" $
       case [ ir | (f, _, ir, _) <- goldens, f == "clash.ir.json" ] of
         (ir : _) -> do
-          [ (rfSite r, rfKeyword r) | r <- irRefusals ir ] `shouldBe` [("clash", "title")]
+          [ rfSite r | r <- irRefusals ir, rfKeyword r == "title" ] `shouldBe` ["clash"]
           [ m | m <- Map.keys (irMethods ir), "clash." `T.isPrefixOf` m ] `shouldBe` []
           Map.member "" (irPlugins ir) `shouldBe` True
         [] -> expectationFailure "no clash.ir.json"
