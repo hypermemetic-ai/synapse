@@ -655,7 +655,7 @@ Two things make it so:
   that brings its own credential (`-t`, `--token-file`, `--cookie`,
   `--header`, `PLEXUS_SESSION`) never uses a holder.
 - **Send first, check on failure.** synapse keeps what a call needs from the
-  backend in `~/.cache/synapse/schemas/` (`$XDG_CACHE_HOME`): where the
+  backend in `~/.cache/synapse/schemas-4/` (`$XDG_CACHE_HOME`): where the
   backend is, its `_info` as your agent was answered, each activation's
   schema (`PATH@VERSION-HASH.json`, pinned by `PATH.pin`) and a **plan** per
   method (its schema, its activation's deprecation, the types its flags parse

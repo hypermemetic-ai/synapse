@@ -1675,7 +1675,7 @@ metaCommands =
       , "  gone is let go at once, one idle for --hold-for (10m) closed, past 256 the"
       , "  longest idle first; the holder exits when it has held nothing for --hold-for."
       , "  --no-hold dials a connection of the run's own; synapse _hold status says what"
-      , "  is held. A call is sent from the schema cache (~/.cache/synapse/schemas) and"
+      , "  is held. A call is sent from the schema cache (~/.cache/synapse/schemas-4) and"
       , "  checked against the server only when it fails"
       , ""
       , "Meta-commands:"

@@ -155,7 +155,7 @@ many wait. Failures read as a connection of the run's own reports them
 (`LostConnection` with whether it was sent, a failed dial as `connect`'s error
 call), so `Synapse.Reconnect` and the re-login run unchanged on top.
 **Send first** (`Main.sendFirst`): with the backend's route, `_info` and the
-method's plan in `Synapse.SchemaStore` (`~/.cache/synapse/schemas/`, per
+method's plan in `Synapse.SchemaStore` (`~/.cache/synapse/schemas-4/`, per
 address, agent and backend; schemas as `PATH@VERSION-HASH.json` + `PATH.pin`,
 plans under `plans/`), the call is built from the plan and sent with no probe
 and no fetch; a `CacheMiss` (the cache lacks it) or `StaleSchema` (it misled

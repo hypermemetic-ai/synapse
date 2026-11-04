@@ -6,7 +6,7 @@
 -- | SYNAPSE-28: what a call needs from a backend's schema, kept on disk so
 -- a call sends first and checks only on failure.
 --
--- Under @$XDG_CACHE_HOME/synapse/schemas@ (@~/.cache/synapse/schemas@):
+-- Under @$XDG_CACHE_HOME/synapse/schemas-4@ (@~/.cache/synapse/schemas-4@; 3.x's @schemas@ is never read):
 --
 -- @
 -- routes/CONNECTION-POINT/BACKEND.json      where BACKEND is reached from there
@@ -81,14 +81,24 @@ import Synapse.Schema.Types (ServiceStreamItem, pattern ServiceError)
 newtype Store = Store { storeDir :: FilePath }
   deriving (Eq, Show)
 
--- | @$XDG_CACHE_HOME/synapse/schemas@, else @~/.cache/synapse/schemas@.
+-- | @$XDG_CACHE_HOME/synapse/schemas-4@, else @~/.cache/synapse/schemas-4@
+-- ('cacheLayout').
 schemasRoot :: IO FilePath
 schemasRoot = do
   x <- lookupEnv "XDG_CACHE_HOME"
   base <- case x of
     Just d | not (null d) -> pure d
     _ -> (</> ".cache") <$> getHomeDirectory
-  pure (base </> "synapse" </> "schemas")
+  pure (base </> "synapse" </> ("schemas-" <> show cacheLayout))
+
+-- | RETURNS-36 review (#10): the layout of what the store keeps. 4.0 keeps
+--   plexus 0.8's schemas (a method's cardinality, never 0.6's streaming)
+--   and plans over IR 3.0, which a 3.x synapse would misread; so 4.0 keeps
+--   them under @schemas-4@, which no 3.x reads, and never reads 3.x's
+--   @schemas@. Bump it with any change a synapse of the other layout would
+--   misread.
+cacheLayout :: Int
+cacheLayout = 4
 
 storeFor :: Endpoint -> Text -> Text -> IO Store
 storeFor ep agent backend = do
