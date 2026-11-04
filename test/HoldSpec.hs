@@ -299,6 +299,12 @@ cliSpec exe = do
     (_, out, _) <- readCreateProcessWithExitCode (proc exe ["--version"]) ""
     out `shouldStartWith` "4.0"
 
+  -- re-review #5: help names the holder's socket as it is
+  it "help names holder-3.sock" $ do
+    (_, out, err) <- readCreateProcessWithExitCode (proc exe ["--help"]) ""
+    (out <> err) `shouldContain` "holder-3.sock"
+    (out <> err) `shouldNotContain` "holder-2.sock"
+
   it "answers cold, fills the cache, and opens one connection for the probe, the schema and the call" $
     withRun $ \run _ -> do
       c0 <- readIORef connectionsAccepted
