@@ -27,7 +27,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable)
-import System.Environment (getEnvironment, lookupEnv)
+import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -35,7 +35,8 @@ import System.Process (CreateProcess(..), proc, readCreateProcessWithExitCode)
 import Test.Hspec
 
 import Synapse.IR.Types
-import Synapse.SchemaStore (Plan(..), Store(..), readPlan, writePlan)
+import Synapse.SchemaStore (Plan(..), Store(..), readPlan, schemasRoot, storeFor, writePlan)
+import Synapse.Endpoint (plainAt)
 import Plexus.Schema.Recursive (MethodSchema(..))
 
 import IRFixture
@@ -371,7 +372,19 @@ main = hspec $ do
       length [ () | (_, v) <- KM.toList oldTypes, not (changedIn20 v) ] `shouldSatisfy` (> 150)
       length [ () | (_, v) <- KM.toList oldMethods, not (changedIn20 (dropInjected v)) ] `shouldSatisfy` (> 100)
 
-  describe "caches another synapse wrote" $
+  describe "caches another synapse wrote" $ do
+    -- RETURNS-36 review (#10): 4.0's schemas and plans (plexus 0.8's
+    -- shape: cardinality, no streaming) are kept apart from 3.x's
+    -- (~/.cache/synapse/schemas), so a rollback to synapse.prev never reads
+    -- an entry 4.0 wrote, nor 4.0 one of 3.x's
+    it "4.0 keeps its schema cache in a directory of its own layout, never 3.x's" $
+      withSystemTempDirectory "r36-cache" $ \dir -> do
+        setEnv "XDG_CACHE_HOME" dir
+        root <- schemasRoot
+        st <- storeFor (plainAt "127.0.0.1" 4455) "builder" "menger"
+        unsetEnv "XDG_CACHE_HOME"
+        root `shouldBe` dir </> "synapse" </> "schemas-4"
+        storeDir st `shouldStartWith` (dir </> "synapse" </> "schemas-4" </> "")
     it "a plan whose IR is 2.0 (3.16.0's) is read as no plan" $
       withSystemTempDirectory "cc8-store" $ \dir -> do
         let st = Store dir
