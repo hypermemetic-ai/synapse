@@ -14,6 +14,8 @@ copyright:          (c) 2025-2026 hypermemetic
 category:           Network
 build-type:         Simple
 tested-with:        GHC == 9.8.4, GHC == 9.12.4
+extra-doc-files:    README.md
+                    CHANGELOG.md
 
 flag build-examples
   description: Build example programs (schema-discovery)
@@ -25,6 +27,16 @@ flag build-keychain-tests
                `security` on macOS and touch the real keychain; they're
                opt-in so default `cabal test` runs stay quiet.
                Enable with: cabal test -f build-keychain-tests
+  default:     False
+  manual:      True
+
+flag live-tests
+  description: Build the suites that need a live service: cli-test,
+               websocket-raw-test and ir-test (a substrate and registry on
+               127.0.0.1:4444; cli-test also a synapse binary at a fixed
+               dist-newstyle path) and bidir-integration-test (a backend
+               named in --test-options). Opt-in, so a default `cabal test`
+               needs nothing running. Enable with: cabal test -f live-tests
   default:     False
   manual:      True
 
@@ -93,7 +105,7 @@ library
     base >= 4.17 && < 5,
     -- SYNAPSE-28: setCallRouter, substrateRpcSub, unsubscribe; RETURNS-12:
     -- the plexus 0.7 schema and envelope
-    plexus-protocol >= 0.6,
+    plexus-protocol >= 0.6 && < 0.7,
     aeson >= 2.0 && < 2.3,
     aeson-pretty >= 0.8 && < 0.9,
     text >= 2.0 && < 2.2,
@@ -236,6 +248,8 @@ test-suite cli-test
   default-extensions:
     OverloadedStrings
   ghc-options:      -threaded
+  if !flag(live-tests)
+    buildable: False
 
 test-suite ir-test
   type:             exitcode-stdio-1.0
@@ -256,6 +270,8 @@ test-suite ir-test
     LambdaCase
     RecordWildCards
   ghc-options:      -threaded
+  if !flag(live-tests)
+    buildable: False
 
 test-suite schema-decode-test
   type:             exitcode-stdio-1.0
@@ -392,6 +408,8 @@ test-suite websocket-raw-test
   default-extensions:
     OverloadedStrings
   ghc-options:      -threaded
+  if !flag(live-tests)
+    buildable: False
 
 test-suite bidir-test
   type:             exitcode-stdio-1.0
@@ -427,6 +445,8 @@ test-suite bidir-integration-test
     OverloadedStrings
     RecordWildCards
   ghc-options:      -threaded
+  if !flag(live-tests)
+    buildable: False
 
 test-suite stream-tracker-test
   type:             exitcode-stdio-1.0
