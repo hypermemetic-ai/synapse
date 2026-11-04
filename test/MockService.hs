@@ -424,7 +424,10 @@ callMethod' :: Scenario -> Bool -> Text -> Object
             -> (Text -> Value -> IO ()) -> (Text -> [(K.Key, Value)] -> IO ()) -> IO ()
 callMethod' sc _signedIn inner args dat err =
  case inner of
-  "menger.schema" -> dat "menger.schema" (rootSchema sc)
+  "menger.schema" -> do
+    -- RETURNS-40: a service that writes its IR lists `ir` among its own methods
+    answer <- readIORef irAnswer
+    dat "menger.schema" (maybe id (const withIr) answer (rootSchema sc))
   "tickets.schema" | scCatalog sc -> do
       Just (Object o) <- decodeFileStrict "test/fixtures/find-tickets.json"
       dat "tickets.schema" (Object (catalogView sc o))
@@ -494,6 +497,16 @@ browserReturns redirect state = do
     "GET " <> path <> "?code=" <> mockCode <> "&state=" <> state <> " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
   _ <- NB.recv sock' 4096
   N.close sock'
+
+-- | RETURNS-40: a root schema with the `ir` method beside its own.
+withIr :: Value -> Value
+withIr (Object o) = Object (KM.insert "methods" (Array (V.snoc ms irMethod)) o)
+  where
+    ms = case KM.lookup "methods" o of { Just (Array a) -> a; _ -> mempty }
+    irMethod = object
+      [ "name" .= ("ir" :: Text), "description" .= ("The service's IR" :: Text), "hash" .= ("ir0" :: Text)
+      , "cardinality" .= ("one" :: Text), "returns" .= object [] ]
+withIr v = v
 
 rootSchema :: Scenario -> Value
 rootSchema sc = object $

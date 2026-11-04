@@ -85,10 +85,38 @@ main = do
     _ -> pure ()
   golden <- LBS.readFile irPath
   service <- serviceGoldens (accept == Just "1")
+  hard <- hardGoldens (accept == Just "1")
   hspec $ do
     goldenSpec schemaPath irPath ir golden
     tableSpec ir
     service
+    hard
+
+-- | RETURNS-40's review: the reviewer's hard shapes (generics, recursion,
+--   every serde enum form, a dotted $defs name, flattening, every number's
+--   default, one title with two docs in two namespaces), served by
+--   plexus-core's tests/ir_serving.rs and kept beside it
+--   (@../plexus-core/tests/fixtures/ir-hard/@, or @IR_HARD_FIXTURE_DIR@):
+--   @schemas.json@ in; @ir.json@, @ir.alpha.json@ and @ir.beta-inner.json@
+--   out — the IR plexus-core's service writes is held to them.
+hardGoldens :: Bool -> IO Spec
+hardGoldens acceptIt = do
+  dir <- maybe (".." </> "plexus-core" </> "tests" </> "fixtures" </> "ir-hard") id <$> lookupEnv "IR_HARD_FIXTURE_DIR"
+  schemas <- readSchemas (dir </> "schemas.json")
+  let builds =
+        [ ("ir.json", buildIRFromSchemas "xsvc" [[]] schemas)
+        , ("ir.alpha.json", buildIRFromSchemas "xsvc" [["alpha"]] schemas)
+        , ("ir.beta-inner.json", buildIRFromSchemas "xsvc" [["beta"], ["alpha", "inner"]] schemas)
+        ]
+  irs <- traverse (\(file, built) -> (,) file <$> either (fail . T.unpack . renderIRBuildError) pure built) builds
+  if acceptIt then mapM_ (\(file, ir) -> LBS.writeFile (dir </> file) (renderIR ir) >> putStrLn ("wrote " <> dir </> file)) irs else pure ()
+  goldens <- traverse (\(file, ir) -> (\g -> (file, ir, g)) <$> LBS.readFile (dir </> file)) irs
+  pure $ describe "golden: the reviewer's hard shapes (RETURNS-40)" $
+    forM_ goldens $ \(file, ir, g) -> do
+      it (file <> " byte for byte") $
+        unless (renderIR ir == g) $ expectationFailure ("IR built from " <> dir </> "schemas.json differs from " <> file)
+      it (file <> ": no RefNamed dangles") $
+        danglingRefs ir `shouldBe` []
 
 -- ============================================================================
 -- RETURNS-40: a whole service's IR

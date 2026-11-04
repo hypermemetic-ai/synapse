@@ -471,12 +471,12 @@ main = hspec $ do
               , irPlugins = Map.fromList [("tickets", ["get"])]
               , irRefusals = [] }
             sameIR a b = (irTypes a, irMethods a, irPlugins a, irHash a, irRefusals a) `shouldBe` (irTypes b, irMethods b, irPlugins b, irHash b, irRefusals b)
-        it "one call, ir, and its IR — named for the backend, with synapse's metadata" $ do
+        it "the root lists ir: its schema, then one call to ir, and its IR — named for the backend, with synapse's metadata" $ do
           writeIORef irAnswer (Just (Aeson.object ["ok" Aeson..= served]))
           ((code, out, err), calls, asked) <- runI []
           writeIORef irAnswer Nothing
           (code, err) `shouldBe` (ExitSuccess, "")
-          calls `shouldBe` ["menger.ir"]
+          calls `shouldBe` ["menger.schema", "menger.ir"]
           asked `shouldBe` [Aeson.object []]
           case eitherDecode (BL.pack out) :: Either String IR of
             Left e -> expectationFailure ("stdout is not an IR: " <> e)
@@ -488,7 +488,7 @@ main = hspec $ do
           writeIORef irAnswer (Just (Aeson.object ["ok" Aeson..= served]))
           (_, calls, asked) <- runI ["tickets"]
           writeIORef irAnswer Nothing
-          calls `shouldBe` ["menger.ir"]
+          calls `shouldBe` ["menger.schema", "menger.ir"]
           asked `shouldBe` [Aeson.object ["namespaces" Aeson..= (["tickets"] :: [Text])]]
         it "a refusal is the service's, said in its words, and nothing walked" $ do
           writeIORef irAnswer (Just (Aeson.object ["err" Aeson..= Aeson.object
@@ -498,18 +498,19 @@ main = hspec $ do
           writeIORef irAnswer Nothing
           code `shouldNotBe` ExitSuccess
           err `shouldSatisfy` ("no namespace delta in this service" `isInfixOf`)
-          calls `shouldBe` ["menger.ir"]
+          calls `shouldBe` ["menger.schema", "menger.ir"]
         it "an IR of another version is not read: the walk builds it" $ do
           writeIORef irAnswer (Just (Aeson.object ["ok" Aeson..= served { irVersion = "2.1" }]))
           ((code, out, _), calls, _) <- runI []
           writeIORef irAnswer Nothing
           code `shouldBe` ExitSuccess
-          take 2 calls `shouldBe` ["menger.ir", "menger.schema"]
+          take 2 calls `shouldBe` ["menger.schema", "menger.ir"]
           fmap irVersion (eitherDecode (BL.pack out) :: Either String IR) `shouldBe` Right currentIrVersion
-        it "a service with no ir (0.7.0): the walk, as before" $ do
+        it "a root that lists no ir (0.7.0): no call to ir, the walk as before" $ do
           ((code, out, _), calls, _) <- runI []
           code `shouldBe` ExitSuccess
-          take 2 calls `shouldBe` ["menger.ir", "menger.schema"]
+          calls `shouldSatisfy` notElem "menger.ir"
+          take 1 calls `shouldBe` ["menger.schema"]
           length (filter (".schema" `T.isSuffixOf`) calls) `shouldSatisfy` (> 1)
           fmap irVersion (eitherDecode (BL.pack out) :: Either String IR) `shouldBe` Right currentIrVersion
 
