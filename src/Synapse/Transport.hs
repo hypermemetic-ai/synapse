@@ -8,6 +8,7 @@ module Synapse.Transport
   ( -- * Schema Fetching
     fetchSchema
   , fetchSchemaAt
+  , fetchServiceIR
   , fetchMethodSchema
 
     -- * Method Invocation (collected)
@@ -31,7 +32,8 @@ import Data.IORef (newIORef, readIORef, modifyIORef')
 import qualified Data.Map.Strict as Map
 import qualified Synapse.SchemaStore as Store
 import Control.Monad.Reader (asks)
-import Data.Aeson (Value)
+import Data.Aeson (Value(..), Result(..), fromJSON, object, (.=))
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.CaseInsensitive as CI
 import qualified Data.List as List
@@ -45,6 +47,7 @@ import qualified Plexus.Types as PT
 
 import Synapse.Schema.Types
 import Synapse.Monad
+import Synapse.IR.Types (IR(..), currentIrVersion)
 import Synapse.Endpoint (substrateConfig)
 import qualified Synapse.Log as Log
 import qualified Synapse.Reconnect as R
@@ -146,6 +149,35 @@ fetchSchemaAt path = do
           pure schema
       liftIO $ modifyIORef' memo (Map.insert path schema)
       pure schema
+
+-- | RETURNS-40: the service's own IR of the walk from @path@ — one call,
+--   @<backend>.ir@ with the path as its namespace (none: the whole
+--   service). @Just (Right ir)@ when it wrote one of this synapse's IR
+--   version; @Just (Left why)@ when it refused (a title collision, in the
+--   words the walk would say it); @Nothing@ when it has no @ir@ (every
+--   service on the published 0.7.0 line, whose answer is a call failure) or
+--   answered anything else — the caller walks the raw schemas then.
+fetchServiceIR :: Path -> SynapseM (Maybe (Either Text IR))
+fetchServiceIR path = do
+  logger <- getLogger
+  cfg <- getConfig
+  let params = if null path then object [] else object ["namespaces" .= [T.intercalate "." path]]
+  -- asked once, never ridden out (R.retrying): a service that cannot be
+  -- reached now is the walk's to wait for, which reads what it can from the
+  -- run's memo and the cache and rides out the rest
+  result <- liftIO $ ST.invokeMethod cfg [] "ir" params
+  let answer = case result of
+        Left _ -> Nothing
+        Right items -> case [ d | PT.StreamData _ _ _ d <- items ] of
+          (Object o : _)
+            | Just ok <- KM.lookup "ok" o, Success ir <- fromJSON ok, irVersion ir == currentIrVersion -> Just (Right ir)
+            | Just (Object e) <- KM.lookup "err" o -> Just (Left (case KM.lookup "message" e of
+                Just (String m) -> m
+                _ -> "the service wrote no IR"))
+          _ -> Nothing
+  Log.logDebug logger Log.SubsystemSchema $ "The service's ir at " <> showPath path <> ": "
+    <> maybe "none (walking the schemas)" (either ("refused: " <>) (const "used")) answer
+  pure answer
 
 -- | A path as a message names it.
 showPath :: Path -> Text

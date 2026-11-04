@@ -62,6 +62,7 @@ import Data.Time.Format (formatTime, defaultTimeLocale)
 import Synapse.Schema.Types
 import Synapse.Schema.Functor (SchemaF(..))
 import Synapse.Algebra.Walk (walkSchemaPar)
+import Synapse.Transport (fetchServiceIR)
 import Synapse.Monad
 import Synapse.IR.Types hiding (QualifiedName(..), qualifiedNameFull)
 import Synapse.IR.Types (QualifiedName(..), qualifiedNameFull, synapseVersion)
@@ -142,10 +143,23 @@ extractPluginHashInfo schema = PluginHashInfo
 -- After walking, deduplicate types that have identical structure
 -- Accepts generator info strings in "tool:version" format
 -- Uses parallel schema fetching for better performance
+--
+-- RETURNS-40: a service that writes its own IR (@<backend>.ir@, plexus-core
+-- 0.8) is asked for it first, one call for the whole walk; its IR is the
+-- one this walk would build from the same schemas. The walk is made only
+-- for a service with no @ir@ (every 0.7.0 one), or from the schema cache
+-- alone (SYNAPSE-28), which has no server to ask.
 buildIR :: [Text] -> Path -> SynapseM IR
 buildIR generatorInfoStrs path = do
   backend <- asks seBackend
-  raw <- walkSchemaPar irAlgebra path
+  src <- asks seSchemaSource
+  served <- case src of
+    FromServer _ -> fetchServiceIR path
+    FromCache _ -> pure Nothing
+  built <- case served of
+    Just (Right ir) -> pure ir
+    Just (Left why) -> throwError (ValidationError why)
+    Nothing -> finalizeIR <$> walkSchemaPar irAlgebra path
 
   -- Parse generator info and add synapse itself
   let parsedGens = mapMaybe parseGeneratorInfo generatorInfoStrs
@@ -162,7 +176,7 @@ buildIR generatorInfoStrs path = do
         , gmIrVersion = irVersion emptyIR
         }
 
-  pure $ finalizeIR raw
+  pure built
     { irBackend = backend
     , irMetadata = Just metadata
     }
