@@ -1,3 +1,4 @@
-org = "hypermemetic"
+repo_name = "synapse"
+org = "hypermemetic-ai"
 forges = ["github"]
 visibility = "public"
