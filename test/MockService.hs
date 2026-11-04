@@ -40,6 +40,9 @@ module MockService
   , dropNext
     -- * RETURNS-36: a service on the published 0.7.0 line
   , served070
+    -- * RETURNS-40: a service that writes its own IR
+  , irAnswer
+  , irAsked
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -151,6 +154,19 @@ dropNext = unsafePerformIO (newIORef [])
 {-# NOINLINE served070 #-}
 served070 :: IORef Bool
 served070 = unsafePerformIO (newIORef False)
+
+-- | RETURNS-40: when set, the service writes its own IR: @menger.ir@
+-- answers this (@{"ok": IR}@ or @{"err": …}@) as plexus 0.8's does. Unset,
+-- it has no @ir@ — every 0.7.0 service — and the call fails as an unknown
+-- method does.
+{-# NOINLINE irAnswer #-}
+irAnswer :: IORef (Maybe Value)
+irAnswer = unsafePerformIO (newIORef Nothing)
+
+-- | RETURNS-40: the params of every @menger.ir@ the services took, in order.
+{-# NOINLINE irAsked #-}
+irAsked :: IORef [Value]
+irAsked = unsafePerformIO (newIORef [])
 
 mockCode, mockState :: Text
 mockCode = "c_19ab"
@@ -318,6 +334,12 @@ handleCall sc c next signedIn _o rid method params = do
         "tickets.ask" -> void $ forkIO (askBack emit meta dat err >> done)
         -- SYNAPSE-28: a stream that never ends by itself (until unsubscribed)
         "tickets.watch" -> dat "tickets.watch" (object ["type" .= ("watching" :: Text)])
+        "menger.ir" -> do
+          atomicModifyIORef' irAsked (\as -> (as ++ [maybe (Object KM.empty) id (KM.lookup "params" params)], ()))
+          answer <- readIORef irAnswer
+          case answer of
+            Just v -> dat "menger.ir" v >> done
+            Nothing -> err "Method not found: menger.ir" [] >> done
         "tickets.get" | renamed -> err "Method not found: tickets.get" [] >> done
         "tickets.fetch" | renamed -> callMethod sc signedIn "tickets.get" args dat err >> done
         "tickets.schema" | renamed, scView sc /= AnonymousView, not (scCatalog sc) ->
@@ -402,7 +424,10 @@ callMethod' :: Scenario -> Bool -> Text -> Object
             -> (Text -> Value -> IO ()) -> (Text -> [(K.Key, Value)] -> IO ()) -> IO ()
 callMethod' sc _signedIn inner args dat err =
  case inner of
-  "menger.schema" -> dat "menger.schema" (rootSchema sc)
+  "menger.schema" -> do
+    -- RETURNS-40: a service that writes its IR lists `ir` among its own methods
+    answer <- readIORef irAnswer
+    dat "menger.schema" (maybe id (const withIr) answer (rootSchema sc))
   "tickets.schema" | scCatalog sc -> do
       Just (Object o) <- decodeFileStrict "test/fixtures/find-tickets.json"
       dat "tickets.schema" (Object (catalogView sc o))
@@ -472,6 +497,16 @@ browserReturns redirect state = do
     "GET " <> path <> "?code=" <> mockCode <> "&state=" <> state <> " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
   _ <- NB.recv sock' 4096
   N.close sock'
+
+-- | RETURNS-40: a root schema with the `ir` method beside its own.
+withIr :: Value -> Value
+withIr (Object o) = Object (KM.insert "methods" (Array (V.snoc ms irMethod)) o)
+  where
+    ms = case KM.lookup "methods" o of { Just (Array a) -> a; _ -> mempty }
+    irMethod = object
+      [ "name" .= ("ir" :: Text), "description" .= ("The service's IR" :: Text), "hash" .= ("ir0" :: Text)
+      , "cardinality" .= ("one" :: Text), "returns" .= object [] ]
+withIr v = v
 
 rootSchema :: Scenario -> Value
 rootSchema sc = object $
