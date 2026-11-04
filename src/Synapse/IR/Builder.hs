@@ -200,7 +200,7 @@ finalizeIR raw =
 -- - Build method definitions
 -- - Merge with child results
 irAlgebra :: SchemaF IR -> SynapseM IR
-irAlgebra (PluginF schema path childIRs) = liftBuild (pluginIR path schema childIRs)
+irAlgebra (PluginF schema path childIRs) = pure (pluginIRRefusing path schema childIRs)
 
 irAlgebra (MethodF method namespace path) = liftBuild $ do
   -- Single method node (shouldn't happen in normal walk, but handle it)
@@ -219,6 +219,20 @@ irAlgebra (MethodF method namespace path) = liftBuild $ do
     , irPluginRoles = Nothing  -- Methods don't carry roles
     , irRefusals = refusals
     }
+
+-- | RETURNS-36 review (#9): one plugin node as the walk builds it. A plugin
+--   whose schemas put two shapes under one title ('TitleCollision') is
+--   refused, not the walk: its methods and types are left out, a refusal at
+--   its namespace names both sites, and its children are built as ever. A
+--   refusal makes @-i@ exit 65, as any does.
+pluginIRRefusing :: Path -> PluginSchema -> [IR] -> IR
+pluginIRRefusing path schema childIRs = case pluginIR path schema childIRs of
+  Right ir -> ir
+  Left err ->
+    let bare = either (const emptyIR) id (pluginIR path schema { psMethods = [] } childIRs)
+        site = T.intercalate "." path
+        why = maybe (renderIRBuildError err) id (T.stripPrefix "IR: " (renderIRBuildError err))
+    in bare { irRefusals = Refusal site "title" Nothing (why <> " The activation is left out.") : irRefusals bare }
 
 -- | One plugin node: its own types and methods, merged with its children's.
 pluginIR :: Path -> PluginSchema -> [IR] -> Either IRBuildError IR

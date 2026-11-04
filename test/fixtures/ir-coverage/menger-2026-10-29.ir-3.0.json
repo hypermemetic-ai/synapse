@@ -994,567 +994,6 @@
                 "kind": "static_child"
             }
         },
-        "chats.inputs.answer": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
-            "mdCardinality": "one",
-            "mdDescription": "Answer a message's input — a value checked against its kind and options, with a rationale; who, the source and the time said by the server; yields input_changed { input }.\n\nBy a participant of the chat, while the chat is open and the message\nkept. The value is typed as `tickets inputs answer`'s:\n`{\"type\": \"choice\", \"option\": …}`, `{\"type\": \"multi\", \"options\": […]}`,\n`{\"type\": \"text\", \"text\": …}`. Every answer is a history entry. A\nclosed input, a value that does not answer it, or one the caller may\nnot give is `refused { reasons }`, and nothing is written. `watch`\ncarries the `input_changed` to every participant; it answers an\n`await_message` waiting on it.",
-            "mdError": null,
-            "mdFullPath": "chats.inputs.answer",
-            "mdGrant": "message_inputs.answer",
-            "mdInjected": [
-                {
-                    "ipDescription": null,
-                    "ipName": "auth",
-                    "ipSource": {
-                        "from": "derived"
-                    }
-                },
-                {
-                    "ipDescription": null,
-                    "ipName": "user",
-                    "ipSource": {
-                        "from": "auth",
-                        "resolver": "self.access.verify"
-                    }
-                }
-            ],
-            "mdName": "answer",
-            "mdNamespace": "chats.inputs",
-            "mdParams": [
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The chat, e.g. 12.",
-                    "pdName": "chat",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "ChatId",
-                            "qnNamespace": "chats"
-                        },
-                        "tag": "RefNamed"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The input's id in that message's body, e.g. undated.",
-                    "pdName": "input",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "InputId",
-                            "qnNamespace": "chats.inputs"
-                        },
-                        "tag": "RefNamed"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The message that asks, e.g. 812.",
-                    "pdName": "message",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "MessageId",
-                            "qnNamespace": "chats"
-                        },
-                        "tag": "RefNamed"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "Why (optional).",
-                    "pdName": "rationale",
-                    "pdRequired": false,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "contents": {
-                                "qnLocalName": "MessageText",
-                                "qnNamespace": "chats.inputs"
-                            },
-                            "tag": "RefNamed"
-                        },
-                        "tag": "RefOptional"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "Typed by the input's kind: {\"type\": \"choice\", \"option\": \"keep\"} | {\"type\": \"multi\", \"options\": [\"a\", \"b\"]} | {\"type\": \"text\", \"text\": \"a reply\"}; through synapse, --value.type choice --value.option keep.",
-                    "pdName": "value",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "InputValue",
-                            "qnNamespace": "chats.inputs"
-                        },
-                        "tag": "RefNamed"
-                    }
-                }
-            ],
-            "mdProgress": null,
-            "mdReturns": {
-                "contents": {
-                    "qnLocalName": "ChatsEvent",
-                    "qnNamespace": "chats"
-                },
-                "tag": "RefNamed"
-            },
-            "mdRole": {
-                "kind": "rpc"
-            }
-        },
-        "chats.inputs.clear": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
-            "mdCardinality": "one",
-            "mdDescription": "Clear a message's input's answer (open again; kept in its history); yields input_changed { input }, or input { input } when it held none.\n\nBy the one who gave the answer (any participant, for an answer kept\nbefore who answered was), while the chat is open. A closed input is\n`refused`.",
-            "mdError": null,
-            "mdFullPath": "chats.inputs.clear",
-            "mdGrant": "message_inputs.clear",
-            "mdInjected": [
-                {
-                    "ipDescription": null,
-                    "ipName": "auth",
-                    "ipSource": {
-                        "from": "derived"
-                    }
-                },
-                {
-                    "ipDescription": null,
-                    "ipName": "user",
-                    "ipSource": {
-                        "from": "auth",
-                        "resolver": "self.access.verify"
-                    }
-                }
-            ],
-            "mdName": "clear",
-            "mdNamespace": "chats.inputs",
-            "mdParams": [
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The chat, e.g. 12.",
-                    "pdName": "chat",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "ChatId",
-                            "qnNamespace": "chats"
-                        },
-                        "tag": "RefNamed"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The input's id in that message's body.",
-                    "pdName": "input",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "InputId",
-                            "qnNamespace": "chats.inputs"
-                        },
-                        "tag": "RefNamed"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The message that asks, e.g. 812.",
-                    "pdName": "message",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "MessageId",
-                            "qnNamespace": "chats"
-                        },
-                        "tag": "RefNamed"
-                    }
-                }
-            ],
-            "mdProgress": null,
-            "mdReturns": {
-                "contents": {
-                    "qnLocalName": "ChatsEvent",
-                    "qnNamespace": "chats"
-                },
-                "tag": "RefNamed"
-            },
-            "mdRole": {
-                "kind": "rpc"
-            }
-        },
-        "chats.inputs.close": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
-            "mdCardinality": "one",
-            "mdDescription": "Close a message's input: freeze its answer (DECIDED, for a decision); yields input_changed { input }, or input { input } when it was closed.\n\nBy the message's author — who asked — or an admin of the chat's\nticket. An answer or a clear is refused until it is reopened.",
-            "mdError": null,
-            "mdFullPath": "chats.inputs.close",
-            "mdGrant": "message_inputs.close",
-            "mdInjected": [
-                {
-                    "ipDescription": null,
-                    "ipName": "auth",
-                    "ipSource": {
-                        "from": "derived"
-                    }
-                },
-                {
-                    "ipDescription": null,
-                    "ipName": "user",
-                    "ipSource": {
-                        "from": "auth",
-                        "resolver": "self.access.verify"
-                    }
-                }
-            ],
-            "mdName": "close",
-            "mdNamespace": "chats.inputs",
-            "mdParams": [
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The chat, e.g. 12.",
-                    "pdName": "chat",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "ChatId",
-                            "qnNamespace": "chats"
-                        },
-                        "tag": "RefNamed"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The input's id in that message's body.",
-                    "pdName": "input",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "InputId",
-                            "qnNamespace": "chats.inputs"
-                        },
-                        "tag": "RefNamed"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The message that asks, e.g. 812.",
-                    "pdName": "message",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "MessageId",
-                            "qnNamespace": "chats"
-                        },
-                        "tag": "RefNamed"
-                    }
-                }
-            ],
-            "mdProgress": null,
-            "mdReturns": {
-                "contents": {
-                    "qnLocalName": "ChatsEvent",
-                    "qnNamespace": "chats"
-                },
-                "tag": "RefNamed"
-            },
-            "mdRole": {
-                "kind": "rpc"
-            }
-        },
-        "chats.inputs.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
-            "mdCardinality": "one",
-            "mdDescription": "The inputs of the messages in the caller's chats (an <m-decision id> / <m-input id kind> in a message's body), oldest message first; an input { input } each, then page { next }.\n\nEach with its home (chat, message, the chat's ticket, who asked),\nkind, question, options, recommendation, state, answer (`by`, `name`,\n`source`, `at_unix`) and whole history. `chat` one chat (one the\ncaller does not see is `not_found`), else every chat the caller is\nin; `ticket` only chats on it. `after` (a message id) continues a\npage; `limit` 100 unless given, at most 1,000 — a message's inputs\nare never split. A deleted message's are not listed.",
-            "mdError": null,
-            "mdFullPath": "chats.inputs.list",
-            "mdGrant": "message_inputs.list",
-            "mdInjected": [
-                {
-                    "ipDescription": null,
-                    "ipName": "auth",
-                    "ipSource": {
-                        "from": "derived"
-                    }
-                },
-                {
-                    "ipDescription": null,
-                    "ipName": "user",
-                    "ipSource": {
-                        "from": "auth",
-                        "resolver": "self.access.verify"
-                    }
-                }
-            ],
-            "mdName": "list",
-            "mdNamespace": "chats.inputs",
-            "mdParams": [
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "Cursor: the inputs of messages after this one (optional).",
-                    "pdName": "after",
-                    "pdRequired": false,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "contents": {
-                                "qnLocalName": "MessageId",
-                                "qnNamespace": "chats"
-                            },
-                            "tag": "RefNamed"
-                        },
-                        "tag": "RefOptional"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "Only this chat's, e.g. 12 (optional).",
-                    "pdName": "chat",
-                    "pdRequired": false,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "contents": {
-                                "qnLocalName": "ChatId",
-                                "qnNamespace": "chats"
-                            },
-                            "tag": "RefNamed"
-                        },
-                        "tag": "RefOptional"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "Only inputs of this kind: choice | multi | text (optional).",
-                    "pdName": "kind",
-                    "pdRequired": false,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "contents": {
-                                "qnLocalName": "InputKind",
-                                "qnNamespace": "chats.inputs"
-                            },
-                            "tag": "RefNamed"
-                        },
-                        "tag": "RefOptional"
-                    },
-                    "pdValues": [
-                        "choice",
-                        "multi",
-                        "text"
-                    ]
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "At most this many inputs (default 100, at most 1000) (optional).",
-                    "pdName": "limit",
-                    "pdRequired": false,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "contents": [
-                                "integer",
-                                "uint32"
-                            ],
-                            "tag": "RefPrimitive"
-                        },
-                        "tag": "RefOptional"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "Only inputs in this state: open | answered | closed (optional).",
-                    "pdName": "state",
-                    "pdRequired": false,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "contents": {
-                                "qnLocalName": "InputState",
-                                "qnNamespace": "chats.inputs"
-                            },
-                            "tag": "RefNamed"
-                        },
-                        "tag": "RefOptional"
-                    },
-                    "pdValues": [
-                        "open",
-                        "answered",
-                        "closed"
-                    ]
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "Only chats on this ticket, e.g. KILN-40 (optional).",
-                    "pdName": "ticket",
-                    "pdRequired": false,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "contents": {
-                                "qnLocalName": "TicketRef",
-                                "qnNamespace": "tickets"
-                            },
-                            "tag": "RefNamed"
-                        },
-                        "tag": "RefOptional"
-                    }
-                }
-            ],
-            "mdProgress": null,
-            "mdReturns": {
-                "contents": {
-                    "qnLocalName": "ChatsEvent",
-                    "qnNamespace": "chats"
-                },
-                "tag": "RefNamed"
-            },
-            "mdRole": {
-                "kind": "rpc"
-            }
-        },
-        "chats.inputs.reopen": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
-            "mdCardinality": "one",
-            "mdDescription": "Reopen a closed message's input; yields input_changed { input }, or input { input } when it was not closed.\n\nBy the message's author or an admin of the chat's ticket: `answered`\nagain when it holds an answer, else `open`.",
-            "mdError": null,
-            "mdFullPath": "chats.inputs.reopen",
-            "mdGrant": "message_inputs.reopen",
-            "mdInjected": [
-                {
-                    "ipDescription": null,
-                    "ipName": "auth",
-                    "ipSource": {
-                        "from": "derived"
-                    }
-                },
-                {
-                    "ipDescription": null,
-                    "ipName": "user",
-                    "ipSource": {
-                        "from": "auth",
-                        "resolver": "self.access.verify"
-                    }
-                }
-            ],
-            "mdName": "reopen",
-            "mdNamespace": "chats.inputs",
-            "mdParams": [
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The chat, e.g. 12.",
-                    "pdName": "chat",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "ChatId",
-                            "qnNamespace": "chats"
-                        },
-                        "tag": "RefNamed"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The input's id in that message's body.",
-                    "pdName": "input",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "InputId",
-                            "qnNamespace": "chats.inputs"
-                        },
-                        "tag": "RefNamed"
-                    }
-                },
-                {
-                    "pdDefault": null,
-                    "pdDeprecation": null,
-                    "pdDescription": "The message that asks, e.g. 812.",
-                    "pdName": "message",
-                    "pdRequired": true,
-                    "pdSource": null,
-                    "pdType": {
-                        "contents": {
-                            "qnLocalName": "MessageId",
-                            "qnNamespace": "chats"
-                        },
-                        "tag": "RefNamed"
-                    }
-                }
-            ],
-            "mdProgress": null,
-            "mdReturns": {
-                "contents": {
-                    "qnLocalName": "ChatsEvent",
-                    "qnNamespace": "chats"
-                },
-                "tag": "RefNamed"
-            },
-            "mdRole": {
-                "kind": "rpc"
-            }
-        },
-        "chats.inputs.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
-            "mdCardinality": "one",
-            "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
-            "mdError": null,
-            "mdFullPath": "chats.inputs.schema",
-            "mdGrant": "message_inputs.schema",
-            "mdName": "schema",
-            "mdNamespace": "chats.inputs",
-            "mdParams": [],
-            "mdProgress": null,
-            "mdReturns": {
-                "tag": "RefJson"
-            },
-            "mdRole": {
-                "kind": "rpc"
-            }
-        },
         "chats.link": {
             "mdBidirResponseSchema": null,
             "mdBidirResponseType": null,
@@ -5672,7 +5111,7 @@
                         "contents": {
                             "contents": {
                                 "qnLocalName": "InputId",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "tickets.inputs"
                             },
                             "tag": "RefNamed"
                         },
@@ -6946,7 +6385,7 @@
                     "pdType": {
                         "contents": {
                             "qnLocalName": "InputId",
-                            "qnNamespace": "chats.inputs"
+                            "qnNamespace": "tickets.inputs"
                         },
                         "tag": "RefNamed"
                     }
@@ -6994,7 +6433,7 @@
                     "pdType": {
                         "contents": {
                             "qnLocalName": "InputValue",
-                            "qnNamespace": "chats.inputs"
+                            "qnNamespace": "tickets.inputs"
                         },
                         "tag": "RefNamed"
                     }
@@ -7125,7 +6564,7 @@
                     "pdType": {
                         "contents": {
                             "qnLocalName": "InputId",
-                            "qnNamespace": "chats.inputs"
+                            "qnNamespace": "tickets.inputs"
                         },
                         "tag": "RefNamed"
                     }
@@ -7198,7 +6637,7 @@
                     "pdType": {
                         "contents": {
                             "qnLocalName": "InputId",
-                            "qnNamespace": "chats.inputs"
+                            "qnNamespace": "tickets.inputs"
                         },
                         "tag": "RefNamed"
                     }
@@ -7308,7 +6747,7 @@
                         "contents": {
                             "contents": {
                                 "qnLocalName": "InputState",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "tickets.inputs"
                             },
                             "tag": "RefNamed"
                         },
@@ -7410,7 +6849,7 @@
                     "pdType": {
                         "contents": {
                             "qnLocalName": "InputId",
-                            "qnNamespace": "chats.inputs"
+                            "qnNamespace": "tickets.inputs"
                         },
                         "tag": "RefNamed"
                     }
@@ -8419,7 +7858,7 @@
                         "contents": {
                             "contents": {
                                 "qnLocalName": "InputId",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "tickets.inputs"
                             },
                             "tag": "RefNamed"
                         },
@@ -8453,7 +7892,7 @@
                             "contents": {
                                 "contents": {
                                     "qnLocalName": "InputId",
-                                    "qnNamespace": "chats.inputs"
+                                    "qnNamespace": "tickets.inputs"
                                 },
                                 "tag": "RefNamed"
                             },
@@ -11927,14 +11366,7 @@
             "tickets",
             "watch"
         ],
-        "chats.inputs": [
-            "answer",
-            "clear",
-            "close",
-            "list",
-            "reopen",
-            "schema"
-        ],
+        "chats.inputs": [],
         "comments": [
             "add",
             "failures",
@@ -12085,6 +11517,14 @@
             "waves_under"
         ]
     },
+    "irRefusals": [
+        {
+            "rfDetail": "two different types are titled \"Message\" in namespace \"chats.inputs\": method list (params) and method list (returns). One title in one namespace is one type; rename one of them. The activation is left out.",
+            "rfKeyword": "title",
+            "rfSite": "chats.inputs",
+            "rfVariant": null
+        }
+    ],
     "irTypes": {
         ".ChildHashes": {
             "tdDescription": "Hash information for a child plugin",
@@ -13633,7 +13073,7 @@
                         "fdType": {
                             "contents": {
                                 "qnLocalName": "InputValue",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "tickets.inputs"
                             },
                             "tag": "RefNamed"
                         }
@@ -14023,7 +13463,7 @@
                         "fdType": {
                             "contents": {
                                 "qnLocalName": "InputId",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "tickets.inputs"
                             },
                             "tag": "RefNamed"
                         }
@@ -14036,7 +13476,7 @@
                         "fdType": {
                             "contents": {
                                 "qnLocalName": "InputKind",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "chats"
                             },
                             "tag": "RefNamed"
                         }
@@ -14110,7 +13550,7 @@
                         "fdType": {
                             "contents": {
                                 "qnLocalName": "InputState",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "tickets.inputs"
                             },
                             "tag": "RefNamed"
                         }
@@ -15058,7 +14498,7 @@
                                 "fdType": {
                                     "contents": {
                                         "qnLocalName": "InputId",
-                                        "qnNamespace": "chats.inputs"
+                                        "qnNamespace": "tickets.inputs"
                                     },
                                     "tag": "RefNamed"
                                 }
@@ -15129,7 +14569,7 @@
                                 "fdType": {
                                     "contents": {
                                         "qnLocalName": "InputValue",
-                                        "qnNamespace": "chats.inputs"
+                                        "qnNamespace": "tickets.inputs"
                                     },
                                     "tag": "RefNamed"
                                 }
@@ -15574,7 +15014,7 @@
                             "contents": {
                                 "contents": {
                                     "qnLocalName": "InputValue",
-                                    "qnNamespace": "chats.inputs"
+                                    "qnNamespace": "tickets.inputs"
                                 },
                                 "tag": "RefNamed"
                             },
@@ -15585,6 +15025,19 @@
                 "tag": "KindStruct"
             },
             "tdName": "InputHistoryEntry",
+            "tdNamespace": "chats"
+        },
+        "chats.InputKind": {
+            "tdDescription": "INPUT-3: what an **input** asks for (INPUT-1 decision 2, the owner's\nfixed set): `choice` — one of its options (an `<m-decision>`); `multi` —\nany of its options, a set; `text` — a free reply (both an `<m-input>`).\nLowercase on the wire, as [`Kind`] is.",
+            "tdKind": {
+                "kseValues": [
+                    "choice",
+                    "multi",
+                    "text"
+                ],
+                "tag": "KindStringEnum"
+            },
+            "tdName": "InputKind",
             "tdNamespace": "chats"
         },
         "chats.InputOption": {
@@ -15915,125 +15368,6 @@
             },
             "tdName": "WatchEnd",
             "tdNamespace": "chats"
-        },
-        "chats.inputs.InputId": {
-            "tdDescription": "INPUT-1: an input's id — the `id` attribute of its `<m-decision>` or\n`<m-input>`, trimmed, unique in its ticket.",
-            "tdKind": {
-                "kpFormat": null,
-                "kpType": "string",
-                "tag": "KindPrimitive"
-            },
-            "tdName": "InputId",
-            "tdNamespace": "chats.inputs"
-        },
-        "chats.inputs.InputKind": {
-            "tdDescription": "INPUT-3: what an **input** asks for (INPUT-1 decision 2, the owner's\nfixed set): `choice` — one of its options (an `<m-decision>`); `multi` —\nany of its options, a set; `text` — a free reply (both an `<m-input>`).\nLowercase on the wire, as [`Kind`] is.",
-            "tdKind": {
-                "kseValues": [
-                    "choice",
-                    "multi",
-                    "text"
-                ],
-                "tag": "KindStringEnum"
-            },
-            "tdName": "InputKind",
-            "tdNamespace": "chats.inputs"
-        },
-        "chats.inputs.InputState": {
-            "tdDescription": "Where an input stands (any case)",
-            "tdKind": {
-                "kseValues": [
-                    "open",
-                    "answered",
-                    "closed",
-                    "removed",
-                    "withdrawn"
-                ],
-                "tag": "KindStringEnum"
-            },
-            "tdName": "InputState",
-            "tdNamespace": "chats.inputs"
-        },
-        "chats.inputs.InputValue": {
-            "tdDescription": "INPUT-3: an answer's value, typed by its input's kind — internally\ntagged, as [`Placement`] is: `{\"type\": \"choice\", \"option\": \"archive\"}`\n(one option's `value`), `{\"type\": \"multi\", \"options\": [\"a\", \"b\"]}` (a set\nof them — stored in the order the body declares them, each once; it may\nbe empty: none ticked), `{\"type\": \"text\", \"text\": \"…\"}` (a reply, not\nblank). Through synapse, a param's fields are dotted flags:\n`--value.type choice --value.option archive`.",
-            "tdKind": {
-                "keDiscriminator": "type",
-                "keVariants": [
-                    {
-                        "vdDescription": null,
-                        "vdFields": [
-                            {
-                                "fdDefault": null,
-                                "fdDescription": null,
-                                "fdName": "option",
-                                "fdRequired": true,
-                                "fdType": {
-                                    "contents": [
-                                        "string",
-                                        null
-                                    ],
-                                    "tag": "RefPrimitive"
-                                }
-                            }
-                        ],
-                        "vdName": "choice"
-                    },
-                    {
-                        "vdDescription": null,
-                        "vdFields": [
-                            {
-                                "fdDefault": null,
-                                "fdDescription": null,
-                                "fdName": "options",
-                                "fdRequired": true,
-                                "fdType": {
-                                    "contents": {
-                                        "contents": [
-                                            "string",
-                                            null
-                                        ],
-                                        "tag": "RefPrimitive"
-                                    },
-                                    "tag": "RefArray"
-                                }
-                            }
-                        ],
-                        "vdName": "multi"
-                    },
-                    {
-                        "vdDescription": null,
-                        "vdFields": [
-                            {
-                                "fdDefault": null,
-                                "fdDescription": null,
-                                "fdName": "text",
-                                "fdRequired": true,
-                                "fdType": {
-                                    "contents": [
-                                        "string",
-                                        null
-                                    ],
-                                    "tag": "RefPrimitive"
-                                }
-                            }
-                        ],
-                        "vdName": "text"
-                    }
-                ],
-                "tag": "KindEnum"
-            },
-            "tdName": "InputValue",
-            "tdNamespace": "chats.inputs"
-        },
-        "chats.inputs.MessageText": {
-            "tdDescription": "MENGER-13: why — a transition's message, an answer's rationale, a\ntombstone's reason — trimmed, at most [`MESSAGE_MAX`] bytes. Blank is\nno message.",
-            "tdKind": {
-                "kpFormat": null,
-                "kpType": "string",
-                "tag": "KindPrimitive"
-            },
-            "tdName": "MessageText",
-            "tdNamespace": "chats.inputs"
         },
         "comments.Anchor": {
             "tdDescription": "Where a comment was left: the app page, the place on it, what was there\nin words, and the ticket the element belongs to (when it belongs to one).\n\n`route`, `path` and `label` are required and not blank; `excerpt` may be\nempty (an element with no text). Each is trimmed. They are `#[serde(default)]`\nso that one left out arrives as empty and is refused *in band*, naming\nit — not as a transport error before the method runs.",
@@ -23209,7 +22543,7 @@
                         "fdType": {
                             "contents": {
                                 "qnLocalName": "InputId",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "tickets.inputs"
                             },
                             "tag": "RefNamed"
                         }
@@ -23222,7 +22556,7 @@
                         "fdType": {
                             "contents": {
                                 "qnLocalName": "InputKind",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "chats"
                             },
                             "tag": "RefNamed"
                         }
@@ -23283,7 +22617,7 @@
                         "fdType": {
                             "contents": {
                                 "qnLocalName": "InputState",
-                                "qnNamespace": "chats.inputs"
+                                "qnNamespace": "tickets.inputs"
                             },
                             "tag": "RefNamed"
                         }
@@ -24160,7 +23494,7 @@
                                 "fdType": {
                                     "contents": {
                                         "qnLocalName": "InputValue",
-                                        "qnNamespace": "chats.inputs"
+                                        "qnNamespace": "tickets.inputs"
                                     },
                                     "tag": "RefNamed"
                                 }
@@ -29342,6 +28676,102 @@
             },
             "tdName": "FilterSource",
             "tdNamespace": "tickets.filters"
+        },
+        "tickets.inputs.InputId": {
+            "tdDescription": "INPUT-1: an input's id — the `id` attribute of its `<m-decision>` or\n`<m-input>`, trimmed, unique in its ticket.",
+            "tdKind": {
+                "kpFormat": null,
+                "kpType": "string",
+                "tag": "KindPrimitive"
+            },
+            "tdName": "InputId",
+            "tdNamespace": "tickets.inputs"
+        },
+        "tickets.inputs.InputState": {
+            "tdDescription": "Where an input stands (any case)",
+            "tdKind": {
+                "kseValues": [
+                    "open",
+                    "answered",
+                    "closed",
+                    "removed",
+                    "withdrawn"
+                ],
+                "tag": "KindStringEnum"
+            },
+            "tdName": "InputState",
+            "tdNamespace": "tickets.inputs"
+        },
+        "tickets.inputs.InputValue": {
+            "tdDescription": "INPUT-3: an answer's value, typed by its input's kind — internally\ntagged, as [`Placement`] is: `{\"type\": \"choice\", \"option\": \"archive\"}`\n(one option's `value`), `{\"type\": \"multi\", \"options\": [\"a\", \"b\"]}` (a set\nof them — stored in the order the body declares them, each once; it may\nbe empty: none ticked), `{\"type\": \"text\", \"text\": \"…\"}` (a reply, not\nblank). Through synapse, a param's fields are dotted flags:\n`--value.type choice --value.option archive`.",
+            "tdKind": {
+                "keDiscriminator": "type",
+                "keVariants": [
+                    {
+                        "vdDescription": null,
+                        "vdFields": [
+                            {
+                                "fdDefault": null,
+                                "fdDescription": null,
+                                "fdName": "option",
+                                "fdRequired": true,
+                                "fdType": {
+                                    "contents": [
+                                        "string",
+                                        null
+                                    ],
+                                    "tag": "RefPrimitive"
+                                }
+                            }
+                        ],
+                        "vdName": "choice"
+                    },
+                    {
+                        "vdDescription": null,
+                        "vdFields": [
+                            {
+                                "fdDefault": null,
+                                "fdDescription": null,
+                                "fdName": "options",
+                                "fdRequired": true,
+                                "fdType": {
+                                    "contents": {
+                                        "contents": [
+                                            "string",
+                                            null
+                                        ],
+                                        "tag": "RefPrimitive"
+                                    },
+                                    "tag": "RefArray"
+                                }
+                            }
+                        ],
+                        "vdName": "multi"
+                    },
+                    {
+                        "vdDescription": null,
+                        "vdFields": [
+                            {
+                                "fdDefault": null,
+                                "fdDescription": null,
+                                "fdName": "text",
+                                "fdRequired": true,
+                                "fdType": {
+                                    "contents": [
+                                        "string",
+                                        null
+                                    ],
+                                    "tag": "RefPrimitive"
+                                }
+                            }
+                        ],
+                        "vdName": "text"
+                    }
+                ],
+                "tag": "KindEnum"
+            },
+            "tdName": "InputValue",
+            "tdNamespace": "tickets.inputs"
         },
         "tickets.inputs.Question": {
             "tdDescription": "APP-90: a question for the owner, filed as a text input — not blank,\nits whitespace one space each (one line), at most [`QUESTION_MAX`]\nbytes, without control characters. Kept as text: the store escapes\nit into the body's markup.",
