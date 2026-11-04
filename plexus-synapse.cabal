@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            3.17.4
+version:            4.0.0
 synopsis:           Schema-driven CLI for Plexus RPC servers
 description:        Synapse is the command-line frontend for Plexus RPC. It discovers a
                     server's methods at runtime and builds its commands, help text,
@@ -86,10 +86,13 @@ library
     Synapse.Auth.Loopback
     Synapse.Hold
     Synapse.SchemaStore
+  other-modules:    Paths_plexus_synapse
+  autogen-modules:  Paths_plexus_synapse
   build-depends:
     base >= 4.17 && < 5,
-    -- SYNAPSE-28: setCallRouter, substrateRpcSub, unsubscribe
-    plexus-protocol >= 0.5.5,
+    -- SYNAPSE-28: setCallRouter, substrateRpcSub, unsubscribe; RETURNS-12:
+    -- the plexus 0.7 schema and envelope
+    plexus-protocol >= 0.6,
     aeson >= 2.0 && < 2.3,
     aeson-pretty >= 0.8 && < 0.9,
     text >= 2.0 && < 2.2,
@@ -528,6 +531,33 @@ test-suite ir12-method-role-test
     OverloadedStrings
   ghc-options:      -threaded
 
+test-suite ir3-test
+  -- RETURNS-13: IR 3.0. The golden test reads RETURNS-7's conformance
+  -- fixture by sibling path (../plexus-macros/fixtures/conformance/expected/)
+  -- and compares the IR built from its schema.json with its ir.json;
+  -- SYNAPSE_GOLDEN_ACCEPT=1 rewrites ir.json instead. Then one test per row
+  -- of the ticket's Required behavior table.
+  type:             exitcode-stdio-1.0
+  main-is:          IR3Spec.hs
+  build-depends:
+    base >= 4.17 && < 5,
+    plexus-protocol,
+    plexus-synapse,
+    aeson >= 2.2 && < 2.3,
+    aeson-pretty >= 0.8 && < 0.9,
+    aeson-qq >= 0.8 && < 0.9,
+    bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
+    filepath >= 1.4 && < 1.6,
+    text >= 2.0 && < 2.2,
+    hspec >= 2.10 && < 2.12
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+    LambdaCase
+  ghc-options:      -threaded
+
 test-suite keychain-test
   -- SELF-8 keychain tests. Opt-in via `-f build-keychain-tests` because
   -- they shell out to macOS `security` and touch the real keychain.
@@ -554,7 +584,7 @@ test-suite auth-test
   -- service in miniature (test/MockService.hs) on ports of their own.
   type:             exitcode-stdio-1.0
   main-is:          AuthSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
@@ -582,7 +612,7 @@ test-suite find-test
   -- terminal and piped; a caller's view; the IR cache's hash check.
   type:             exitcode-stdio-1.0
   main-is:          FindSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-depends:
     base >= 4.17 && < 5,
     plexus-synapse,
@@ -642,7 +672,7 @@ test-suite hold-test
   -- 500) through one holder whose memory stays flat.
   type:             exitcode-stdio-1.0
   main-is:          HoldSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -675,7 +705,7 @@ test-suite pipe-test
   -- resent, a write that went out exit 75).
   type:             exitcode-stdio-1.0
   main-is:          PipeSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -705,7 +735,7 @@ test-suite output-test
   -- nothing sent.
   type:             exitcode-stdio-1.0
   main-is:          OutputSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -752,7 +782,7 @@ test-suite tls-test
   -- name refused at the handshake. Pending without openssl.
   type:             exitcode-stdio-1.0
   main-is:          TlsSpec.hs
-  other-modules:    MockService
+  other-modules:    MockService, Plexus07
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
@@ -783,7 +813,7 @@ benchmark ir-bench
   -- 20 times from memory — median, p90, bytes allocated per build.
   type:             exitcode-stdio-1.0
   main-is:          IRBench.hs
-  other-modules:    IRFixture
+  other-modules:    IRFixture, Plexus07
   build-depends:
     base >= 4.17 && < 5,
     plexus-synapse,
@@ -808,7 +838,7 @@ test-suite ir-coverage-test
   -- bare object: exit 65.
   type:             exitcode-stdio-1.0
   main-is:          IRCoverageSpec.hs
-  other-modules:    IRFixture, MockService
+  other-modules:    IRFixture, MockService, Plexus07
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,

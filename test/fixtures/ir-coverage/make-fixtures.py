@@ -120,9 +120,11 @@ ut = {"Thing": {"type": "object", "required": ["bare", "list", "mixed"], "proper
 write('untyped.json', [(["tickets"], plugin("tickets", [event_method("thing", {"thing": ref("Thing")}, ut)]))])
 
 # a map, and an optional map: themes.Theme and themes.define, as menger sends them
+# (RETURNS-36: get's synthetic event is titled apart from define's ThemesEvent —
+# one title in one namespace is one type)
 define = [m for m in schemas['themes']['methods'] if m['name'] == 'define'][0]
 d = defs_closure('themes', ['Theme'])
-write('theme-map.json', [(["themes"], plugin("themes", [define, event_method("get", {"theme": ref("Theme")}, d, title="ThemesEvent")]))])
+write('theme-map.json', [(["themes"], plugin("themes", [define, event_method("get", {"theme": ref("Theme")}, d, title="ThemesGetEvent")]))])
 
 # a tuple: tickets.Component.preview
 d = defs_closure('tickets.components', ['Component'])

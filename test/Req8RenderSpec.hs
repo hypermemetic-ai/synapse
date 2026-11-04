@@ -35,6 +35,7 @@ fixture = PluginSchema
   , psVersion         = "1.0.0"
   , psDescription     = "Test service"
   , psLongDescription = Nothing
+  , psSelfHash        = Nothing
   , psHash            = "h1"
   , psMethods         = [method1]
   , psChildren        = Nothing
@@ -47,9 +48,12 @@ fixture = PluginSchema
       , methodDescription   = "List things"
       , methodHash          = "h2"
       , methodParams        = Just paramsSchema
-      , methodReturns       = Nothing
-      , methodStreaming     = False
+      , methodReturns       = [aesonQQ|{}|]
+      , methodError         = Nothing
+      , methodProgress      = Nothing
+      , methodCardinality   = Plexus.Schema.Recursive.CardinalityOne
       , methodBidirectional = False
+      , methodHttpMethod    = "POST"
       , methodRequestType   = Nothing
       , methodResponseType  = Nothing
       , methodDeprecation   = Nothing
@@ -96,7 +100,7 @@ main = do
         putStrLn $ "  [FAIL] " <> name <> ": " <> reason
         IORef.modifyIORef' failures (+ 1)
 
-  let (types, md) = extractMethodDef "svc" "svc" (head (psMethods fixture))
+  let (types, md) = either (error . show) id (extractMethodDef "svc" "svc" (head (psMethods fixture)))
       ir = emptyIR { irMethods = Map.singleton (mdFullPath md) md, irTypes = types }
       out = renderMethodHelp ir md
 

@@ -38,6 +38,8 @@ module MockService
   , callsMade
   , floodsEnded
   , dropNext
+    -- * RETURNS-36: a service on the published 0.7.0 line
+  , served070
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -59,6 +61,8 @@ import qualified Network.WebSockets as WS
 import qualified Data.Vector as V
 import System.IO (hFlush, stdout)
 import System.IO.Unsafe (unsafePerformIO)
+
+import Plexus07 (withContract)
 
 data ViewMode = NoView | AnonymousView | CallerView
   deriving (Eq, Show)
@@ -139,6 +143,14 @@ floodsEnded = unsafePerformIO (newIORef 0)
 {-# NOINLINE dropNext #-}
 dropNext :: IORef [Text]
 dropNext = unsafePerformIO (newIORef [])
+
+-- | RETURNS-36: when set, the services answer as one on the published 0.7.0
+-- line does — every schema as written (a method's @streaming@, no
+-- @cardinality@), every error frame spec/05's fields alone (@message@,
+-- @code@, @error_kind@ and a refusal's fields, no typed @error@).
+{-# NOINLINE served070 #-}
+served070 :: IORef Bool
+served070 = unsafePerformIO (newIORef False)
 
 mockCode, mockState :: Text
 mockCode = "c_19ab"
@@ -250,11 +262,22 @@ handleCall sc c next signedIn _o rid method params = do
         [ "jsonrpc" .= ("2.0" :: Text), "method" .= ("subscription" :: Text)
         , "params" .= object ["subscription" .= sub, "result" .= item] ])
       meta = object ["provenance" .= (["menger"] :: [Text]), "plexus_hash" .= ("h0" :: Text), "timestamp" .= (0 :: Int)]
+      -- RETURNS-36: a schema as plexus 0.7 states it (its methods' cardinality and returns)
       dat :: Text -> Value -> IO ()
-      dat ct v = emit (object ["type" .= ("data" :: Text), "metadata" .= meta, "content_type" .= ct, "content" .= v])
+      dat ct v = do
+        as070 <- readIORef served070
+        emit (object ["type" .= ("data" :: Text), "metadata" .= meta, "content_type" .= ct
+                     , "content" .= (if ".schema" `T.isSuffixOf` ct && not as070 then withContract v else v)])
+      -- RETURNS-36: plexus 0.7's error frame — the typed RemoteError the
+      -- message names, and AUTH-2's refusal fields beside it
       err :: Text -> [(K.Key, Value)] -> IO ()
-      err m extra = emit (Object (KM.fromList (
-        [("type", "error"), ("metadata", meta), ("message", String m), ("recoverable", Bool False)] <> extra)))
+      err m extra = do
+        as070 <- readIORef served070
+        -- as plexus-core writes it: message, code and spec/05's fields
+        -- always; 0.8's typed error beside them (the 0.7.0 line has none)
+        emit (Object (KM.fromList (
+          [("type", "error"), ("metadata", meta), ("message", String m), ("code", String (code070 m extra)), ("recoverable", Bool False)]
+          <> [ ("error", remoteError m extra) | not as070 ] <> extra)))
       done = emit (object ["type" .= ("done" :: Text), "metadata" .= meta])
   case method of
     "_info" -> do
@@ -308,6 +331,32 @@ handleCall sc c next signedIn _o rid method params = do
   where
     send :: Value -> IO ()
     send = WS.sendTextData c . encode
+
+-- | RETURNS-36: the plexus 0.7 'RemoteError' an error the mock answers is:
+-- a refusal (AUTH-2's fields) a missing grant, a "Method not found: a.m" or
+-- "Activation not found: a" one of those, anything else an execution failure.
+remoteError :: Text -> [(K.Key, Value)] -> Value
+remoteError m extra
+  | lookup "error_kind" extra == Just (String "forbidden") = object
+      [ "kind" .= ("forbidden" :: Text), "reason" .= ("missing_grant" :: Text)
+      , "grant" .= field "grant", "scope" .= field "scope"
+      , "roles" .= maybe (toJSON ([] :: [Text])) id (lookup "roles" extra)
+      , "held_on" .= maybe (toJSON ([] :: [Text])) id (lookup "held_on" extra) ]
+  | Just rest <- T.stripPrefix "Method not found: " m
+  , (a, dm) <- T.breakOnEnd "." rest, not (T.null a) = object
+      [ "kind" .= ("method_not_found" :: Text), "activation" .= T.dropEnd 1 a, "method" .= dm ]
+  | Just a <- T.stripPrefix "Activation not found: " m = object
+      [ "kind" .= ("activation_not_found" :: Text), "activation" .= a ]
+  | otherwise = object [ "kind" .= ("execution" :: Text), "message" .= m ]
+  where
+    field k = maybe (String "") id (lookup k extra)
+
+-- | The JSON-RPC code a service puts on an error frame (spec/05).
+code070 :: Text -> [(K.Key, Value)] -> Text
+code070 m extra
+  | lookup "error_kind" extra == Just (String "forbidden") = "-32003"
+  | "not found" `T.isInfixOf` m = "-32601"
+  | otherwise = "-32000"
 
 -- | SCAFFOLD-21: the answers to 'askBack's requests (@menger.respond@'s
 -- @response_data@), as they arrive on any connection.
@@ -449,7 +498,7 @@ authSchema = object
   , "methods" .= [ m "providers" "The ways in this server offers"
                  , m "login" "Sign in \x2014 a person through the browser, an agent with its key"
                  , m "signup" "Create an account, or ask for access" ] ]
-  where m n d = object ["name" .= (n :: Text), "description" .= (d :: Text), "hash" .= (n <> "0"), "public" .= True]
+  where m n d = object ["name" .= (n :: Text), "description" .= (d :: Text), "hash" .= (n <> "0"), "public" .= True, "returns" .= object []]
 
 ticketsSchema :: Scenario -> Value
 ticketsSchema sc = object $
@@ -463,7 +512,7 @@ ticketsSchema sc = object $
   where
     caller = scView sc == CallerView
     method (n, d, held, target) = object $
-      [ "name" .= (n :: Text), "description" .= (d :: Text), "hash" .= (n <> "0")
+      [ "name" .= (n :: Text), "description" .= (d :: Text), "hash" .= (n <> "0"), "returns" .= object []
       , "params" .= object ["type" .= ("object" :: Text), "required" .= (["id"] :: [Text]),
           "properties" .= object ["id" .= object ["type" .= ("string" :: Text), "description" .= ("Ticket id, e.g. MNG-2" :: Text)]]] ]
       <> (if caller then [ "grant" .= ("tickets." <> n), "held_on" .= (held :: [Text]) ] <> maybe [] (\t -> ["target" .= (t :: Text)]) target else [])

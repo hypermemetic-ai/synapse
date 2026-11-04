@@ -644,7 +644,7 @@ Two things make it so:
 - **A connection held between runs**, as ssh's ControlMaster holds one. The
   first call starts a holder (`synapse _hold`, a process of synapse's own)
   that keeps the signed-in WebSocket open and listens on a unix socket:
-  `$XDG_RUNTIME_DIR/synapse/holder-2.sock` (0600, in a 0700 directory of
+  `$XDG_RUNTIME_DIR/synapse/holder-3.sock` (0600, in a 0700 directory of
   yours). Later runs hand it their requests and read the replies back, so
   the TCP, TLS and upgrade handshakes (about 0.3 s to a hosted service) are
   paid once. Since 3.17.4 it is **one holder for all your calls**
@@ -655,7 +655,7 @@ Two things make it so:
   that brings its own credential (`-t`, `--token-file`, `--cookie`,
   `--header`, `PLEXUS_SESSION`) never uses a holder.
 - **Send first, check on failure.** synapse keeps what a call needs from the
-  backend in `~/.cache/synapse/schemas/` (`$XDG_CACHE_HOME`): where the
+  backend in `~/.cache/synapse/schemas-4/` (`$XDG_CACHE_HOME`): where the
   backend is, its `_info` as your agent was answered, each activation's
   schema (`PATH@VERSION-HASH.json`, pinned by `PATH.pin`) and a **plan** per
   method (its schema, its activation's deprecation, the types its flags parse
@@ -703,7 +703,7 @@ living its 10 idle minutes after its server had gone; a test loop calling
 throwaway servers on fresh ports left one per port, 1,634 of them (24.9 GB)
 on 2026-11-02. Now one process holds every connection your runs keep,
 however many services and agents you call — `synapse _hold`, at
-`$XDG_RUNTIME_DIR/synapse/holder-2.sock` — and inside it a connection per
+`$XDG_RUNTIME_DIR/synapse/holder-3.sock` — and inside it a connection per
 address, agent and credential. A call as one agent never rides another
 agent's connection, even when neither carries a credential; a session made
 again from the key is a connection beside the old one, which closes once
@@ -770,40 +770,56 @@ in the test's process):
 Synapse emits a structured Intermediate Representation for building typed clients:
 
 ```bash
-$ synapse --emit-ir substrate > substrate.ir.json
+$ synapse --emit-ir <backend> conformance > conformance.ir.json
 ```
+
+IR 3.0 (plexus 0.7) carries each method's contract as its schema states it:
+its item type (`mdReturns`), its error type when it can say no (`mdError`),
+its progress type when it reports progress (`mdProgress`), and whether it
+yields one item or many (`mdCardinality`). An excerpt of RETURNS-7's
+conformance fixture, whose whole IR is
+`plexus-macros/fixtures/conformance/expected/ir.json`:
 
 ```json
 {
-  "irVersion": "2.1",
+  "irVersion": "3.0",
   "irTypes": {
-    "echo.EchoEvent": {
-      "tdKind": {
-        "tag": "KindEnum",
-        "keDiscriminator": "event",
-        "keVariants": [
-          {"vdName": "echo", "vdFields": [
-            {"fdName": "message", "fdType": {"tag": "RefPrimitive", "contents": ["string", null]}},
-            {"fdName": "count", "fdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}}
-          ]}
-        ]
-      }
+    "conformance.Loaded": {
+      "tdKind": {"tag": "KindStruct", "ksFields": [
+        {"fdName": "items", "fdRequired": true, "fdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}}
+      ]}
+    },
+    "conformance.LoadError": {
+      "tdKind": {"tag": "KindEnum", "keDiscriminator": "type", "keVariants": [
+        {"vdName": "too_many", "vdFields": [
+          {"fdName": "max", "fdRequired": true, "fdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}},
+          {"fdName": "n", "fdRequired": true, "fdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}}
+        ]}
+      ]}
     }
   },
   "irMethods": {
-    "echo.echo": {
-      "mdStreaming": true,
+    "conformance.load": {
+      "mdCardinality": "many",
       "mdParams": [
-        {"pdName": "message", "pdType": {"tag": "RefPrimitive", "contents": ["string", null]}, "pdRequired": true},
-        {"pdName": "count", "pdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}, "pdRequired": true}
+        {"pdName": "n", "pdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}, "pdRequired": true}
       ],
-      "mdReturns": {"tag": "RefNamed", "contents": ["echo", "EchoEvent"]}
+      "mdReturns": {"tag": "RefNamed", "contents": {"qnNamespace": "conformance", "qnLocalName": "Loaded"}},
+      "mdError": {"tag": "RefNamed", "contents": {"qnNamespace": "conformance", "qnLocalName": "LoadError"}},
+      "mdProgress": {"tag": "RefNamed", "contents": {"qnNamespace": "conformance", "qnLocalName": "LoadStep"}}
     }
   }
 }
 ```
 
-Types are deduplicated by content hash across namespaces. Streaming is inferred from return type structure (enum with >1 non-error variant = streaming).
+Nothing is inferred: `mdCardinality` is the schema's `cardinality`, and every
+`RefNamed` has a `TypeDef` — a struct, a tagged enum (`keDiscriminator` is the
+property every variant gives a `const`, whatever it is called; a newtype
+variant over a struct carries the struct's fields), a string enum or an alias.
+One title in one namespace is one type: two methods whose schemas give a title
+the same shape share one `TypeDef`, and two shapes under one title fail the
+build, naming both methods. Identical types in different namespaces are then
+deduplicated (prefer the parent namespace, then the shortest).
 
 ### IR 2.1: read whole, or refused by name (SYNAPSE-CC-8, 3.17.0)
 
@@ -853,8 +869,9 @@ Every schema is read whole or refused; nothing is dropped. The reader
   anyOf enum const format minimum maximum exclusiveMinimum exclusiveMaximum
   minLength maxLength pattern minItems maxItems default description title
   examples deprecated $schema $defs definitions x-plexus-source
-  x-plexus-values`; any other (`allOf`, `multipleOf`, …) is
-  refused by name.
+  x-plexus-values`, and `allOf` as IR 3.0 reads it (`allOf: [X]` is X;
+  `allOf: [{"$ref": S}]` beside a tag is a newtype variant over S); any
+  other (`multipleOf`, an `allOf` of more, …) is refused by name.
 - **Where a shared type lives.** The same type (name and structure) in
   several namespaces is kept once, in the namespace whose methods and types
   refer to it most; a tie goes to the namespace that is an ancestor of the
@@ -868,6 +885,37 @@ menger's 2026-10-29 schemas (`test/fixtures/ir-coverage`), with no network;
 `ir-coverage-test` holds one fixture per construct, menger whole (21
 refusals; the IR equal to `menger-2026-10-29.ir-2.1.json`), and the guard
 that every construct 2.0 already typed serializes as before.
+
+### Servers on the published 0.7.0 line (RETURNS-36)
+
+synapse 4.0 reads plexus 0.8's schema and frames strictly, and the
+published 0.7.0 line's too, by what that server itself declares
+(plexus-protocol 0.6, as plexus-core's child seam reads an old peer): a
+method with `streaming` and no `cardinality` is many when the flag is
+true, else one, and its missing `returns` is `{}`; an error frame with no
+typed `error` is typed from its `error_kind`, else its `code` (its fields
+kept); a progress frame with no `content` is `Note {message,
+percentage}`. A method that states neither `cardinality` nor `streaming`
+is refused. `--emit-ir` against a 0.7.0 server writes IR 3.0 with those
+cardinalities.
+
+### Where IR 3.0 is built (RETURNS-36)
+
+- The types and the version: `src/Synapse/IR/Types.hs` — `IR`,
+  `MethodDef` (`mdReturns`, `mdError`, `mdProgress`, `mdCardinality`),
+  `TypeDef`/`TypeKind`/`TypeRef`, and `currentIrVersion = "3.0"`, which
+  `emptyIR` and the metadata's `gmIrVersion` carry.
+- The reader: `src/Synapse/IR/Read.hs` (`readRoot`, `readDefs`,
+  `readType`, `rootNamed`) — each schema position read whole or refused.
+- The builder: `src/Synapse/IR/Builder.hs` — `buildIR` (a walk),
+  `buildIRFromSchema backend path schema` (pure: one `PluginSchema`, no
+  metadata), `finalizeIR` (placement, dangling refs to `RefUnknown`,
+  refusals sorted), `checkTitles` (one title, one type: `TitleCollision`).
+- The golden: `test/IR3Spec.hs` builds `buildIRFromSchema "conformance"
+  ["conformance"]` from `plexus-macros/fixtures/conformance/expected/schema.json`
+  and compares it byte for byte (keys sorted, two-space indent, one
+  newline) with `ir.json` beside it; `CONFORMANCE_FIXTURE_DIR` points it
+  at a copy, `SYNAPSE_GOLDEN_ACCEPT=1` rewrites `ir.json`.
 
 ## Client Generation (synapse-cc)
 

@@ -155,7 +155,7 @@ many wait. Failures read as a connection of the run's own reports them
 (`LostConnection` with whether it was sent, a failed dial as `connect`'s error
 call), so `Synapse.Reconnect` and the re-login run unchanged on top.
 **Send first** (`Main.sendFirst`): with the backend's route, `_info` and the
-method's plan in `Synapse.SchemaStore` (`~/.cache/synapse/schemas/`, per
+method's plan in `Synapse.SchemaStore` (`~/.cache/synapse/schemas-4/`, per
 address, agent and backend; schemas as `PATH@VERSION-HASH.json` + `PATH.pin`,
 plans under `plans/`), the call is built from the plan and sent with no probe
 and no fetch; a `CacheMiss` (the cache lacks it) or `StaleSchema` (it misled
@@ -170,7 +170,7 @@ runs every outage again through a holder. README "One round trip a call".
 ## One holder for the user (SYNAPSE-40, 3.17.4)
 
 One `synapse _hold` process holds every connection a user's runs keep, at
-`$XDG_RUNTIME_DIR/synapse/holder-2.sock` (`Hold.holderSocketPath`; the 2 is
+`$XDG_RUNTIME_DIR/synapse/holder-3.sock` (`Hold.holderSocketPath`; the 3 is
 `Hold.holdProtocol` — bump it with any change to the run↔holder wire or to
 what the holder does with a request, the relay of plexus-protocol's
 `PlexusStreamItem` included, so a run never talks to a holder that reads it

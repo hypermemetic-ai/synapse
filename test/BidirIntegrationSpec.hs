@@ -97,7 +97,7 @@ bidirIntegrationSpec ir = do
   describe "Bidirectional type inference" $ do
     it "mdBidirType is Nothing for non-bidirectional methods" $ do
       -- Find methods that are NOT streaming and likely not bidirectional
-      let nonStreamingMethods = filter (not . mdStreaming) (Map.elems $ irMethods ir)
+      let nonStreamingMethods = filter ((/= CardinalityMany) . mdCardinality) (Map.elems $ irMethods ir)
       -- Check a sample (if any exist)
       case take 1 nonStreamingMethods of
         [] -> pending  -- No non-streaming methods to test
@@ -170,7 +170,7 @@ bidirIntegrationSpec ir = do
     it "bidirectional methods are streaming (typically)" $ do
       let bidirMethods = filter (isJust . mdBidirType) (Map.elems $ irMethods ir)
       forM_ bidirMethods $ \method ->
-        if mdStreaming method
+        if mdCardinality method == CardinalityMany
           then pure ()  -- Expected - bidir usually requires streaming
           else putStrLn $ "  Note: Bidirectional method " <> T.unpack (mdFullPath method) <>
                          " is NOT streaming (unusual but valid)"
@@ -232,7 +232,7 @@ bidirIntegrationSpec ir = do
     it "reports bidirectional coverage statistics" $ do
       let allMethods = Map.elems $ irMethods ir
       let bidirMethods = filter (isJust . mdBidirType) allMethods
-      let streamingMethods = filter mdStreaming allMethods
+      let streamingMethods = filter ((== CardinalityMany) . mdCardinality) allMethods
 
       putStrLn "\n  Bidirectional Statistics:"
       putStrLn $ "    Total methods:        " <> show (length allMethods)
@@ -265,4 +265,4 @@ testBidirMethod ir methodPath =
         mdBidirType method `shouldSatisfy` (\case { Just RefJson -> True; _ -> False })
 
       it (T.unpack methodPath <> " is a streaming method") $
-        mdStreaming method `shouldBe` True
+        mdCardinality method `shouldBe` CardinalityMany

@@ -47,7 +47,7 @@ pipeSpec :: FilePath -> Spec
 pipeSpec exe = describe "a closed stdout (SYNAPSE-26)" $ do
   it "is this build" $ do
     (_, out, _) <- readProcessWithExitCode exe ["--version"] ""
-    out `shouldStartWith` "3.17"
+    out `shouldStartWith` "4.0"
 
   -- one reader takes a byte and closes, one closes before anything is
   -- printed

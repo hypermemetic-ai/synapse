@@ -458,11 +458,13 @@ storedFresher st active rec = do
 
 -- | The in-band error a service answers a call whose session has ended with.
 isSessionEndedItem :: ServiceStreamItem -> Bool
-isSessionEndedItem = \case
+isSessionEndedItem item = case item of
   ServiceData _ _ _ (Object o)
     | KM.lookup "type" o == Just (String "error")
     , Just (String m) <- KM.lookup "message" o -> isSessionEndedText m
-  ServiceError _ _ e _ -> isSessionEndedText e
+  -- RETURNS-36 re-review #6: main's text on any error item — the server's
+  -- message, and so the typed unauthenticated's reason where there is one
+  ServiceError _ _ m _ -> isSessionEndedText m
   _ -> False
 
 isSessionEndedText :: Text -> Bool

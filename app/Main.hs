@@ -71,7 +71,7 @@ import Synapse.CLI.Parse (parseParams, parsePathAndParams, pairFlags)
 import qualified Synapse.CLI.Parse as Parse
 import Synapse.IR.Types (IR, irMethods, irRefusals, MethodDef)
 import qualified Synapse.IR.Types as IRT
-import Plexus.Schema.Recursive (DeprecationInfo)
+import Plexus.Schema.Recursive (Cardinality(..), DeprecationInfo)
 import qualified Data.Map.Strict as Map
 import qualified Synapse.CLI.Template as TemplateIR
 import Synapse.Deprecation (emitActivationWarning, emitMethodWarning)
@@ -996,13 +996,7 @@ takeStale = do
   pure v
 
 isStaleItem :: ServiceStreamItem -> Bool
-isStaleItem item = case itemRefusal item of
-  Just r -> refusalRoles r == ["admin"]
-  Nothing -> case item of
-    ServiceError _ _ msg _ -> any (`T.isInfixOf` msg)
-      [ "Method not found", "Activation not found", "Unknown method", "method not found"
-      , "errCode = -32601", "missing field", "unknown field", "invalid type", "unknown variant" ]
-    _ -> False
+isStaleItem = SS.isStaleItem
 
 -- | SYNAPSE-28: route every call through the connection holder (started
 -- by the first run), or — with --no-hold, a credential of the call's own,
@@ -1175,7 +1169,12 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                   unless (null refusals) $ liftIO $ do
                     TIO.hPutStrLn stderr $ "synapse: refused \x2014 " <> T.pack (show (length refusals))
                       <> " site" <> (if length refusals == 1 then "" else "s")
-                      <> " the IR cannot type (irRefusals); nothing was dropped:"
+                      <> " the IR cannot type (irRefusals); "
+                      -- RETURNS-36: a title collision leaves its activation
+                      -- out (Builder.pluginIRRefusing); say which
+                      <> (case [ irSite r | r <- refusals, irKeyword r == "title" ] of
+                            [] -> "nothing was dropped:"
+                            out -> "left out: " <> T.intercalate ", " out <> " (two types under one title):")
                     let w = maximum (map (T.length . irSite) refusals)
                         kw = maximum (map (T.length . irKeyword) refusals)
                     mapM_ (\r -> TIO.hPutStrLn stderr $ "  " <> T.justifyLeft w ' ' (irSite r) <> "  "
@@ -1532,7 +1531,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                 pure (Just (mergeUpgradeHeaders (seToken env') (seCookies env') (seHeaders env')))
       -- SYNAPSE-39: a stream has no end to wait for — with -o, its items
       -- go to FILE itself, each as it comes
-      when (methodStreaming method) $ liftIO Output.streaming
+      when (methodCardinality method == CardinalityMany) $ liftIO Output.streaming
       -- Use bidirectional streaming handler
       invokeStreamingWithBidir
         (Reconnect.callShape method)
@@ -1676,12 +1675,12 @@ metaCommands =
       , ""
       , "A connection held between runs (SYNAPSE-28, SYNAPSE-40):"
       , "  the first call starts the holder, one process for all your calls"
-      , "  ($XDG_RUNTIME_DIR/synapse/holder-2.sock), which keeps a signed-in socket per"
+      , "  ($XDG_RUNTIME_DIR/synapse/holder-3.sock), which keeps a signed-in socket per"
       , "  address and agent; later calls cost one round trip. A socket whose server is"
       , "  gone is let go at once, one idle for --hold-for (10m) closed, past 256 the"
       , "  longest idle first; the holder exits when it has held nothing for --hold-for."
       , "  --no-hold dials a connection of the run's own; synapse _hold status says what"
-      , "  is held. A call is sent from the schema cache (~/.cache/synapse/schemas) and"
+      , "  is held. A call is sent from the schema cache (~/.cache/synapse/schemas-4) and"
       , "  checked against the server only when it fails"
       , ""
       , "Meta-commands:"
@@ -1925,7 +1924,7 @@ printResult json raw cfg item = case itemRefusal item of
     -- SYNAPSE-39: under -o the -j line goes with FILE when the run fails,
     -- so the refusal is said on stderr too
     toFile <- Output.active
-    if json then LBS.putStrLn (encode item) else pure ()
+    if json then LBS.putStrLn (jsonLine item) else pure ()
     if not json || toFile then do
       ceiling' <- Session.currentCeiling
       TIO.hPutStr stderr (renderRefusal ceiling' r)
@@ -1939,7 +1938,7 @@ printResult json raw cfg item = case itemRefusal item of
     printResult' json raw cfg item
 
 printResult' :: Bool -> Bool -> RendererConfig -> ServiceStreamItem -> IO ()
-printResult' True _ _ item = LBS.putStrLn $ encode item
+printResult' True _ _ item = LBS.putStrLn $ jsonLine item
 printResult' _ True _ item = case item of
   -- Raw mode: just output the content
   ServiceData _ _ _ dat -> do

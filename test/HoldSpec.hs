@@ -273,10 +273,13 @@ main = hspec $ do
         show st `shouldNotContain` "s3cret"
 
   describe "one socket for the user" $ do
-    it "is holder-2.sock in the runtime directory, whatever the address or agent" $ do
+    -- RETURNS-36: 4.0 changes the items the holder relays (plexus 0.8's
+    -- typed error and progress), so its holder is protocol 3, apart from
+    -- 3.17.x's (2)
+    it "is holder-3.sock in the runtime directory, whatever the address or agent" $ do
       p <- Hold.holderSocketPath
-      takeFileName p `shouldBe` "holder-2.sock"
-      Hold.holdProtocol `shouldBe` 2
+      takeFileName p `shouldBe` "holder-3.sock"
+      Hold.holdProtocol `shouldBe` 3
 
   describe "the CLI, sending first" $ do
     synapse <- runIO (findExecutable "synapse")
@@ -294,7 +297,13 @@ cliSpec :: FilePath -> Spec
 cliSpec exe = do
   it "is this build" $ do
     (_, out, _) <- readCreateProcessWithExitCode (proc exe ["--version"]) ""
-    out `shouldStartWith` "3.17"
+    out `shouldStartWith` "4.0"
+
+  -- re-review #5: help names the holder's socket as it is
+  it "help names holder-3.sock" $ do
+    (_, out, err) <- readCreateProcessWithExitCode (proc exe ["--help"]) ""
+    (out <> err) `shouldContain` "holder-3.sock"
+    (out <> err) `shouldNotContain` "holder-2.sock"
 
   it "answers cold, fills the cache, and opens one connection for the probe, the schema and the call" $
     withRun $ \run _ -> do
@@ -439,7 +448,7 @@ oneHolderSpec exe = do
   it "puts its own holder in the place of an older one, never of a newer one" $ do
     (_, v, _) <- readCreateProcessWithExitCode (proc exe ["--version"]) ""
     let ours = takeWhile (/= '\n') v
-        sockIn dir = dir </> "run" </> "synapse" </> "holder-2.sock"
+        sockIn dir = dir </> "run" </> "synapse" </> ("holder-" <> show Hold.holdProtocol <> ".sock")
         versionIn dir = fmap (\st -> case st of { Object o | Just (String x) <- KM.lookup "version" o -> T.unpack x; _ -> "" }) <$> holderStatusIn dir
     -- an older holder (3.16.0, here in this process) is drained and replaced by the run's
     withHome [] $ \dir env -> withMockService todaysService $ \port -> do
@@ -462,6 +471,21 @@ oneHolderSpec exe = do
       (code, "MENGER-12" `isInfixOf` out) `shouldBe` (ExitSuccess, True)
       versionIn dir `shouldReturn` Right "99.0.0"
       holdersUnder dir `shouldReturn` []
+
+  -- RETURNS-36: a 3.x holder (protocol 2, holder-2.sock) is neither used nor
+  -- replaced by 4.0: the run holds on a socket of its own protocol, and the
+  -- 3.x holder is left as it was, for the 3.x runs
+  it "never reuses nor replaces a 3.x holder (protocol 2)" $
+    withHome [] $ \dir env -> withMockService todaysService $ \port -> do
+      let old = dir </> "run" </> "synapse" </> "holder-2.sock"
+      _ <- forkIO $ Hold.runHolder (Hold.holdOpts old 30) { Hold.hoVersion = "3.17.4" } `catchAll` const (pure ())
+      waitFor (doesFileExist old)
+      (code, out, _) <- runIn exe env [] port
+      (code, "MENGER-12" `isInfixOf` out) `shouldBe` (ExitSuccess, True)
+      let version = fmap (\st -> case st of { Object o | Just (String x) <- KM.lookup "version" o -> T.unpack x; _ -> "" })
+      version <$> askStatus old `shouldReturn` Right "3.17.4"
+      fmap heldOf <$> askStatus old `shouldReturn` Right []
+      doesFileExist (dir </> "run" </> "synapse" </> "holder-3.sock") `shouldReturn` True
 
   it "starts its holder in /, without the run's keepalive or secrets" $
     withHome [("PLEXUS_KEEPALIVE", "off"), ("SYNAPSE40_MARK", "kept")] $ \dir env -> withMockService todaysService $ \port -> do

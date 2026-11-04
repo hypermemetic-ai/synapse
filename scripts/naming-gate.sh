@@ -31,7 +31,7 @@ ALLOW=$(cat <<'ALLOWED'
 # generators read it). One description in it is plexus-core's doc comment on
 # PlexusStreamItem, as menger served it on 2026-10-29; it changes when
 # plexus-core renames the comment (NAMING-5) and the golden is captured again.
-^test/fixtures/ir-coverage/menger-2026-10-29\.ir-2\.1\.json$	\(DynamicHub routing layer\)	plexus-core's doc comment, served by menger, in a byte-identical golden — removed by NAMING-5 + a recapture (NAMING-18)
+^test/fixtures/ir-coverage/menger-2026-10-29\.ir-3\.0\.json$	\(DynamicHub routing layer\)	plexus-core's doc comment, served by menger, in a byte-identical golden — removed by NAMING-5 + a recapture (NAMING-18)
 ALLOWED
 )
 
