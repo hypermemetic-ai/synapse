@@ -1169,7 +1169,12 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                   unless (null refusals) $ liftIO $ do
                     TIO.hPutStrLn stderr $ "synapse: refused \x2014 " <> T.pack (show (length refusals))
                       <> " site" <> (if length refusals == 1 then "" else "s")
-                      <> " the IR cannot type (irRefusals); nothing was dropped:"
+                      <> " the IR cannot type (irRefusals); "
+                      -- RETURNS-36: a title collision leaves its activation
+                      -- out (Builder.pluginIRRefusing); say which
+                      <> (case [ irSite r | r <- refusals, irKeyword r == "title" ] of
+                            [] -> "nothing was dropped:"
+                            out -> "left out: " <> T.intercalate ", " out <> " (two types under one title):")
                     let w = maximum (map (T.length . irSite) refusals)
                         kw = maximum (map (T.length . irKeyword) refusals)
                     mapM_ (\r -> TIO.hPutStrLn stderr $ "  " <> T.justifyLeft w ' ' (irSite r) <> "  "
