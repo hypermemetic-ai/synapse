@@ -9,6 +9,7 @@ module Synapse.Transport
     fetchSchema
   , fetchSchemaAt
   , fetchServiceIR
+  , rootSchemaKnown
   , fetchMethodSchema
 
     -- * Method Invocation (collected)
@@ -180,6 +181,37 @@ fetchServiceIR path = do
   Log.logDebug logger Log.SubsystemSchema $ "The service's ir at " <> showPath path <> ": "
     <> maybe "none (walking the schemas)" (either ("refused: " <>) (const "used")) answer
   pure answer
+
+-- | RETURNS-40 review #5: the service's own schema, as cheaply as this run
+--   has it — the run's memo, else the schema cache on disk, else fetched
+--   once, never ridden out (a service that cannot be reached now is the
+--   walk's to wait for), and memoized: a walk from the root reads it from
+--   there. 'Nothing' when it cannot be had.
+rootSchemaKnown :: SynapseM (Maybe PluginSchema)
+rootSchemaKnown = do
+  memo <- asks seFetched
+  known <- liftIO $ Map.lookup [] <$> readIORef memo
+  case known of
+    Just s -> pure (Just s)
+    Nothing -> do
+      src <- asks seSchemaSource
+      stored <- case src of
+        FromServer (Just st) -> liftIO (Store.readSchema st [])
+        FromCache st -> liftIO (Store.readSchema st [])
+        FromServer Nothing -> pure Nothing
+      case stored of
+        Just s -> pure (Just s)
+        Nothing -> do
+          cfg <- getConfig
+          fetched <- liftIO (ST.fetchSchemaAt cfg [])
+          case fetched of
+            Left _ -> pure Nothing
+            Right s -> do
+              liftIO $ modifyIORef' memo (Map.insert [] s)
+              case src of
+                FromServer (Just st) -> liftIO (Store.writeSchema st [] s)
+                _ -> pure ()
+              pure (Just s)
 
 -- | A path as a message names it.
 showPath :: Path -> Text

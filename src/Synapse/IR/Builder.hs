@@ -62,7 +62,7 @@ import Data.Time.Format (formatTime, defaultTimeLocale)
 import Synapse.Schema.Types
 import Synapse.Schema.Functor (SchemaF(..))
 import Synapse.Algebra.Walk (walkSchemaPar)
-import Synapse.Transport (fetchServiceIR)
+import Synapse.Transport (fetchServiceIR, rootSchemaKnown)
 import Synapse.Monad
 import Synapse.IR.Types hiding (QualifiedName(..), qualifiedNameFull)
 import Synapse.IR.Types (QualifiedName(..), qualifiedNameFull, synapseVersion)
@@ -145,7 +145,8 @@ extractPluginHashInfo schema = PluginHashInfo
 -- Uses parallel schema fetching for better performance
 --
 -- RETURNS-40: a service that writes its own IR (@<backend>.ir@, plexus-core
--- 0.8) is asked for it first, one call for the whole walk; its IR is the
+-- 0.8: its own schema lists @ir@, read from the run's memo or the schema
+-- cache when they have it) is asked for it first, one call for the whole walk; its IR is the
 -- one this walk would build from the same schemas. The walk is made only
 -- for a service with no @ir@ (every 0.7.0 one), or from the schema cache
 -- alone (SYNAPSE-28), which has no server to ask.
@@ -154,7 +155,13 @@ buildIR generatorInfoStrs path = do
   backend <- asks seBackend
   src <- asks seSchemaSource
   served <- case src of
-    FromServer _ -> fetchServiceIR path
+    FromServer _ -> do
+      -- review #5: asked only of a service whose own schema lists `ir`
+      -- (every 0.7.0 one lists none: no call is spent on it)
+      root <- rootSchemaKnown
+      if maybe False (any ((== "ir") . methodName) . psMethods) root
+        then fetchServiceIR path
+        else pure Nothing
     FromCache _ -> pure Nothing
   built <- case served of
     Just (Right ir) -> pure ir
