@@ -124,3 +124,7 @@ temp/
 .cache/
 *.bak
 *.tmp
+
+# local, not shipped
+cabal.project.local
+.menger/
