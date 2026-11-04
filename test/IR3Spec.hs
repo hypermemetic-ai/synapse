@@ -15,7 +15,8 @@
 --     walk reads ('buildIRFromSchemas') — the fixture
 --     @../plexus-macros/fixtures/ir-service/expected/@: @schemas.json@ in,
 --     @ir.json@ (the service), @ir.alpha.json@ (its @alpha@ subtree) and
---     @clash.error.txt@ (a title collision's refusal) out. The service writes
+--     @clash.ir.json@ (a title collision refuses its activation) and
+--     @clash.one.error.txt@ (the one-plugin entry still fails) out. The service writes
 --     its own IR (@<service>.ir@, plexus-core), held equal to these files.
 --     @SYNAPSE_GOLDEN_ACCEPT=1@ rewrites them too.
 module Main where
@@ -116,18 +117,23 @@ serviceGoldens acceptIt = do
   let builds =
         [ ("ir.json", "the whole service", buildIRFromSchemas "irsvc" [[]] schemas)
         , ("ir.alpha.json", "its alpha subtree", buildIRFromSchemas "irsvc" [["alpha"]] schemas)
+        , ("clash.ir.json", "the clash service", buildIRFromSchemas "clashsvc" [[]] clash)
         ]
-      refusal = either (\e -> LBS.fromStrict (TE.encodeUtf8 (renderIRBuildError e)) <> "\n") (const "built") (buildIRFromSchemas "clashsvc" [[]] clash)
+      -- RETURNS-36 review #9: the walk refuses the colliding activation and
+      -- goes on; the one-plugin entry still fails
+      clashOne = case Map.lookup ["clash"] clash of
+        Just s -> either (\e -> LBS.fromStrict (TE.encodeUtf8 (renderIRBuildError e)) <> "\n") (const "built") (buildIRFromSchema "clashsvc" ["clash"] s)
+        Nothing -> "no clash schema"
   irs <- traverse (\(file, what, built) -> do
            ir <- either (fail . T.unpack . renderIRBuildError) pure built
            pure (file, what, ir)) builds
   if acceptIt
     then do
       mapM_ (\(file, _, ir) -> LBS.writeFile (dir </> file) (renderIR ir) >> putStrLn ("wrote " <> dir </> file)) irs
-      LBS.writeFile (dir </> "clash.error.txt") refusal
+      LBS.writeFile (dir </> "clash.one.error.txt") clashOne
     else pure ()
   goldens <- traverse (\(file, what, ir) -> (\g -> (file, what, ir, g)) <$> LBS.readFile (dir </> file)) irs
-  clashGolden <- LBS.readFile (dir </> "clash.error.txt")
+  clashGolden <- LBS.readFile (dir </> "clash.one.error.txt")
   pure $ describe "golden: the ir-service fixture's IR (RETURNS-40)" $ do
     forM_ goldens $ \(file, what, ir, g) -> do
       it (what <> " equals " <> file <> " byte for byte") $
@@ -145,8 +151,15 @@ serviceGoldens acceptIt = do
       case [ ir | (f, _, ir, _) <- goldens, f == "ir.json" ] of
         (ir : _) -> null (irRefusals ir) `shouldBe` False
         [] -> expectationFailure "no ir.json"
-    it "the clash service is refused, as clash.error.txt says" $
-      refusal `shouldBe` clashGolden
+    it "the clash service's walk refuses clash (keyword title, both sites named) and builds the rest" $
+      case [ ir | (f, _, ir, _) <- goldens, f == "clash.ir.json" ] of
+        (ir : _) -> do
+          [ (rfSite r, rfKeyword r) | r <- irRefusals ir ] `shouldBe` [("clash", "title")]
+          [ m | m <- Map.keys (irMethods ir), "clash." `T.isPrefixOf` m ] `shouldBe` []
+          Map.member "" (irPlugins ir) `shouldBe` True
+        [] -> expectationFailure "no clash.ir.json"
+    it "the clash plugin alone (buildIRFromSchema) still fails, as clash.one.error.txt says" $
+      clashOne `shouldBe` clashGolden
 
 -- ============================================================================
 -- Golden

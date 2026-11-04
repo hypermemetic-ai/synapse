@@ -209,7 +209,9 @@ buildIRFromSchema backend path schema = do
 --   less 'irMetadata': the walk's own fold — a node's IR from its schema and
 --   its children's, in its @children@ order, a child no schema is given for
 --   skipped as a walk skips one whose fetch failed — each root's IR merged
---   left to right, then 'finalizeIR'. One root is exactly what
+--   left to right, then 'finalizeIR'. A node whose schemas put two shapes
+--   under one title is refused as the walk refuses it ('pluginIRRefusing'),
+--   so only a root with no schema fails. One root is exactly what
 --   @synapse -i <backend> <root>@ prints. The IR a service writes itself
 --   (plexus-core's @<service>.ir@) is held equal to it.
 buildIRFromSchemas
@@ -230,7 +232,9 @@ buildIRFromSchemas backend roots schemas = do
       Just schema -> do
         let kids = [ path ++ [csNamespace c] | c <- fromMaybe [] (psChildren schema), Map.member (path ++ [csNamespace c]) schemas ]
         childIRs <- traverse walk kids
-        pluginIR path schema childIRs
+        -- the walk's own node: a title collision refuses the activation,
+        -- not the walk (RETURNS-36 review #9)
+        pure (pluginIRRefusing path schema childIRs)
 
 -- | SYNAPSE-CC-8: the walk's IR made whole — shared types deduplicated and
 --   placed where they are referred to most, every ref that names no type
