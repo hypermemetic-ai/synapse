@@ -251,6 +251,16 @@ spec = do
       case frame070 "boom" "-32000" of
         ServiceError _ _ m _ -> m `shouldBe` "boom"
         _ -> expectationFailure "an error"
+    it "a frame without message: the typed error's line, an unknown kind's too" $ do
+      let bare err = parse (A.object [ "type" A..= ("error" :: Text), "metadata" A..= meta, "recoverable" A..= False
+                                     , "error" A..= (err :: Value) ]) :: PlexusStreamItem
+      case bare [aesonQQ|{"kind":"unauthenticated"}|] of
+        ServiceError _ _ m _ -> m `shouldBe` "unauthenticated: credentials required"
+        _ -> expectationFailure "an error"
+      case bare [aesonQQ|{"kind":"too_many_writes","retry_after_ms":250,"message":"slow down"}|] of
+        ServiceError _ _ m _ -> m `shouldBe` "too_many_writes: slow down"
+        _ -> expectationFailure "an error"
+      Store.isStaleItem (bare [aesonQQ|{"kind":"too_many_connections","max":64}|]) `shouldBe` False
     it "a signed-out or expired session is ended, 0.8 or 0.7.0" $ do
       Session.isSessionEndedItem signedOut08 `shouldBe` True
       Session.isSessionEndedItem (frame08 "Authentication required: your sign-in has expired: sign in again" "-32001"
