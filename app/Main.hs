@@ -101,6 +101,9 @@ import qualified Synapse.Output as Output
 import qualified Synapse.Identity.Store as Store
 import System.Exit (ExitCode(..), exitWith)
 import qualified Synapse.Find as Find
+import qualified Synapse.Input as In
+import Control.Monad (forM_)
+import System.Directory (getCurrentDirectory)
 import Synapse.IR.Cache (newIRCache, defaultCacheConfig)
 
 -- ============================================================================
@@ -1119,7 +1122,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
 
         Nothing -> do
           -- Parse path and inline params (--key value pairs)
-          let (pathSegs, rawParams, flagArgs, helpRequested) = parsePathAndParams argPath
+          let (pathSegs, rawParams, flagArgs0, helpRequested) = parsePathAndParams argPath
 
           -- Normal Plexus RPC routing
           -- Apply parameter transformations (path expansion, env vars)
@@ -1129,12 +1132,31 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
           -- read once and kept for the second pass below
           sourceEnv <- liftIO $ mkSourceEnv (teCwd transformEnv) (teHome transformEnv)
           let fromSources pairs = liftIO (expandSources sourceEnv pairs) >>= either (throwParse . renderSourceError) pure
-          sourcedParams <- if helpRequested then pure rawParams else fromSources rawParams
+          -- BIDIR-18: an input stream's flag (--input -, --input @FILE)
+          -- names a stream, read as the call runs — never read here; a
+          -- parameter of that name is read below, once the method is known
+          let streamFlag (k, _) = k `elem` ["input", "input_stream"]
+              keepStreamFlags pairs = do
+                expanded <- fromSources (filter (not . streamFlag) pairs)
+                let go [] _ = []
+                    go (p : ps) es | streamFlag p = p : go ps es
+                    go (_ : ps) (e : es) = e : go ps es
+                    go (_ : ps) [] = go ps []
+                pure (go pairs expanded)
+              -- the stream flags' values read now: for a method that has
+              -- no input half, they are a parameter's
+              expandStreamFlags pairs = do
+                expanded <- fromSources (filter streamFlag pairs)
+                let go [] _ = []
+                    go (p : ps) (e : es) | streamFlag p = e : go ps es
+                    go (p : ps) es = p : go ps es
+                pure (go pairs expanded)
+          sourcedParams <- if helpRequested then pure rawParams else keepStreamFlags rawParams
           inlineParams <- liftIO $ transformParams transformEnv defaultTransformers sourcedParams
 
           -- Mode 1.5: Respond subcommand (agent sends a response to a pending bidir request)
           if not (null pathSegs) && head pathSegs == "respond"
-            then handleRespondCommand sourcedParams
+            then expandStreamFlags sourcedParams >>= handleRespondCommand
 
           -- Mode 2: Schema request
           else if soSchema
@@ -1225,6 +1247,14 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                         -- Landed on a method: invoke or show help
                         ViewMethod method path -> do
                           let fullPath = T.intercalate "." path
+                          -- BIDIR-18: a method with an input half takes its
+                          -- stream (--input -/@FILE), --chunk and --progress
+                          -- out of the flags before its parameters are paired
+                          (inputFlags, flagArgs) <- case methodInput method of
+                            Nothing -> pure (Nothing, flagArgs0)
+                            Just _ -> case In.takeInputFlags (methodInputNames method) (methodFlagArity method) flagArgs0 of
+                              Left e -> throwParse e
+                              Right (f, rest) -> pure (Just f, rest)
 
                           -- IR-15: emit stderr deprecation warnings right before any
                           -- real invocation. Dedupe is per-process-lifetime, so this
@@ -1280,12 +1310,13 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                           -- 2. Parameter parsing (methods with params)
                           let needsIR = helpRequested
                                      || isJust (methodParams method)
+                                     || isJust (methodInput method)
                                      || isJust soParams
                                      || not (null inlineParams)
 
                           -- Fast path: parameter-less method with no help requested
                           if not needsIR
-                            then fireDeprecationWarnings >> keepPlan Nothing >> invokeMethod sourceEnv method path (object [])
+                            then fireDeprecationWarnings >> keepPlan Nothing >> invokeMethod sourceEnv inputFlags method path (object [])
                             else do
                               -- Build IR for this method's namespace
                               -- (SYNAPSE-28: the plan's, when it has one)
@@ -1341,7 +1372,13 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                                             Nothing | cached -> stale "a method the cache's IR lacks"
                                             Nothing ->
                                               -- Fallback to flat object if method not in IR
-                                              pure $ buildParamsObject inlineParams
+                                              -- BIDIR-18: an input method's own flags are no
+                                              -- parameter; any other's --input is
+                                              case methodInput method of
+                                                Just _ -> let names = methodInputNames method
+                                                              own (k, _) = k `elem` map (T.replace "-" "_") [In.inStream names, In.inChunk names, In.inProgress names]
+                                                          in pure $ buildParamsObject (filter (not . own) inlineParams)
+                                                Nothing -> buildParamsObject <$> expandStreamFlags inlineParams
                                       | otherwise -> pure $ object []
                                   -- Merge: user params override schema defaults
                                   let params = mergeParams schemaDefaults userParams
@@ -1350,8 +1387,15 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                                     then do
                                       backend <- asks seBackend
                                       liftIO $ LBS.putStrLn $ encodeDryRun backend (init path) (last path) params
+                                      -- BIDIR-18: and the first input frame it would send
+                                      forM_ (methodInput method) $ \schema -> do
+                                        (_, kind, chunk, _, src) <- inputCall fullPath method schema inputFlags
+                                        first <- liftIO $ In.dryRunFrame backend kind chunk src
+                                        case first of
+                                          Right frame -> liftIO $ TIO.putStrLn frame
+                                          Left e -> throwParse e
                                     -- Show help when: method has required params AND user provided no params
-                                    else if hasRequiredParams method && userParams == object [] && null inlineParams
+                                    else if hasRequiredParams method && userParams == object [] && null inlineParams && isNothing inputFlags
                                       then if cached then stale "help" else do
                                         -- Render help from IR
                                         case Map.lookup fullPath (irMethods ir) of
@@ -1364,7 +1408,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                                             -- Fallback: method not in IR, use basic info
                                             liftIO $ TIO.putStrLn $ T.intercalate "." path <> " - " <> methodDescription method
                                       -- IR-15: fire stderr deprecation warnings before real invocation.
-                                      else fireDeprecationWarnings >> keepPlan (Just ir) >> invokeMethod sourceEnv method path params
+                                      else fireDeprecationWarnings >> keepPlan (Just ir) >> invokeMethod sourceEnv inputFlags method path params
   where
     -- AUTH-8: what the _info probe at this address answered (view, auth)
     currentInfo :: SynapseM (Maybe BackendInfo)
@@ -1462,7 +1506,29 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
             Left err -> throwParse $ "Invalid --response JSON: " <> T.pack err
             Right (resp :: Response Value) -> sendResponse requestId resp
 
-    invokeMethod srcEnv method path params = do
+    -- BIDIR-18: what an input call reads and how: the flag's name, the
+    -- item's kind, the chunk, --progress, the source. No stream named is
+    -- refused before anything is sent, naming the flag.
+    inputCall dotted method schema inputFlags = do
+      let names = methodInputNames method
+          flag = In.inStream names
+          kind = In.itemKind schema
+      flags <- maybe (pure (In.InputFlags Nothing Nothing False)) pure inputFlags
+      src <- case In.ifSource flags of
+        Nothing -> throwParse $ dotted <> " takes a stream in: give it with --" <> flag
+          <> " - (stdin) or --" <> flag <> " @FILE"
+        Just v -> do
+          cwd <- liftIO getCurrentDirectory
+          home <- liftIO $ (Just <$> getHomeDirectory) `E.catch` \(_ :: E.SomeException) -> pure Nothing
+          either throwParse pure (In.sourceOf flag cwd home v)
+      case src of
+        In.FromFile p -> do
+          ok <- liftIO $ doesFileExist p
+          if ok then pure () else throwParse ("--" <> flag <> " @" <> T.pack p <> ": no such file")
+        In.FromStdin -> pure ()
+      pure (flag, kind, maybe In.defaultChunk id (In.ifChunk flags), In.ifProgress flags, src)
+
+    invokeMethod srcEnv inputFlags method path params = do
       let namespacePath = init path  -- path without method name
       let methodName' = last path
       -- Set method path hint for template resolution
@@ -1532,8 +1598,27 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
       -- SYNAPSE-39: a stream has no end to wait for — with -o, its items
       -- go to FILE itself, each as it comes
       when (methodCardinality method == CardinalityMany) $ liftIO Output.streaming
-      -- Use bidirectional streaming handler
-      invokeStreamingWithBidir
+      case methodInput method of
+       -- BIDIR-18: a method with an input half: its stream from stdin or a
+       -- file, under credit, never sent twice. While no credit has come
+       -- (nothing read), an item may be held back to run the call again
+       -- as any call's is; after, every item is printed as it is.
+       Just schema -> do
+        (_, kind, chunk, progress, src) <- inputCall (T.intercalate "." path) method schema inputFlags
+        when (src == In.FromStdin && stdinTaken) $
+          throwParse "a value was read from stdin (-), so the input stream cannot read it too; give the value as @FILE"
+        let printer' untouched item = do
+              fresh <- untouched
+              if fresh then printer item else do
+                case item of
+                  ServiceData{} -> Session.notePrinted
+                  _ -> pure ()
+                printResult soJson soRaw rendererCfg' item
+        invokeWithInput (Reconnect.callShape method) refreshAuth kind chunk progress src
+          namespacePath methodName' params printer'
+       Nothing ->
+        -- Use bidirectional streaming handler
+        invokeStreamingWithBidir
         (Reconnect.callShape method)
         refreshAuth
         resumed
@@ -1601,6 +1686,32 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
           (Just (String method), Nothing) -> invokeRaw method (object [])
           _ -> throwParse "JSON-RPC must have 'method' field"
         _ -> throwParse "JSON-RPC must be an object"
+
+-- | BIDIR-18: what a method's input flags are called, given its
+-- parameters (a parameter named @input@ keeps @--input@; the stream is
+-- then @--input-stream@).
+methodInputNames :: MethodSchema -> In.InputNames
+methodInputNames m = In.inputNames $ case methodParams m of
+  Just (Object o) | Just (Object props) <- KM.lookup "properties" o -> map K.toText (KM.keys props)
+  _ -> []
+
+-- | BIDIR-18: how a method's flag takes its value, from its schema — a
+-- boolean only a boolean word, any other parameter the next argument, an
+-- unknown flag the next unless it is a flag (as 'Parse.flagArity' reads
+-- the IR; the input flags are taken out before the IR is built).
+methodFlagArity :: MethodSchema -> Text -> In.FlagArity
+methodFlagArity m key = case methodParams m of
+  Just (Object o) | Just (Object props) <- KM.lookup "properties" o
+                  , Just prop <- KM.lookup (K.fromText (T.takeWhile (/= '.') key)) props ->
+      if isBoolean prop && not ("." `T.isInfixOf` key) then In.TakesBoolean else In.TakesNext
+  _ -> In.TakesUnlessFlag
+  where
+    isBoolean = \case
+      Object p -> case KM.lookup "type" p of
+        Just (String "boolean") -> True
+        Just (Array ts) -> String "boolean" `elem` ts && all (`elem` [String "boolean", String "null"]) ts
+        _ -> False
+      _ -> False
 
 -- | Build JSON object from key-value pairs
 buildParamsObject :: [(Text, Text)] -> Value
@@ -1675,7 +1786,7 @@ metaCommands =
       , ""
       , "A connection held between runs (SYNAPSE-28, SYNAPSE-40):"
       , "  the first call starts the holder, one process for all your calls"
-      , "  ($XDG_RUNTIME_DIR/synapse/holder-3.sock), which keeps a signed-in socket per"
+      , "  ($XDG_RUNTIME_DIR/synapse/holder-4.sock), which keeps a signed-in socket per"
       , "  address and agent; later calls cost one round trip. A socket whose server is"
       , "  gone is let go at once, one idle for --hold-for (10m) closed, past 256 the"
       , "  longest idle first; the holder exits when it has held nothing for --hold-for."

@@ -72,6 +72,82 @@
      "role": {
       "kind": "rpc"
      }
+    },
+    {
+     "description": "audio",
+     "hash": "a0",
+     "input": {
+      "contentEncoding": "base64",
+      "contentMediaType": "application/octet-stream",
+      "type": "string",
+      "x-plexus-binary": true
+     },
+     "name": "audio",
+     "returns": {
+      "oneOf": [
+       {
+        "properties": {
+         "type": {
+          "const": "ok",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
+    },
+    {
+     "description": "items",
+     "hash": "i0",
+     "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "One item in: when its frame was sent, and a pad of the scenario's size.",
+      "properties": {
+       "at": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+       },
+       "pad": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "at",
+       "pad"
+      ],
+      "title": "Item",
+      "type": "object"
+     },
+     "name": "items",
+     "returns": {
+      "oneOf": [
+       {
+        "properties": {
+         "type": {
+          "const": "ok",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type"
+        ],
+        "type": "object"
+       }
+      ],
+      "title": "TicketsEvent"
+     },
+     "role": {
+      "kind": "rpc"
+     }
     }
    ],
    "namespace": "tickets",

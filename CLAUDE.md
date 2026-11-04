@@ -170,7 +170,7 @@ runs every outage again through a holder. README "One round trip a call".
 ## One holder for the user (SYNAPSE-40, 3.17.4)
 
 One `synapse _hold` process holds every connection a user's runs keep, at
-`$XDG_RUNTIME_DIR/synapse/holder-3.sock` (`Hold.holderSocketPath`; the 3 is
+`$XDG_RUNTIME_DIR/synapse/holder-4.sock` (`Hold.holderSocketPath`; the 4 is
 `Hold.holdProtocol` — bump it with any change to the run↔holder wire or to
 what the holder does with a request, the relay of plexus-protocol's
 `PlexusStreamItem` included, so a run never talks to a holder that reads it
@@ -208,6 +208,36 @@ agents, a stopped server let go within 10 s, the cap, a loop of 500 calls to
 500 short-lived servers (`SYNAPSE40_LOOP`) through one holder, its memory
 flat; in process, the same and a status that names no credential.
 `MockService.withEphemeralService` stops as a process does.
+
+## A stream in: `--input` (BIDIR-18, holder protocol 4)
+
+A method whose schema has `input` (plexus-wire spec/10) is called with its
+stream from stdin or a file: `synapse … ingest items --input -` (or
+`@FILE`; `--chunk N` for bytes; `--progress`). plexus-protocol's
+`Plexus.Input` has the frames (`<ns>.input`, `<ns>.end`, the BIDIR-17
+binary frame), the signals (`credit`, `ack`, `input_closed`, read off a
+notification before it is parsed as an item) and `itemKind` (string: a
+line; `x-plexus-binary`: bytes; else NDJSON); `Plexus.Client.substrateRpcDuplex`
+hands an `InputHalf` its `InputPort` once the subscription is known, and
+`Plexus.Transport.setDuplexRouter` / `invokeMethodDuplex` route it.
+`Synapse.Input` feeds it: reads only while credit allows (the pipe is the
+buffer; memory flat; at most the handle's 8 KiB ahead), batches what is
+whole now and sends it without waiting on a partial line (bytes: what the
+source has, up to `--chunk`), sends `end` as soon as the source is over
+(credit or none), ends the call on any read error but EOF (74), never resends, keeps the tally
+(`input: sent … · acked through seq … · … unacked`, always on stderr at
+the end and on a disconnect), maps typed closes to exits (70, 65, 77; a
+bad line 65; a lost connection 69). `Synapse.Transport.invokeWithInput`
+runs it through `resilientCall` as a write (an unsent call is retried in
+the window, a sent one never). The holder carries it (`Hold.holderCallDuplex`,
+`relayInput`: `{"in"}`, `b SEQ LEN` + payload, `{"end"}` from the run,
+`{"t":"sig"}` back; a `b` line read strictly, its LEN at most 16 MiB,
+any other failure in the relay ending the call with an error), hence
+protocol 4. The IR reads an `Input<Bytes>` item
+as `RefPrimitive "string" (Just "binary")` (BIDIR-19's generator reads it
+so). `test/InputSpec.hs` (input-test) runs the built synapse against
+`MockService`'s `stream` activation (`inputSchemas`, `InputPlan`);
+`HoldSpec` carries text and binary frames through a holder and a mux.
 
 ## Credentials & `_self`
 

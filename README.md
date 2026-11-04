@@ -644,7 +644,7 @@ Two things make it so:
 - **A connection held between runs**, as ssh's ControlMaster holds one. The
   first call starts a holder (`synapse _hold`, a process of synapse's own)
   that keeps the signed-in WebSocket open and listens on a unix socket:
-  `$XDG_RUNTIME_DIR/synapse/holder-3.sock` (0600, in a 0700 directory of
+  `$XDG_RUNTIME_DIR/synapse/holder-4.sock` (0600, in a 0700 directory of
   yours). Later runs hand it their requests and read the replies back, so
   the TCP, TLS and upgrade handshakes (about 0.3 s to a hosted service) are
   paid once. Since 3.17.4 it is **one holder for all your calls**
@@ -703,7 +703,7 @@ living its 10 idle minutes after its server had gone; a test loop calling
 throwaway servers on fresh ports left one per port, 1,634 of them (24.9 GB)
 on 2026-11-02. Now one process holds every connection your runs keep,
 however many services and agents you call — `synapse _hold`, at
-`$XDG_RUNTIME_DIR/synapse/holder-3.sock` — and inside it a connection per
+`$XDG_RUNTIME_DIR/synapse/holder-4.sock` — and inside it a connection per
 address, agent and credential. A call as one agent never rides another
 agent's connection, even when neither carries a credential; a session made
 again from the key is a connection beside the old one, which closes once
@@ -764,6 +764,48 @@ in the test's process):
 | holders, a loop of 20 calls to 20 short-lived servers | 20 | 1 |
 | a loop of 500 calls to 500 short-lived servers | — | 1 holder, 103 s; RSS 29.8 MB at call 50, 31.2 MB at 500; nothing held 10 s on |
 | connections held to stopped servers, 10 s on | each holder's, for 10 min | 0 (let go within a second) |
+
+## A stream in: `--input` (BIDIR-18)
+
+A method with an input half (`Input<T>`, plexus-wire spec/10: its schema
+has `input` beside `params`) takes a stream in beside its stream out.
+stdin (`--input -`) or a file (`--input @path`) is that stream:
+
+```bash
+tail -f build.log | synapse --url wss://app.menger.sh/ws --as runner menger runs append_log --run 41 --input -
+synapse -P 4460 svc ingest tokens --run r1 --input @tokens.jsonl
+arecord -q -f S16_LE -r 16000 -c 1 | synapse -P 4460 voice listen --input - --chunk 640
+# stderr, at the end or on a disconnect:
+# input: sent 1,204 items in 1,204 frames · acked through seq 1,179 · 25 unacked
+```
+
+- **What an item is** comes from the item's schema: a string is a line; an
+  `Input<Bytes>` (`"x-plexus-binary": true`) is the bytes as they come, up
+  to `--chunk N` (4096 unless said, at most 16 MiB) a frame — what the
+  source has is sent, never held to fill a chunk — each a WebSocket binary frame
+  (`[0x01][subscription u64][seq u64][payload]`); anything else is NDJSON,
+  one JSON value a line — a line that is not one is named by its number,
+  no frame carries it, the call is ended and synapse exits 65.
+- **Under credit**: items are read only as the service grants credit, so
+  with none, synapse reads nothing more and the pipe in front of it is the
+  buffer — its memory stays flat however far the writer runs ahead. What is
+  ready goes out together (up to 256 items a frame), and a whole line goes
+  out while the next is still arriving. At the end of the input,
+  `<ns>.end` — at once, credit or none; only the end of the input ends it
+  (a failed read ends the call with exit 74, no `end`). The answer prints
+  as any call's.
+- **Never sent twice** (spec/10: no resume). A connection lost during the
+  call is said on stderr every time, with what was sent and acked, and the
+  run exits 69. A typed close exits by its kind: `past_credit` 70 (a bug in
+  synapse), `invalid_input` / `out_of_sequence` / `too_much_input` 65, an
+  input closed for a revoked or ended sign-in 77.
+- `--progress` prints sent / acked / credit on stderr once a second; `-n`
+  prints the open frame and the first input frame and sends nothing; a
+  method's `--help` and `_find` say it takes a stream in. A parameter named
+  `input` keeps `--input` (the stream is then `--input-stream`; `--chunk`
+  and `--progress` likewise become `--input-chunk` / `--input-progress`).
+- The frames go through the connection holder (holder protocol 4) or, with
+  `--no-hold`, on the run's own socket — the same frames either way.
 
 ## Code Generation
 

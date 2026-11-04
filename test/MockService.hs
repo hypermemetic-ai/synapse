@@ -43,6 +43,15 @@ module MockService
     -- * RETURNS-40: a service that writes its own IR
   , irAnswer
   , irAsked
+    -- * BIDIR-18: methods with an input half
+  , InputPlan(..)
+  , defaultInputPlan
+  , inputPlan
+  , inputSchemas
+  , Received(..)
+  , inputReceived
+  , inputViolations
+  , resetInput
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
@@ -53,7 +62,12 @@ import Control.Monad (forever, void)
 import Data.Aeson
 import qualified Data.Aeson.Key as K
 import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
+import qualified Data.ByteString.Lazy as LBS
+import Data.Bits (shiftL, (.|.))
+import qualified Data.Map.Strict as Map
+import Data.Word (Word64)
 import Data.IORef
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -168,6 +182,98 @@ irAnswer = unsafePerformIO (newIORef Nothing)
 irAsked :: IORef [Value]
 irAsked = unsafePerformIO (newIORef [])
 
+-- | BIDIR-18: how the services answer a call's input half.
+data InputPlan = InputPlan
+  { planWindow    :: Int
+    -- ^ the first credit, and the window: past half of it consumed, an
+    -- @ack@ and a @credit@ for what was consumed
+  , planStingy    :: Bool
+    -- ^ grant the first window and nothing more, never ack
+  , planRefuse    :: Maybe (Int, Text)
+    -- ^ at this many frames, refuse with this @error_kind@ (naming the frame)
+  , planClose     :: Maybe (Int, Text)
+    -- ^ at this many frames, @input_closed {reason}@, then an error item
+  , planDropAfter :: Maybe Int
+    -- ^ at this many frames, close the socket
+  } deriving (Eq, Show)
+
+defaultInputPlan :: InputPlan
+defaultInputPlan = InputPlan 64 False Nothing Nothing Nothing
+
+{-# NOINLINE inputPlan #-}
+inputPlan :: IORef InputPlan
+inputPlan = unsafePerformIO (newIORef defaultInputPlan)
+
+-- | One input frame as a service took it.
+data Received
+  = ReceivedJson Word64 [Value]                 -- ^ @menger.input {seq, items}@
+  | ReceivedBinary Word64 Word64 BS.ByteString  -- ^ a binary frame: subscription, seq, payload
+  | ReceivedEnd Word64                          -- ^ @menger.end {seq}@
+  deriving (Eq, Show)
+
+-- | BIDIR-18: every input frame the services took, in order.
+{-# NOINLINE inputReceived #-}
+inputReceived :: IORef [Received]
+inputReceived = unsafePerformIO (newIORef [])
+
+-- | BIDIR-18: what a client did that spec/10 forbids (past credit, out of
+-- sequence, a malformed binary frame), each said.
+{-# NOINLINE inputViolations #-}
+inputViolations :: IORef [Text]
+inputViolations = unsafePerformIO (newIORef [])
+
+resetInput :: InputPlan -> IO ()
+resetInput plan = do
+  writeIORef inputPlan plan
+  writeIORef inputReceived []
+  writeIORef inputViolations []
+
+-- | BIDIR-18: a root with a @stream@ activation beside @tickets@, whose
+-- methods take a stream in — for 'schemaOverride'.
+inputSchemas :: [(Text, Value)]
+inputSchemas =
+  [ ("", object
+      [ "namespace" .= ("menger" :: Text), "version" .= ("1.0.0" :: Text), "description" .= ("Central routing" :: Text)
+      , "hash" .= ("r-input" :: Text)
+      , "children" .=
+          [ object ["namespace" .= ("tickets" :: Text), "description" .= ("Plans as data" :: Text), "hash" .= ("t0" :: Text)]
+          , object ["namespace" .= ("stream" :: Text), "description" .= ("Streams in" :: Text), "hash" .= ("s0" :: Text)] ] ])
+  , ("stream", object
+      [ "namespace" .= ("stream" :: Text), "version" .= ("0.1.0" :: Text), "hash" .= ("s0" :: Text)
+      , "description" .= ("Streams in" :: Text)
+      , "methods" .=
+          [ m "lines" "A log, a line an item" (object ["type" .= ("string" :: Text)]) Nothing
+          , m "ingest" "Items in, an object each" item Nothing
+          , m "audio" "Raw bytes in" bytesSchema Nothing
+          , m "tagged" "Lines in, beside a parameter named input" (object ["type" .= ("string" :: Text)])
+              (Just (object ["type" .= ("object" :: Text), "required" .= (["input"] :: [Text]), "properties" .= object
+                  ["input" .= object ["type" .= ("string" :: Text), "description" .= ("A tag" :: Text)]]]))
+          ] ]) ]
+  where
+    m :: Text -> Text -> Value -> Maybe Value -> Value
+    m n d inp ps = object $
+      [ "name" .= (n :: Text), "description" .= (d :: Text), "hash" .= (n <> "0")
+      , "returns" .= object [], "input" .= inp ] ++ [ "params" .= p | Just p <- [ps] ]
+    item = object
+      [ "type" .= ("object" :: Text), "title" .= ("Item" :: Text), "required" .= (["at", "pad"] :: [Text])
+      , "properties" .= object ["at" .= object ["type" .= ("integer" :: Text)], "pad" .= object ["type" .= ("string" :: Text)]] ]
+    bytesSchema = object
+      [ "type" .= ("string" :: Text), "contentEncoding" .= ("base64" :: Text)
+      , "contentMediaType" .= ("application/octet-stream" :: Text), "x-plexus-binary" .= True ]
+
+-- | One call's input half at the service.
+data InputCall = InputCall
+  { icEmit     :: Value -> IO ()
+  , icMeta     :: Value
+  , icMethod   :: Text
+  , icNext     :: IORef Word64   -- ^ the next frame expected
+  , icItems    :: IORef Int      -- ^ items taken
+  , icGranted  :: IORef Int      -- ^ items granted in all
+  , icUngiven  :: IORef Int      -- ^ items consumed and not yet granted back
+  , icTag      :: Maybe Text     -- ^ the call's own param named input, if it had one
+  , icOver     :: IORef Bool     -- ^ the half is closed (refused, closed)
+  }
+
 mockCode, mockState :: Text
 mockCode = "c_19ab"
 mockState = "s_7f2c"
@@ -248,15 +354,20 @@ acceptLoop onAccept sc sock = do
       atomicModifyIORef' connectionsAccepted (\n -> (n + 1, ()))
       atomicModifyIORef' connectionsOpen (\n -> (n + 1, ()))
       next <- newIORef (100 :: Int)
+      inputs <- newIORef Map.empty
       flip finally (atomicModifyIORef' connectionsOpen (\n -> (n - 1, ()))) $ forever $ do
-        msg <- WS.receiveData c
-        case decode msg of
-          Just (Object o) -> handle sc c next (isBearer bearer) o
-          _ -> pure ()
+        dm <- WS.receiveDataMessage c
+        case dm of
+          WS.Binary bytes -> binaryInput inputs (LBS.toStrict bytes)
+          WS.Text msg _ -> case decode msg of
+            Just (Object o)
+              | str "method" o `elem` ["menger.input", "menger.end"] -> jsonInput inputs o
+              | otherwise -> handle sc c next inputs (isBearer bearer) o
+            _ -> pure ()
     isBearer = maybe False (BS8.isPrefixOf "Bearer ")
 
-handle :: Scenario -> WS.Connection -> IORef Int -> Bool -> Object -> IO ()
-handle sc c next signedIn o = do
+handle :: Scenario -> WS.Connection -> IORef Int -> IORef (Map.Map Int InputCall) -> Bool -> Object -> IO ()
+handle sc c next inputs signedIn o = do
   let rid = KM.lookup "id" o
       method = str "method" o
       params = case KM.lookup "params" o of { Just (Object p) -> p; _ -> KM.empty }
@@ -265,13 +376,13 @@ handle sc c next signedIn o = do
     then do
       atomicModifyIORef' unsubscribes (\us -> (maybe Null id (KM.lookup "params" o) : us, ()))
       send (object ["jsonrpc" .= ("2.0" :: Text), "id" .= rid, "result" .= True])
-    else handleCall sc c next signedIn o rid method params
+    else handleCall sc c next inputs signedIn o rid method params
   where
     send :: Value -> IO ()
     send = WS.sendTextData c . encode
 
-handleCall :: Scenario -> WS.Connection -> IORef Int -> Bool -> Object -> Maybe Value -> Text -> Object -> IO ()
-handleCall sc c next signedIn _o rid method params = do
+handleCall :: Scenario -> WS.Connection -> IORef Int -> IORef (Map.Map Int InputCall) -> Bool -> Object -> Maybe Value -> Text -> Object -> IO ()
+handleCall sc c next inputs signedIn _o rid method params = do
   sub <- atomicModifyIORef' next (\n -> (n + 1, n))
   send (object ["jsonrpc" .= ("2.0" :: Text), "id" .= rid, "result" .= sub])
   let emit item = send (object
@@ -334,6 +445,15 @@ handleCall sc c next signedIn _o rid method params = do
         "tickets.ask" -> void $ forkIO (askBack emit meta dat err >> done)
         -- SYNAPSE-28: a stream that never ends by itself (until unsubscribed)
         "tickets.watch" -> dat "tickets.watch" (object ["type" .= ("watching" :: Text)])
+        -- BIDIR-18: a method with an input half: credit at once, then the
+        -- frames as they come (jsonInput, binaryInput)
+        _ | inner `elem` ["stream.lines", "stream.ingest", "stream.audio", "stream.tagged"] -> do
+            plan <- readIORef inputPlan
+            ic <- InputCall emit meta inner <$> newIORef 0 <*> newIORef 0 <*> newIORef (planWindow plan)
+                    <*> newIORef 0 <*> pure (case KM.lookup "input" args of { Just (String t) -> Just t; _ -> Nothing })
+                    <*> newIORef False
+            atomicModifyIORef' inputs (\m -> (Map.insert sub ic m, ()))
+            emit (object ["type" .= ("credit" :: Text), "n" .= planWindow plan])
         "menger.ir" -> do
           atomicModifyIORef' irAsked (\as -> (as ++ [maybe (Object KM.empty) id (KM.lookup "params" params)], ()))
           answer <- readIORef irAnswer
@@ -353,6 +473,97 @@ handleCall sc c next signedIn _o rid method params = do
   where
     send :: Value -> IO ()
     send = WS.sendTextData c . encode
+
+-- | BIDIR-18: a JSON input frame or end, for the call it names.
+jsonInput :: IORef (Map.Map Int InputCall) -> Object -> IO ()
+jsonInput inputs o = do
+  let params = case KM.lookup "params" o of { Just (Object p) -> p; _ -> KM.empty }
+      num k = case KM.lookup k params of { Just (Number n) -> Just (round n); _ -> Nothing }
+  case (num "subscription", num "seq") of
+    (Just sub, Just sq) -> do
+      calls <- readIORef inputs
+      case Map.lookup sub calls of
+        Nothing -> violation ("a frame for no call: " <> T.pack (show sub))
+        Just ic
+          | str "method" o == "menger.end" -> do
+              atomicModifyIORef' inputReceived (\rs -> (rs ++ [ReceivedEnd (fromIntegral sq)], ()))
+              expected <- readIORef (icNext ic)
+              if fromIntegral sq /= expected then violation ("end seq " <> T.pack (show sq) <> ", frames " <> T.pack (show expected)) else pure ()
+              finish ic
+          | otherwise -> do
+              let items = case KM.lookup "items" params of { Just (Array a) -> V.toList a; _ -> [] }
+              atomicModifyIORef' inputReceived (\rs -> (rs ++ [ReceivedJson (fromIntegral sq) items], ()))
+              taken ic (fromIntegral sq) (length items)
+    _ -> violation "an input frame without subscription or seq"
+
+-- | BIDIR-18: a binary input frame: @[0x01][subscription u64][seq u64][payload]@.
+binaryInput :: IORef (Map.Map Int InputCall) -> BS.ByteString -> IO ()
+binaryInput inputs bytes
+  | BS.length bytes < 17 || BS.head bytes /= 0x01 = violation "a malformed binary frame"
+  | otherwise = do
+      let word b = foldl (\acc x -> (acc `shiftL` 8) .|. fromIntegral x) (0 :: Word64) (BS.unpack b)
+          sub = word (BS.take 8 (BS.drop 1 bytes))
+          sq = word (BS.take 8 (BS.drop 9 bytes))
+          payload = BS.drop 17 bytes
+      atomicModifyIORef' inputReceived (\rs -> (rs ++ [ReceivedBinary sub sq payload], ()))
+      calls <- readIORef inputs
+      case Map.lookup (fromIntegral sub) calls of
+        Nothing -> violation ("a binary frame for no call: " <> T.pack (show sub))
+        Just ic -> taken ic sq 1
+
+violation :: Text -> IO ()
+violation v = atomicModifyIORef' inputViolations (\vs -> (vs ++ [v], ()))
+
+-- | Frame @sq@ of @n@ items taken: checked against the sequence and the
+-- credit, then acked and credited as the plan says.
+taken :: InputCall -> Word64 -> Int -> IO ()
+taken ic sq n = do
+  over <- readIORef (icOver ic)
+  if over then pure () else do
+    plan <- readIORef inputPlan
+    expected <- readIORef (icNext ic)
+    if sq /= expected then violation ("out of sequence: " <> T.pack (show sq) <> ", expected " <> T.pack (show expected)) else pure ()
+    writeIORef (icNext ic) (sq + 1)
+    total <- atomicModifyIORef' (icItems ic) (\k -> (k + n, k + n))
+    granted <- readIORef (icGranted ic)
+    if total > granted then violation ("past credit: " <> T.pack (show total) <> " of " <> T.pack (show granted)) else pure ()
+    let frames = fromIntegral (sq + 1)
+        errorItem kind = icEmit ic (object
+          [ "type" .= ("error" :: Text), "metadata" .= icMeta ic, "message" .= ("input refused: " <> kind)
+          , "code" .= ("-32602" :: Text), "error_kind" .= kind, "recoverable" .= False, "seq" .= sq ])
+    case (planDropAfter plan, planRefuse plan, planClose plan) of
+      (Just k, _, _) | frames >= k -> ioError (userError "dropped mid-input")
+      (_, Just (k, kind), _) | frames >= k -> do
+        writeIORef (icOver ic) True
+        icEmit ic (object ["type" .= ("input_closed" :: Text), "reason" .= kind])
+        errorItem kind
+      (_, _, Just (k, reason)) | frames >= k -> do
+        writeIORef (icOver ic) True
+        icEmit ic (object ["type" .= ("input_closed" :: Text), "reason" .= reason, "ack" .= sq])
+        icEmit ic (object
+          [ "type" .= ("error" :: Text), "metadata" .= icMeta ic, "message" .= ("the call was asked again: " <> reason)
+          , "code" .= ("-32001" :: Text), "error_kind" .= ("unauthenticated" :: Text), "recoverable" .= False ])
+      _ | planStingy plan -> pure ()
+        | otherwise -> do
+            ungiven <- atomicModifyIORef' (icUngiven ic) (\u -> (u + n, u + n))
+            if ungiven * 2 >= planWindow plan
+              then do
+                writeIORef (icUngiven ic) 0
+                modifyIORef' (icGranted ic) (+ ungiven)
+                icEmit ic (object ["type" .= ("ack" :: Text), "seq" .= sq])
+                icEmit ic (object ["type" .= ("credit" :: Text), "n" .= ungiven])
+              else pure ()
+
+-- | The input ended: the last ack, what was taken, done.
+finish :: InputCall -> IO ()
+finish ic = do
+  n <- readIORef (icItems ic)
+  next <- readIORef (icNext ic)
+  if next > 0 then icEmit ic (object ["type" .= ("ack" :: Text), "seq" .= (next - 1)]) else pure ()
+  icEmit ic (object
+    [ "type" .= ("data" :: Text), "metadata" .= icMeta ic, "content_type" .= icMethod ic
+    , "content" .= object (["type" .= ("taken" :: Text), "items" .= n, "frames" .= next] ++ [ "tag" .= t | Just t <- [icTag ic] ]) ])
+  icEmit ic (object ["type" .= ("done" :: Text), "metadata" .= icMeta ic])
 
 -- | RETURNS-36: the plexus 0.7 'RemoteError' an error the mock answers is:
 -- a refusal (AUTH-2's fields) a missing grant, a "Method not found: a.m" or

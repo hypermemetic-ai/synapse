@@ -85,6 +85,7 @@ library
     Synapse.Auth
     Synapse.Auth.Loopback
     Synapse.Hold
+    Synapse.Input
     Synapse.SchemaStore
   other-modules:    Paths_plexus_synapse
   autogen-modules:  Paths_plexus_synapse
@@ -681,6 +682,38 @@ test-suite hold-test
     aeson >= 2.2 && < 2.3,
     async >= 2.2 && < 2.3,
     bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
+    directory >= 1.3 && < 1.4,
+    filepath >= 1.4 && < 1.6,
+    network >= 3.1 && < 3.3,
+    process >= 1.6 && < 1.7,
+    temporary >= 1.3 && < 1.4,
+    text >= 2.0 && < 2.2,
+    unix >= 2.7 && < 2.9,
+    vector >= 0.12 && < 0.14,
+    websockets >= 0.13 && < 0.14,
+    hspec >= 2.10 && < 2.12
+  hs-source-dirs:   test
+  default-language: GHC2021
+  default-extensions:
+    OverloadedStrings
+  ghc-options:      -threaded
+
+test-suite input-test
+  -- BIDIR-18: a call with an input half — the built synapse against the
+  -- mock service's stream activation: lines and NDJSON as items, a bad line
+  -- named and never carried, stdin not read past credit (memory flat),
+  -- bytes as binary frames, a disconnect said and never resent (69), the
+  -- typed closes' exits (70, 65, 77), --input-stream, -n, help and _find.
+  type:             exitcode-stdio-1.0
+  main-is:          InputSpec.hs
+  other-modules:    MockService, Plexus07
+  build-tool-depends: plexus-synapse:synapse
+  build-depends:
+    base >= 4.17 && < 5,
+    aeson >= 2.2 && < 2.3,
+    bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
     directory >= 1.3 && < 1.4,
     filepath >= 1.4 && < 1.6,
     network >= 3.1 && < 3.3,
@@ -711,6 +744,7 @@ test-suite pipe-test
     base >= 4.17 && < 5,
     aeson >= 2.2 && < 2.3,
     bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
     directory >= 1.3 && < 1.4,
     filepath >= 1.4 && < 1.6,
     network >= 3.1 && < 3.3,
@@ -741,6 +775,7 @@ test-suite output-test
     base >= 4.17 && < 5,
     aeson >= 2.2 && < 2.3,
     bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
     directory >= 1.3 && < 1.4,
     filepath >= 1.4 && < 1.6,
     network >= 3.1 && < 3.3,
@@ -790,6 +825,7 @@ test-suite tls-test
     aeson >= 2.2 && < 2.3,
     base64-bytestring >= 1.2 && < 1.3,
     bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
     directory >= 1.3 && < 1.4,
     filepath >= 1.4 && < 1.6,
     katip >= 0.8 && < 0.9,

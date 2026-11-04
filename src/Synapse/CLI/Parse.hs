@@ -66,6 +66,8 @@ module Synapse.CLI.Parse
   ( -- * Command line
     parsePathAndParams
   , pairFlags
+  , FlagArity(..)
+  , takeFlag
 
     -- * Parsing
   , parseParams

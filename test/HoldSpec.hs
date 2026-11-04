@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -53,6 +54,7 @@ import System.Process (CreateProcess(..), proc, readCreateProcessWithExitCode)
 import Test.Hspec
 
 import Plexus.Client (SubstrateConfig(..), LostConnection(..), defaultConfig)
+import Plexus.Input (InputHalf(..), InputPort(..), InputSignal(..))
 import Plexus.Types (PlexusStreamItem(..))
 import qualified Synapse.Hold as Hold
 
@@ -272,14 +274,76 @@ main = hspec $ do
         fmap heldOf st `shouldBe` Just [(port, "a1")]
         show st `shouldNotContain` "s3cret"
 
+  -- BIDIR-18: a call's input half rides the call's connection — through
+  -- the holder (protocol 4: "sig", "in", "bin", "end") and on a run's own
+  describe "a call with an input half" $ do
+    let carries name route = it ("carries text and binary input frames " <> name) $
+          withMockService todaysService $ \port -> do
+            writeIORef schemaOverride (Just inputSchemas)
+            resetInput defaultInputPlan
+            (textItems, textSigs) <- duplexCall (route port) "stream.lines" $ \p -> do
+              ipItems p 0 [String "one", String "two"]
+              ipItems p 1 [String "three"]
+              ipEnd p 2
+            any isTaken textItems `shouldBe` True
+            textSigs `shouldSatisfy` any (\case { InputCredit 64 -> True; _ -> False })
+            textSigs `shouldSatisfy` any (\case { InputAck 1 -> True; _ -> False })
+            rs <- readIORef inputReceived
+            rs `shouldBe` [ReceivedJson 0 [String "one", String "two"], ReceivedJson 1 [String "three"], ReceivedEnd 2]
+            resetInput defaultInputPlan
+            (binItems, _) <- duplexCall (route port) "stream.audio" $ \p -> do
+              ipBinary p 0 (BS.pack [1, 2, 3])
+              ipBinary p 1 (BS.replicate 640 9)
+              ipEnd p 2
+            any isTaken binItems `shouldBe` True
+            rs' <- readIORef inputReceived
+            [ (sq, BS.length b) | ReceivedBinary _ sq b <- rs' ] `shouldBe` [(0, 3), (1, 640)]
+            [ sq | ReceivedEnd sq <- rs' ] `shouldBe` [2]
+            readIORef inputViolations `shouldReturn` []
+            writeIORef schemaOverride Nothing
+    -- review of BIDIR-18: the holder reads a binary frame's line strictly
+    -- and refuses one past 16 MiB, ending the call with why
+    forM_ [ ("b 0 20000000", "past the"), ("b 0x5", "cannot read"), ("b 0 5 6", "cannot read") ] $ \(line, says) ->
+      it ("refuses the binary frame line " <> show line <> ", ending the call with an error") $
+        withHolder 30 0 $ \sock -> withMockService todaysService $ \port -> do
+          writeIORef schemaOverride (Just inputSchemas)
+          resetInput defaultInputPlan
+          s <- N.socket N.AF_UNIX N.Stream N.defaultProtocol
+          N.connect s (N.SockAddrUnix sock)
+          NB.sendAll s $ BS8.pack $ "{\"agent\":\"a1\",\"input\":true,\"host\":\"127.0.0.1\",\"port\":" <> show port
+            <> ",\"path\":\"/ws\",\"tls\":false,\"ca\":[],\"headers\":[],\"method\":\"menger.call\",\"params\":{\"method\":\"stream.audio\"}}\n"
+          let readUntil acc = do
+                chunk <- NB.recv s 65536
+                let acc' = acc <> chunk
+                if BS.null chunk || any (BS8.isInfixOf "\"t\":\"error\"") (BS8.lines acc') || any (BS8.isInfixOf "\"t\":\"end\"") (BS8.lines acc')
+                  then pure acc' else readUntil acc'
+              readSub acc = do
+                chunk <- NB.recv s 65536
+                let acc' = acc <> chunk
+                if BS.null chunk || BS8.isInfixOf "\"t\":\"sub\"" acc' then pure acc' else readSub acc'
+          _ <- readSub ""
+          NB.sendAll s (BS8.pack (line <> "\n"))
+          out <- readUntil ""
+          N.close s
+          let errs = [ l | l <- BS8.lines out, BS8.isInfixOf "\"t\":\"error\"" l ]
+          map BS8.unpack errs `shouldSatisfy` any (says `isInfixOf`)
+          rs <- readIORef inputReceived
+          [ r | r@ReceivedBinary {} <- rs ] `shouldBe` []
+          writeIORef schemaOverride Nothing
+    carries "through the holder" $ \port half -> \onSub m ps onItem -> withHolderOnce $ \sock ->
+      Hold.holderCallDuplex sock "a1" Nothing (const (pure ())) (serviceAt port) half onSub m ps onItem
+    carries "on the run's own connection (--no-hold)" $ \port half -> \onSub m ps onItem -> do
+      mux <- Hold.newMux
+      Hold.muxCallDuplex mux (serviceAt port) half onSub m ps onItem
+
   describe "one socket for the user" $ do
     -- RETURNS-36: 4.0 changes the items the holder relays (plexus 0.8's
     -- typed error and progress), so its holder is protocol 3, apart from
     -- 3.17.x's (2)
-    it "is holder-3.sock in the runtime directory, whatever the address or agent" $ do
+    it "is holder-4.sock in the runtime directory, whatever the address or agent" $ do
       p <- Hold.holderSocketPath
-      takeFileName p `shouldBe` "holder-3.sock"
-      Hold.holdProtocol `shouldBe` 3
+      takeFileName p `shouldBe` "holder-4.sock"
+      Hold.holdProtocol `shouldBe` 4
 
   describe "the CLI, sending first" $ do
     synapse <- runIO (findExecutable "synapse")
@@ -300,10 +364,10 @@ cliSpec exe = do
     out `shouldStartWith` "4.0"
 
   -- re-review #5: help names the holder's socket as it is
-  it "help names holder-3.sock" $ do
+  it "help names holder-4.sock" $ do
     (_, out, err) <- readCreateProcessWithExitCode (proc exe ["--help"]) ""
-    (out <> err) `shouldContain` "holder-3.sock"
-    (out <> err) `shouldNotContain` "holder-2.sock"
+    (out <> err) `shouldContain` "holder-4.sock"
+    (out <> err) `shouldNotContain` "holder-3.sock"
 
   it "answers cold, fills the cache, and opens one connection for the probe, the schema and the call" $
     withRun $ \run _ -> do
@@ -485,7 +549,7 @@ oneHolderSpec exe = do
       let version = fmap (\st -> case st of { Object o | Just (String x) <- KM.lookup "version" o -> T.unpack x; _ -> "" })
       version <$> askStatus old `shouldReturn` Right "3.17.4"
       fmap heldOf <$> askStatus old `shouldReturn` Right []
-      doesFileExist (dir </> "run" </> "synapse" </> "holder-3.sock") `shouldReturn` True
+      doesFileExist (dir </> "run" </> "synapse" </> ("holder-" <> show Hold.holdProtocol <> ".sock")) `shouldReturn` True
 
   it "starts its holder in /, without the run's keepalive or secrets" $
     withHome [("PLEXUS_KEEPALIVE", "off"), ("SYNAPSE40_MARK", "kept")] $ \dir env -> withMockService todaysService $ \port -> do
@@ -676,6 +740,28 @@ withHolder secs cap act = withSystemTempDirectory "hold" $ \dir -> do
   _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock secs) { Hold.hoCap = cap } `catchAll` const (pure ())
   waitFor (doesFileExist sock)
   act sock
+
+-- | BIDIR-18: one call with an input half on the route: once the port is
+-- handed over, @feed@ sends its frames; the items and the signals, as they
+-- came.
+duplexCall :: (Maybe InputHalf -> IO () -> T.Text -> Value -> (PlexusStreamItem -> IO ()) -> IO ())
+           -> T.Text -> (InputPort -> IO ()) -> IO ([PlexusStreamItem], [InputSignal])
+duplexCall route inner feed = do
+  items <- newIORef []
+  sigs <- newIORef []
+  let half = InputHalf
+        { ihPort = \p -> void (forkIO (threadDelay 50000 >> feed p))
+        , ihSignal = \g -> modifyIORef' sigs (++ [g]) }
+  route (Just half) (pure ()) "menger.call" (Object (KM.fromList [("method", String inner)])) (\i -> modifyIORef' items (++ [i]))
+  (,) <$> readIORef items <*> readIORef sigs
+
+isTaken :: PlexusStreamItem -> Bool
+isTaken (StreamData _ _ _ (Object o)) = KM.lookup "type" o == Just (String "taken")
+isTaken _ = False
+
+-- | A holder in this process for one call.
+withHolderOnce :: (FilePath -> IO a) -> IO a
+withHolderOnce = withHolder 30 0
 
 -- ---------------------------------------------------------------------------
 

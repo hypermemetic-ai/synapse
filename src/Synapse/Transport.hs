@@ -19,6 +19,7 @@ module Synapse.Transport
     -- * Method Invocation (streaming)
   , invokeStreaming
   , invokeStreamingWithBidir
+  , invokeWithInput
 
     -- * Bidirectional Response
   , sendResponse
@@ -52,6 +53,12 @@ import Synapse.IR.Types (IR(..), currentIrVersion)
 import Synapse.Endpoint (substrateConfig)
 import qualified Synapse.Log as Log
 import qualified Synapse.Reconnect as R
+import qualified Synapse.Input as In
+import Control.Exception (throwIO)
+import Control.Monad (forM_)
+import qualified Data.Text.IO as TIO
+import System.Exit (ExitCode(..), exitWith)
+import System.IO (hFlush, stderr)
 
 -- | Fetch the root schema
 fetchSchema :: SynapseM PluginSchema
@@ -400,6 +407,89 @@ invokeStreamingWithBidir shape refreshAuth onResume namespacePath method params 
     getPort (PT.ConnectionRefused _ p) _ = p
     getPort (PT.ConnectionTimeout _ p) _ = p
     getPort _ c = substratePort c
+
+-- | BIDIR-18: a method with an input half, its input fed from the source
+-- (spec/10) as the callee's credit allows. Never sent twice: a connection
+-- lost once the call went out is said on stderr with what was sent and
+-- acknowledged, and the run exits 69 (a call that never left is tried
+-- again in the reconnect window, as any). The printer is told whether the
+-- input is still untouched (no credit came, so nothing was read): only
+-- then may it hold an item back to run the call again. At the end, the
+-- tally on stderr; a typed close exits by its kind ('In.closeExit'), a
+-- line that is not an item 65.
+invokeWithInput
+  :: R.CallShape
+  -> IO (Maybe WS.Headers)
+  -> In.ItemKind -> Int -> Bool -> In.InputSource
+  -> Path
+  -> Text
+  -> Value
+  -> (IO Bool -> PT.PlexusStreamItem -> IO ())
+  -> SynapseM ()
+invokeWithInput shape0 refreshAuth kind chunk progress src namespacePath method params onItem = do
+  cfg <- getConfig
+  cfgRef <- liftIO $ newIORef cfg
+  refusal <- liftIO $ newIORef Nothing
+  let shape = shape0 { R.csRead = False, R.csSince = False }
+      whereTo = whereOf cfg
+      reauth = refreshAuth >>= \case
+        Just hs -> True <$ modifyIORef' cfgRef (\c -> c { substrateHeaders = hs })
+        Nothing -> pure False
+      say t = TIO.hPutStrLn stderr ("synapse: " <> t) >> hFlush stderr
+      tally t = TIO.hPutStrLn stderr (In.renderTally t) >> hFlush stderr
+      run (half, untouched) = do
+        let item i = do
+              case In.inputRefusal i of
+                Just r -> modifyIORef' refusal (maybe (Just r) Just)
+                Nothing -> pure ()
+              case i of
+                PT.StreamRequest{} -> pure ()   -- an input call answers no request
+                _ -> onItem untouched i
+            attempt ps subscribed h = do
+              c <- readIORef cfgRef
+              ST.invokeMethodDuplex c half subscribed namespacePath method ps h
+        R.resilientCall whereTo shape attempt reauth params (const (pure ())) item
+  (r, fed, t) <- liftIO $ In.withInputFeed kind chunk progress src run
+  ending <- liftIO $ either throwIO pure r
+  refused <- liftIO $ readIORef refusal
+  let lost why = liftIO $ do
+        say $ "connection to " <> whereTo <> " lost during the call (" <> why
+          <> ") — its input is not sent again (spec/10: no resume)"
+        tally t
+        exitWith (ExitFailure R.exitUnreachable)
+  case (fed, ending) of
+    (In.FedBadLine n why, _) -> liftIO $ do
+      say $ "input line " <> T.pack (show n) <> " is not an item: " <> why
+        <> " — no frame carried it; the call was ended"
+      tally t
+      exitWith (ExitFailure 65)
+    (In.FedFailed why, _) -> liftIO $ do
+      say $ "the input could not be read (" <> why <> ") — the call was ended"
+      tally t
+      exitWith (ExitFailure 74)
+    (_, R.WriteUnknown why) -> lost why
+    (_, R.Failed e@(PT.ConnectionLost why True))
+      | R.isOutage e -> lost why
+    (_, R.GaveUp window why)
+      | In.tFrames t > 0 || In.tEnded t -> lost why
+      | otherwise -> liftIO (R.reportEnding whereTo (R.GaveUp window why)) >> pure ()
+    (_, R.OutputClosed) -> liftIO (R.reportEnding whereTo R.OutputClosed) >> pure ()
+    (_, R.Failed e) -> do
+      liftIO (tally t)
+      backend <- asks seBackend
+      throwTransportWith TransportContext
+        { tcMessage  = transportErrorToText e
+        , tcHost     = T.pack (substrateHost cfg)
+        , tcPort     = substratePort cfg
+        , tcBackend  = backend
+        , tcPath     = namespacePath ++ [method]
+        , tcCategory = transportErrorToCategory e
+        }
+    (_, R.Finished) -> liftIO $ do
+      tally t
+      forM_ (In.closeExit refused (In.tClosed t)) $ \(code, why) -> do
+        say why
+        exitWith (ExitFailure code)
 
 -- | SYNAPSE-20: @host:port@, for what synapse says about an outage
 -- (SCAFFOLD-21: the URL, for an address behind TLS or on a path).
