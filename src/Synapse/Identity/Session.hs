@@ -48,6 +48,8 @@ module Synapse.Identity.Session
   , printedAny
   , noteRefused
   , wasRefused
+  , noteFailed
+  , hasFailed
   , currentCeiling
   ) where
 
@@ -511,6 +513,18 @@ noteRefused = writeIORef refusedRef True
 
 wasRefused :: IO Bool
 wasRefused = readIORef refusedRef
+
+-- | A stream said its call failed: an error item, or a data item whose
+-- content is an event of @type: error@. The call exits non-zero.
+{-# NOINLINE failedRef #-}
+failedRef :: IORef Bool
+failedRef = unsafePerformIO (newIORef False)
+
+noteFailed :: IO ()
+noteFailed = writeIORef failedRef True
+
+hasFailed :: IO Bool
+hasFailed = readIORef failedRef
 
 -- | AUTH-8: the ceiling of the session this process carries, as asked at
 -- login (@editor\@MENGER-12@ each) — what a refusal that names none is
