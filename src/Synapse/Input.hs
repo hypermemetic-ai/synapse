@@ -30,10 +30,12 @@
 module Synapse.Input
   ( -- * The flags
     InputNames(..)
+  , FlagArity(..)
   , inputNames
   , InputFlags(..)
   , takeInputFlags
   , defaultChunk
+  , maxChunk
 
     -- * The source
   , InputSource(..)
@@ -74,9 +76,11 @@ import qualified Data.Text.IO as TIO
 import Data.Word (Word64)
 import Numeric (showHex)
 import System.FilePath ((</>), isRelative)
+import System.IO.Error (isEOFError)
 import System.IO (Handle, IOMode(..), hClose, hFlush, hReady, hSetBinaryMode, openBinaryFile, stderr, stdin)
 
 import Plexus.Client (LostConnection(..))
+import Synapse.CLI.Parse (FlagArity(..), takeFlag)
 import Plexus.Input
 import Plexus.Types (PlexusStreamItem(..))
 import qualified Plexus.RemoteError as RE
@@ -111,6 +115,10 @@ data InputFlags = InputFlags
   , ifProgress :: Bool
   } deriving (Eq, Show)
 
+-- | The most bytes one binary frame carries (and the holder relays): 16 MiB.
+maxChunk :: Int
+maxChunk = 16 * 1024 * 1024
+
 -- | 4096 bytes a binary frame unless @--chunk@ says.
 defaultChunk :: Int
 defaultChunk = 4096
@@ -119,9 +127,12 @@ defaultChunk = 4096
 -- 'Synapse.CLI.Parse.parsePathAndParams' gave them): what they said, and
 -- the arguments left for the method's parameters. @--input@ and @--chunk@
 -- take the next argument whatever it begins with (@-@ is stdin), or
--- @=value@; @--progress@ is a switch (@=true@ / @=false@ too).
-takeInputFlags :: InputNames -> [Text] -> Either Text (InputFlags, [Text])
-takeInputFlags names = go (InputFlags Nothing Nothing False) []
+-- @=value@; @--progress@ is a switch (@=true@ / @=false@ too). Any other
+-- flag keeps the value its parameter takes (@arity@, by its normalized
+-- key), so a value that reads @--input@ is that parameter's, never the
+-- stream's flag.
+takeInputFlags :: InputNames -> (Text -> FlagArity) -> [Text] -> Either Text (InputFlags, [Text])
+takeInputFlags names arity = go (InputFlags Nothing Nothing False) []
   where
     go acc rest [] = Right (acc, reverse rest)
     go acc rest (x : xs) = case T.stripPrefix "--" x of
@@ -130,14 +141,18 @@ takeInputFlags names = go (InputFlags Nothing Nothing False) []
             withValue key eq xs $ \v xs' -> go acc { ifSource = Just v } rest xs'
         | (key, eq) <- T.breakOn "=" flag, norm key == norm (inChunk names) ->
             withValue key eq xs $ \v xs' -> case reads (T.unpack v) of
-              [(n, "")] | n > 0 && n <= 64 * 1024 * 1024 -> go acc { ifChunk = Just n } rest xs'
-              _ -> Left ("--" <> key <> " takes a number of bytes (1 to 67108864), not '" <> v <> "'")
+              [(n, "")] | n > 0 && n <= maxChunk -> go acc { ifChunk = Just n } rest xs'
+              _ -> Left ("--" <> key <> " takes a number of bytes (1 to " <> T.pack (show maxChunk) <> "), not '" <> v <> "'")
         | (key, eq) <- T.breakOn "=" flag, norm key == norm (inProgress names) ->
             case T.drop 1 eq of
               _ | T.null eq -> go acc { ifProgress = True } rest xs
               v | v `elem` ["true", "1"] -> go acc { ifProgress = True } rest xs
                 | v `elem` ["false", "0"] -> go acc { ifProgress = False } rest xs
                 | otherwise -> Left ("--" <> key <> " is a switch (true or false), not '" <> v <> "'")
+        | otherwise ->
+            let (_, _, n) = takeFlag arity flag xs
+                (taken, xs') = splitAt n xs
+            in go acc (reverse taken ++ x : rest) xs'
       _ -> go acc (x : rest) xs
     withValue key eq xs k
       | not (T.null eq) = k (T.drop 1 eq) xs
@@ -166,11 +181,15 @@ sourceOf flag cwd home v
 
 -- | Items read from a handle.
 data Reader = Reader
-  { rdNext  :: IO (Maybe Item)  -- ^ the next item, blocking; Nothing at the end
-  , rdReady :: IO Bool          -- ^ another can be read without waiting
+  { rdNext  :: IO (Maybe Item)  -- ^ the next item, waiting for it; Nothing at the end
+  , rdTry   :: IO Next          -- ^ the next item if it is whole now, never waiting
+  , rdAtEnd :: IO Bool          -- ^ the source is known to be over, no item read for it
   }
 
 data Item = JsonItem Value Int | BytesItem BS.ByteString
+
+-- | What 'rdTry' found.
+data Next = Got Item | Ended | NotYet
 
 -- | A line that is not an item: its number and why.
 data BadLine = BadLine Int Text
@@ -178,42 +197,92 @@ data BadLine = BadLine Int Text
 
 instance Exception BadLine
 
+-- | The source as items. Only the end of the source ends it: any other
+-- failure to read is raised (the call is ended, nothing more sent). Lines
+-- are cut from what the source has given so far, so a whole line is sent
+-- while the next is still arriving; bytes are what the source has, up to
+-- the chunk, never waiting to fill one (a live source's 20 ms go as they
+-- come).
 newReader :: ItemKind -> Int -> Handle -> IO Reader
 newReader kind chunk h = do
   hSetBinaryMode h True
   lineNo <- newIORef (0 :: Int)
-  let ready = hReady h `catch` \(_ :: IOException) -> pure True   -- at the end: the next read says so
-      line = do
-        r <- try (BS8.hGetLine h)
-        case r of
-          Left (_ :: IOException) -> pure Nothing
-          Right l -> do
-            n <- atomicModifyIORef' lineNo (\k -> (k + 1, k + 1))
-            pure (Just (n, stripCr l))
-      nextJson = line >>= \case
-        Nothing -> pure Nothing
-        Just (n, l)
-          | BS8.all isSpace l -> nextJson   -- a blank line between values is none
+  buf <- newIORef BS.empty
+  eof <- newIORef False
+  let -- more of the source, waiting for it; at the end, eof
+      fill = do
+        b <- BS.hGetSome h 8192   -- what the handle holds: no more read ahead of credit
+        if BS.null b then writeIORef eof True else modifyIORef' buf (<> b)
+      -- the source has bytes (or its end) for a read that will not wait;
+      -- a failure here is said by that read
+      readable = hReady h `catch` \(_ :: IOException) -> pure True
+      cut = do
+        b <- readIORef buf
+        case BS8.elemIndex '\n' b of
+          Just i -> do
+            writeIORef buf (BS.drop (i + 1) b)
+            Just <$> numbered (BS.take i b)
+          Nothing -> pure Nothing
+      lastLine = do
+        b <- readIORef buf
+        writeIORef buf BS.empty
+        if BS.null b then pure Nothing else Just <$> numbered b
+      numbered l = do
+        n <- atomicModifyIORef' lineNo (\k -> (k + 1, k + 1))
+        pure (n, stripCr l)
+      lineWaiting = cut >>= \case
+        Just l -> pure (Just l)
+        Nothing -> readIORef eof >>= \case
+          True -> lastLine
+          False -> fill >> lineWaiting
+      lineNow = cut >>= \case
+        Just l -> pure (Got' l)
+        Nothing -> readIORef eof >>= \case
+          True -> maybe Ended' Got' <$> lastLine
+          False -> readable >>= \case
+            True -> fill >> lineNow
+            False -> pure NotYet'
+      item (n, l) = case kind of
+        ItemString -> case TE.decodeUtf8' l of
+          Right t -> pure (Just (JsonItem (String t) (BS.length l)))
+          Left _ -> throwIO (BadLine n "not UTF-8 text")
+        _ | BS8.all isSpace l -> pure Nothing   -- a blank line between values is none
           | otherwise -> case eitherDecodeStrict' l of
               Right v -> pure (Just (JsonItem v (BS.length l)))
               Left e -> throwIO (BadLine n (T.pack e))
-      nextString = line >>= \case
+      nextLine = lineWaiting >>= \case
         Nothing -> pure Nothing
-        Just (n, l) -> case TE.decodeUtf8' l of
-          Right t -> pure (Just (JsonItem (String t) (BS.length l)))
-          Left _ -> throwIO (BadLine n "not UTF-8 text")
-      nextBytes = do
-        b <- BS.hGet h chunk
-        pure (if BS.null b then Nothing else Just (BytesItem b))
+        Just l -> item l >>= maybe nextLine (pure . Just)
+      tryLine = lineNow >>= \case
+        Got' l -> item l >>= maybe tryLine (pure . Got)
+        Ended' -> pure Ended
+        NotYet' -> pure NotYet
+      nextBytes = readIORef eof >>= \case
+        True -> pure Nothing
+        False -> do
+          b <- BS.hGetSome h chunk
+          if BS.null b then writeIORef eof True >> pure Nothing else pure (Just (BytesItem b))
+      atEnd = do
+        b <- readIORef buf
+        e <- readIORef eof
+        if not (BS.null b) then pure False
+          else if e then pure True
+          -- hReady says the end without taking an item: it raises it
+          else (False <$ hReady h) `catch` \(err :: IOException) -> pure (isEOFError err)
   pure Reader
     { rdNext = case kind of
         ItemBytes -> nextBytes
-        ItemString -> nextString
-        ItemJson -> nextJson
-    , rdReady = ready }
+        _ -> nextLine
+    , rdTry = case kind of
+        ItemBytes -> maybe Ended Got <$> nextBytes   -- never asked: a bytes item is a frame
+        _ -> tryLine
+    , rdAtEnd = atEnd }
   where
     stripCr l | not (BS.null l), BS8.last l == '\r' = BS.init l
               | otherwise = l
+
+-- | A line as 'newReader' finds it without waiting.
+data Line = Got' (Int, BS.ByteString) | Ended' | NotYet'
 
 openSource :: InputSource -> IO Handle
 openSource = \case
@@ -256,6 +325,9 @@ data FeedState = FeedState
   }
 
 -- | The most items, and about the most bytes, one @<ns>.input@ carries.
+-- | Whose turn it is in the feeding.
+data Turn = Go | Stop | Over | Poll
+
 frameItems, frameBytes :: Int
 frameItems = 256
 frameBytes = 1024 * 1024
@@ -343,37 +415,52 @@ feed :: ItemKind -> Reader -> FeedState -> IO ()
 feed _kind rd st = do
   port <- atomically (readTMVar (fsPort st))
   let loop sq = do
-        go' <- atomically $ do
-          done <- readTVar (fsDone st)
-          closed <- readTVar (fsClosed st)
-          if done || isJust closed then pure False else do
-            c <- readTVar (fsCredit st)
-            check (c > 0)
-            pure True
-        when go' $ do
-          first <- rdNext rd
-          case first of
-            Nothing -> end port sq
-            Just (BytesItem b) -> do
-              stillOpen <- open'
-              when stillOpen $ do
-                sent sq 1
-                ipBinary port sq b
-                loop (sq + 1)
-            Just (JsonItem v n) -> gather port sq [v] 1 n
-      -- more of what is ready, within the credit and the frame's size
+        turn <- waitTurn
+        case turn of
+          Stop -> pure ()
+          -- the source is over with no credit left: end carries no item
+          Over -> end port sq
+          Go -> do
+            first <- rdNext rd
+            case first of
+              Nothing -> end port sq
+              Just (BytesItem b) -> do
+                stillOpen <- open'
+                when stillOpen $ do
+                  sent sq 1
+                  ipBinary port sq b
+                  loop (sq + 1)
+              Just (JsonItem v n) -> gather port sq [v] 1 n
+      -- credit, or the call over, or (looked at every 50 ms while there is
+      -- no credit) the source over
+      waitTurn = do
+        timer <- registerDelay 50000
+        t <- atomically $
+          (do done <- readTVar (fsDone st)
+              closed <- readTVar (fsClosed st)
+              check (done || isJust closed)
+              pure Stop)
+          `orElse` (readTVar (fsCredit st) >>= check . (> 0) >> pure Go)
+          `orElse` (readTVar timer >>= check >> pure Poll)
+        case t of
+          Poll -> rdAtEnd rd >>= \over -> if over then pure Over else waitTurn
+          other -> pure other
+      -- more of what is whole now, within the credit and the frame's size;
+      -- what is gathered goes out as soon as nothing more is
       gather port sq acc count size = do
         c <- readTVarIO (fsCredit st)
-        more <- if c > fromIntegral count && count < frameItems && size < frameBytes then rdReady rd else pure False
-        if not more then flush port sq acc count >> loop (sq + 1) else do
-          -- the items before a bad line go out as read; the bad one never does
-          next <- rdNext rd `catch` \(e :: BadLine) -> flush port sq acc count >> throwIO e
-          case next of
-            Just (JsonItem v n) -> gather port sq (v : acc) (count + 1) (size + n)
-            Just (BytesItem _) -> flush port sq acc count >> loop (sq + 1)   -- never: one kind a source
-            Nothing -> do
-              flush port sq acc count
-              end port (sq + 1)
+        if not (c > fromIntegral count && count < frameItems && size < frameBytes)
+          then flush port sq acc count >> loop (sq + 1)
+          else do
+            -- the items before a bad line go out as read; the bad one never does
+            next <- rdTry rd `catch` \(e :: BadLine) -> flush port sq acc count >> throwIO e
+            case next of
+              Got (JsonItem v n) -> gather port sq (v : acc) (count + 1) (size + n)
+              Got (BytesItem _) -> flush port sq acc count >> loop (sq + 1)   -- never: one kind a source
+              NotYet -> flush port sq acc count >> loop (sq + 1)
+              Ended -> do
+                flush port sq acc count
+                end port (sq + 1)
       flush port sq acc count = do
         stillOpen <- open'
         when stillOpen $ do

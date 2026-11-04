@@ -780,16 +780,20 @@ arecord -q -f S16_LE -r 16000 -c 1 | synapse -P 4460 voice listen --input - --ch
 ```
 
 - **What an item is** comes from the item's schema: a string is a line; an
-  `Input<Bytes>` (`"x-plexus-binary": true`) is the bytes as they are, cut
-  into `--chunk N` (4096 unless said), each a WebSocket binary frame
+  `Input<Bytes>` (`"x-plexus-binary": true`) is the bytes as they come, up
+  to `--chunk N` (4096 unless said, at most 16 MiB) a frame — what the
+  source has is sent, never held to fill a chunk — each a WebSocket binary frame
   (`[0x01][subscription u64][seq u64][payload]`); anything else is NDJSON,
   one JSON value a line — a line that is not one is named by its number,
   no frame carries it, the call is ended and synapse exits 65.
 - **Under credit**: items are read only as the service grants credit, so
   with none, synapse reads nothing more and the pipe in front of it is the
   buffer — its memory stays flat however far the writer runs ahead. What is
-  ready goes out together (up to 256 items a frame). At the end of the
-  input, `<ns>.end`; the answer prints as any call's.
+  ready goes out together (up to 256 items a frame), and a whole line goes
+  out while the next is still arriving. At the end of the input,
+  `<ns>.end` — at once, credit or none; only the end of the input ends it
+  (a failed read ends the call with exit 74, no `end`). The answer prints
+  as any call's.
 - **Never sent twice** (spec/10: no resume). A connection lost during the
   call is said on stderr every time, with what was sent and acked, and the
   run exits 69. A typed close exits by its kind: `past_credit` 70 (a bug in

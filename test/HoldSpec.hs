@@ -301,6 +301,35 @@ main = hspec $ do
             [ sq | ReceivedEnd sq <- rs' ] `shouldBe` [2]
             readIORef inputViolations `shouldReturn` []
             writeIORef schemaOverride Nothing
+    -- review of BIDIR-18: the holder reads a binary frame's line strictly
+    -- and refuses one past 16 MiB, ending the call with why
+    forM_ [ ("b 0 20000000", "past the"), ("b 0x5", "cannot read"), ("b 0 5 6", "cannot read") ] $ \(line, says) ->
+      it ("refuses the binary frame line " <> show line <> ", ending the call with an error") $
+        withHolder 30 0 $ \sock -> withMockService todaysService $ \port -> do
+          writeIORef schemaOverride (Just inputSchemas)
+          resetInput defaultInputPlan
+          s <- N.socket N.AF_UNIX N.Stream N.defaultProtocol
+          N.connect s (N.SockAddrUnix sock)
+          NB.sendAll s $ BS8.pack $ "{\"agent\":\"a1\",\"input\":true,\"host\":\"127.0.0.1\",\"port\":" <> show port
+            <> ",\"path\":\"/ws\",\"tls\":false,\"ca\":[],\"headers\":[],\"method\":\"menger.call\",\"params\":{\"method\":\"stream.audio\"}}\n"
+          let readUntil acc = do
+                chunk <- NB.recv s 65536
+                let acc' = acc <> chunk
+                if BS.null chunk || any (BS8.isInfixOf "\"t\":\"error\"") (BS8.lines acc') || any (BS8.isInfixOf "\"t\":\"end\"") (BS8.lines acc')
+                  then pure acc' else readUntil acc'
+              readSub acc = do
+                chunk <- NB.recv s 65536
+                let acc' = acc <> chunk
+                if BS.null chunk || BS8.isInfixOf "\"t\":\"sub\"" acc' then pure acc' else readSub acc'
+          _ <- readSub ""
+          NB.sendAll s (BS8.pack (line <> "\n"))
+          out <- readUntil ""
+          N.close s
+          let errs = [ l | l <- BS8.lines out, BS8.isInfixOf "\"t\":\"error\"" l ]
+          map BS8.unpack errs `shouldSatisfy` any (says `isInfixOf`)
+          rs <- readIORef inputReceived
+          [ r | r@ReceivedBinary {} <- rs ] `shouldBe` []
+          writeIORef schemaOverride Nothing
     carries "through the holder" $ \port half -> \onSub m ps onItem -> withHolderOnce $ \sock ->
       Hold.holderCallDuplex sock "a1" Nothing (const (pure ())) (serviceAt port) half onSub m ps onItem
     carries "on the run's own connection (--no-hold)" $ \port half -> \onSub m ps onItem -> do

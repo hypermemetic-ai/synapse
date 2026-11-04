@@ -34,7 +34,8 @@ import System.Directory (createDirectoryIfMissing, findExecutable, listDirectory
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
-import System.IO (hClose, hSetBinaryMode, hSetBuffering, BufferMode(..))
+import System.IO (hClose, hFlush, hSetBinaryMode, hSetBuffering, BufferMode(..))
+import System.Timeout (timeout)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Signals (signalProcess, sigKILL, sigTERM)
 import System.Process
@@ -99,6 +100,44 @@ inputSpec exe = describe "a call with an input half (BIDIR-18)" $ do
     got `shouldNotSatisfy` any (\v -> v == object ["at" .= (4 :: Int), "pad" .= ("d" :: Text)])
     length got `shouldSatisfy` (<= 2)
     ends `shouldReturn` []
+
+  -- review of BIDIR-18: only the end of the source ends the input
+  it "ends the call on a read that fails (exit 74), sending no end" $ withRun $ \run _ -> do
+    (code, _, err) <- run ["--no-hold"] ["stream", "lines", "--input", "@/proc/self/mem"] ""
+    code `shouldBe` ExitFailure 74
+    err `shouldContain` "could not be read"
+    ends `shouldReturn` []
+
+  it "sends end when the source is over though no credit is left" $
+    withRunPlan defaultInputPlan { planWindow = 2, planStingy = True } $ \run dir _ _ -> do
+      writeFile (dir </> "two.txt") "a\nb\n"
+      r <- timeout 15000000 (run ["--no-hold"] ["stream", "lines", "--input", "@" <> dir </> "two.txt"] "")
+      fmap (\(c, _, _) -> c) r `shouldBe` Just ExitSuccess
+      itemsReceived `shouldReturn` [String "a", String "b"]
+      length <$> ends `shouldReturn` 1
+
+  forM_ [("lines", "a\nb", "a line whole while the next is still arriving"), ("audio", "0123456789", "bytes as they come, short of --chunk")] $ \(m, sent, label) ->
+    it ("sends " <> label <> " (a live source)") $ withRunPlan defaultInputPlan $ \_ _ env port -> do
+      (Just hin, Just hout, Just herr, ph) <- createProcess
+        (proc exe ["--no-hold", "--url", "ws://127.0.0.1:" <> show port <> "/ws", "menger", "stream", m, "--input", "-", "--chunk", "640"])
+        { env = Just env, std_in = CreatePipe, std_err = CreatePipe, std_out = CreatePipe }
+      hSetBinaryMode hin True
+      BS.hPut hin (BS8.pack sent) >> hFlush hin
+      got <- waitUntil 10 $ do
+        rs <- readIORef inputReceived
+        pure $ if m == "lines" then [ is | ReceivedJson _ is <- rs ] == [[String "a"]]
+                               else [ p | ReceivedBinary _ _ p <- rs ] == [BS8.pack sent]
+      rs <- readIORef inputReceived
+      hClose hin
+      _ <- waitForProcess ph
+      mapM_ (\h -> hClose h `catchAny` \_ -> pure ()) [hout, herr]
+      (got, rs) `shouldSatisfy` fst
+
+  it "keeps a value that reads --progress for the parameter it follows" $ withRun $ \run dir -> do
+    writeFile (dir </> "log.txt") "one\n"
+    (code, out, _) <- run ["--no-hold"] ["stream", "tagged", "--input", "--progress", "--input-stream", "@" <> dir </> "log.txt"] ""
+    code `shouldBe` ExitSuccess
+    out `shouldContain` "tag: --progress"
 
   it "reads no more of stdin than the credit allows, its memory flat (a service granting 4, never acking)" $
     withRunPlan defaultInputPlan { planWindow = 4, planStingy = True } $ \_ _ env port -> do
@@ -247,6 +286,13 @@ rssKb pid = do
   case [ l | l <- BS8.lines st, "VmRSS:" `BS8.isPrefixOf` l ] of
     (l : _) -> pure (read (BS8.unpack (BS8.words l !! 1)))
     [] -> fail ("no VmRSS for " <> pid <> ": " <> BS8.unpack st)
+
+-- | Wait up to the seconds for the condition.
+waitUntil :: Int -> IO Bool -> IO Bool
+waitUntil secs cond = go (secs * 20)
+  where
+    go 0 = cond
+    go n = cond >>= \ok -> if ok then pure True else threadDelay 50000 >> go (n - 1 :: Int)
 
 -- | The holder processes whose socket lies under the directory.
 holdersUnder :: FilePath -> IO [String]

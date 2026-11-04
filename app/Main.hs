@@ -1143,12 +1143,20 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                     go (_ : ps) (e : es) = e : go ps es
                     go (_ : ps) [] = go ps []
                 pure (go pairs expanded)
+              -- the stream flags' values read now: for a method that has
+              -- no input half, they are a parameter's
+              expandStreamFlags pairs = do
+                expanded <- fromSources (filter streamFlag pairs)
+                let go [] _ = []
+                    go (p : ps) (e : es) | streamFlag p = e : go ps es
+                    go (p : ps) es = p : go ps es
+                pure (go pairs expanded)
           sourcedParams <- if helpRequested then pure rawParams else keepStreamFlags rawParams
           inlineParams <- liftIO $ transformParams transformEnv defaultTransformers sourcedParams
 
           -- Mode 1.5: Respond subcommand (agent sends a response to a pending bidir request)
           if not (null pathSegs) && head pathSegs == "respond"
-            then handleRespondCommand sourcedParams
+            then expandStreamFlags sourcedParams >>= handleRespondCommand
 
           -- Mode 2: Schema request
           else if soSchema
@@ -1244,7 +1252,7 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                           -- out of the flags before its parameters are paired
                           (inputFlags, flagArgs) <- case methodInput method of
                             Nothing -> pure (Nothing, flagArgs0)
-                            Just _ -> case In.takeInputFlags (methodInputNames method) flagArgs0 of
+                            Just _ -> case In.takeInputFlags (methodInputNames method) (methodFlagArity method) flagArgs0 of
                               Left e -> throwParse e
                               Right (f, rest) -> pure (Just f, rest)
 
@@ -1364,7 +1372,13 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
                                             Nothing | cached -> stale "a method the cache's IR lacks"
                                             Nothing ->
                                               -- Fallback to flat object if method not in IR
-                                              pure $ buildParamsObject inlineParams
+                                              -- BIDIR-18: an input method's own flags are no
+                                              -- parameter; any other's --input is
+                                              case methodInput method of
+                                                Just _ -> let names = methodInputNames method
+                                                              own (k, _) = k `elem` map (T.replace "-" "_") [In.inStream names, In.inChunk names, In.inProgress names]
+                                                          in pure $ buildParamsObject (filter (not . own) inlineParams)
+                                                Nothing -> buildParamsObject <$> expandStreamFlags inlineParams
                                       | otherwise -> pure $ object []
                                   -- Merge: user params override schema defaults
                                   let params = mergeParams schemaDefaults userParams
@@ -1680,6 +1694,24 @@ methodInputNames :: MethodSchema -> In.InputNames
 methodInputNames m = In.inputNames $ case methodParams m of
   Just (Object o) | Just (Object props) <- KM.lookup "properties" o -> map K.toText (KM.keys props)
   _ -> []
+
+-- | BIDIR-18: how a method's flag takes its value, from its schema — a
+-- boolean only a boolean word, any other parameter the next argument, an
+-- unknown flag the next unless it is a flag (as 'Parse.flagArity' reads
+-- the IR; the input flags are taken out before the IR is built).
+methodFlagArity :: MethodSchema -> Text -> In.FlagArity
+methodFlagArity m key = case methodParams m of
+  Just (Object o) | Just (Object props) <- KM.lookup "properties" o
+                  , Just prop <- KM.lookup (K.fromText (T.takeWhile (/= '.') key)) props ->
+      if isBoolean prop && not ("." `T.isInfixOf` key) then In.TakesBoolean else In.TakesNext
+  _ -> In.TakesUnlessFlag
+  where
+    isBoolean = \case
+      Object p -> case KM.lookup "type" p of
+        Just (String "boolean") -> True
+        Just (Array ts) -> String "boolean" `elem` ts && all (`elem` [String "boolean", String "null"]) ts
+        _ -> False
+      _ -> False
 
 -- | Build JSON object from key-value pairs
 buildParamsObject :: [(Text, Text)] -> Value

@@ -221,14 +221,19 @@ line; `x-plexus-binary`: bytes; else NDJSON); `Plexus.Client.substrateRpcDuplex`
 hands an `InputHalf` its `InputPort` once the subscription is known, and
 `Plexus.Transport.setDuplexRouter` / `invokeMethodDuplex` route it.
 `Synapse.Input` feeds it: reads only while credit allows (the pipe is the
-buffer; memory flat), batches what is ready, never resends, keeps the tally
+buffer; memory flat; at most the handle's 8 KiB ahead), batches what is
+whole now and sends it without waiting on a partial line (bytes: what the
+source has, up to `--chunk`), sends `end` as soon as the source is over
+(credit or none), ends the call on any read error but EOF (74), never resends, keeps the tally
 (`input: sent … · acked through seq … · … unacked`, always on stderr at
 the end and on a disconnect), maps typed closes to exits (70, 65, 77; a
 bad line 65; a lost connection 69). `Synapse.Transport.invokeWithInput`
 runs it through `resilientCall` as a write (an unsent call is retried in
 the window, a sent one never). The holder carries it (`Hold.holderCallDuplex`,
 `relayInput`: `{"in"}`, `b SEQ LEN` + payload, `{"end"}` from the run,
-`{"t":"sig"}` back), hence protocol 4. The IR reads an `Input<Bytes>` item
+`{"t":"sig"}` back; a `b` line read strictly, its LEN at most 16 MiB,
+any other failure in the relay ending the call with an error), hence
+protocol 4. The IR reads an `Input<Bytes>` item
 as `RefPrimitive "string" (Just "binary")` (BIDIR-19's generator reads it
 so). `test/InputSpec.hs` (input-test) runs the built synapse against
 `MockService`'s `stream` activation (`inputSchemas`, `InputPlan`);

@@ -121,6 +121,7 @@ import System.Timeout (timeout)
 import Plexus.Client (SubstrateConfig(..), SubstrateConnection, LostConnection(..), TlsOptions(..), connect, disconnect, connectionLost, substrateRpcDuplex, unsubscribe)
 import Plexus.Input (InputHalf(..), InputPort(..), inputSignal, inputSignalValue)
 import qualified Plexus.Transport as ST
+import qualified Synapse.Input as In
 import Plexus.Types (PlexusStreamItem(..))
 
 -- ============================================================================
@@ -609,17 +610,26 @@ readLine (LineReader s buf) = go
 -- | BIDIR-18: exactly @n@ bytes after the line just read (a binary
 -- frame's payload), or Nothing when the socket ends first.
 readExact :: LineReader -> Int -> IO (Maybe BS.ByteString)
-readExact (LineReader s buf) n = go
+readExact (LineReader s buf) n = do
+  b <- readIORef buf
+  if BS.length b >= n
+    then do
+      writeIORef buf (BS.drop n b)
+      pure (Just (BS.take n b))
+    else do
+      writeIORef buf BS.empty
+      -- the pieces kept apart and joined once: a large payload is copied
+      -- once, not again with every piece
+      go [b] (BS.length b)
   where
-    go = do
-      b <- readIORef buf
-      if BS.length b >= n
-        then do
-          writeIORef buf (BS.drop n b)
-          pure (Just (BS.take n b))
-        else do
-          chunk <- NB.recv s (max 65536 (n - BS.length b)) `catch` \(_ :: IOException) -> pure BS.empty
-          if BS.null chunk then pure Nothing else writeIORef buf (b <> chunk) >> go
+    go acc have
+      | have >= n = do
+          let whole = BS.concat (reverse acc)
+          writeIORef buf (BS.drop n whole)
+          pure (Just (BS.take n whole))
+      | otherwise = do
+          chunk <- NB.recv s (min (n - have) (4 * 1024 * 1024) `max` 65536) `catch` \(_ :: IOException) -> pure BS.empty
+          if BS.null chunk then pure Nothing else go (chunk : acc) (have + BS.length chunk)
 
 sendLine :: N.Socket -> Value -> IO ()
 sendLine s v = NB.sendAll s (LBS.toStrict (encode v) <> "\n")
@@ -775,8 +785,12 @@ serveClient mux sv s = do
           watcher <- async $ do
             r <- try (relayInput rd port)
             case r of
-              -- a frame the connection could not take: the call reports the loss
-              Left (_ :: LostConnection) -> void (readLine rd)
+              Left (e :: SomeException)
+                | Just (_ :: SomeAsyncException) <- fromException e -> throwIO e
+                -- a frame the connection could not take: the call reports the loss
+                | Just (_ :: LostConnection) <- fromException e -> void (readLine rd)
+                -- anything else ends the call, said
+                | otherwise -> void (tryPutMVar failed ("synapse holder: the input failed: " <> T.pack (show e)))
               Right Nothing -> pure ()
               Right (Just why) -> void (tryPutMVar failed why)
             cancel a
@@ -804,8 +818,12 @@ relayInput rd port = loop
         Just l
           | Just rest <- BS8.stripPrefix "b " l
           , Just (sq, rest') <- BS8.readInt rest
-          , Just (len, "") <- BS8.readInt (BS8.drop 1 rest')
-          , sq >= 0, len >= 0 -> do
+          , Just (' ', lenText) <- BS8.uncons rest'
+          , Just (len, "") <- BS8.readInt lenText
+          , sq >= 0, len >= 0 -> if len > In.maxChunk
+              then pure (Just ("synapse holder: a binary frame of " <> T.pack (show len)
+                                <> " bytes is past the " <> T.pack (show In.maxChunk) <> " a frame may carry"))
+              else do
               payload <- readExact rd len
               case payload of
                 Nothing -> pure Nothing
