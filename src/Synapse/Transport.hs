@@ -153,8 +153,10 @@ fetchSchemaAt path = do
 -- | RETURNS-40: the service's own IR of the walk from @path@ — one call,
 --   @<backend>.ir@ with the path as its namespace (none: the whole
 --   service). @Just (Right ir)@ when it wrote one of this synapse's IR
---   version; @Just (Left why)@ when it refused (a title collision, in the
---   words the walk would say it); @Nothing@ when it has no @ir@ (every
+--   version; @Just (Left why)@ when it refused (a namespace it has not, a
+--   schema of its own it could not read — a title collision is no refusal:
+--   its walk refuses that activation into the IR, as this one's does);
+--   @Nothing@ when it has no @ir@ (every
 --   service on the published 0.7.0 line, whose answer is a call failure) or
 --   answered anything else — the caller walks the raw schemas then.
 fetchServiceIR :: Path -> SynapseM (Maybe (Either Text IR))

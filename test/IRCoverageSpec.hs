@@ -490,14 +490,14 @@ main = hspec $ do
           writeIORef irAnswer Nothing
           calls `shouldBe` ["menger.ir"]
           asked `shouldBe` [Aeson.object ["namespaces" Aeson..= (["tickets"] :: [Text])]]
-        it "a refusal is the service's, said as the walk would say it, and nothing walked" $ do
+        it "a refusal is the service's, said in its words, and nothing walked" $ do
           writeIORef irAnswer (Just (Aeson.object ["err" Aeson..= Aeson.object
-            [ "type" Aeson..= ("title_collision" :: Text)
-            , "message" Aeson..= ("IR: two different types are titled \"Thing\" in namespace \"tickets\": method a (returns) and method b (returns). One title in one namespace is one type; rename one of them." :: Text) ]]))
+            [ "type" Aeson..= ("not_found" :: Text), "namespace" Aeson..= ("delta" :: Text)
+            , "message" Aeson..= ("no namespace delta in this service" :: Text) ]]))
           ((code, _, err), calls, _) <- runI []
           writeIORef irAnswer Nothing
           code `shouldNotBe` ExitSuccess
-          err `shouldSatisfy` ("two different types are titled \"Thing\"" `isInfixOf`)
+          err `shouldSatisfy` ("no namespace delta in this service" `isInfixOf`)
           calls `shouldBe` ["menger.ir"]
         it "an IR of another version is not read: the walk builds it" $ do
           writeIORef irAnswer (Just (Aeson.object ["ok" Aeson..= served { irVersion = "2.1" }]))
