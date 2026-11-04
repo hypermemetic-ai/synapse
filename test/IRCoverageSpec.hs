@@ -141,6 +141,16 @@ main = hspec $ do
         , InjectedParam "user" (obj [("from", "auth"), ("resolver", "self.access.verify")]) Nothing ]
       irRefusals ir `shouldBe` []
 
+    it "mdInput: an Input<Bytes> item is a string of format binary, refused nowhere (BIDIR-18/19)" $ do
+      ir <- irOf "input.json" ["tickets"]
+      irRefusals ir `shouldBe` []
+      mdInput <$> method ir "tickets.audio" `shouldBe` Just (Just (RefPrimitive "string" (Just "binary")))
+      let Just audio = method ir "tickets.audio"
+      encode (mdInput audio) `shouldBe` "{\"contents\":[\"string\",\"binary\"],\"tag\":\"RefPrimitive\"}"
+      -- the bench server's ingest.items: its titled object a named type
+      mdInput <$> method ir "tickets.items" `shouldBe` Just (Just (named "tickets" "Item"))
+      kindOf ir "tickets.Item" `shouldSatisfy` isJust
+
     it "mdInput: the schema's input as a type; absent, no key" $ do
       ir <- irOf "input.json" ["tickets"]
       mdInput <$> method ir "tickets.chat" `shouldBe` Just (Just (named "tickets" "Token"))

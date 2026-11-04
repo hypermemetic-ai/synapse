@@ -12,7 +12,7 @@
 --   per user__ (and per 'holdProtocol'), in the manner of ssh's
 --   ControlMaster. It keeps signed-in WebSockets open between runs, one per
 --   address, agent and credential, and listens on a unix socket
---   (@$XDG_RUNTIME_DIR/synapse/holder-3.sock@, 0600, in a 0700 directory).
+--   (@$XDG_RUNTIME_DIR/synapse/holder-4.sock@, 0600, in a 0700 directory).
 --   A run hands it each request, with the agent it calls as, and reads the
 --   reply back, so a warm call costs local IPC and one round trip. The
 --   first run starts it. A connection whose server has gone is let go at
@@ -48,6 +48,7 @@ module Synapse.Hold
   , newMuxWith
   , muxCall
   , muxCallAs
+  , muxCallDuplex
   , muxActive
   , muxConnections
   , Held(..)
@@ -65,6 +66,7 @@ module Synapse.Hold
     -- * Through the holder
   , holderCall
   , holderCallAs
+  , holderCallDuplex
   , holderStatus
   , HolderGone(..)
   , olderThan
@@ -116,7 +118,8 @@ import System.Posix.User (getRealUserID)
 import System.Process (CreateProcess(..), StdStream(..), createProcess, getProcessExitCode, proc)
 import System.Timeout (timeout)
 
-import Plexus.Client (SubstrateConfig(..), SubstrateConnection, LostConnection(..), TlsOptions(..), connect, disconnect, connectionLost, substrateRpcSub, unsubscribe)
+import Plexus.Client (SubstrateConfig(..), SubstrateConnection, LostConnection(..), TlsOptions(..), connect, disconnect, connectionLost, substrateRpcDuplex, unsubscribe)
+import Plexus.Input (InputHalf(..), InputPort(..), inputSignal, inputSignalValue)
 import qualified Plexus.Transport as ST
 import Plexus.Types (PlexusStreamItem(..))
 
@@ -223,7 +226,11 @@ perConnection = 200
 -- | One call on the shared connection for its address and credential, as
 -- no agent in particular (a run's own multiplexer: the run is one agent).
 muxCall :: Mux -> SubstrateConfig -> ST.CallRoute
-muxCall mux = muxCallAs mux "" Nothing
+muxCall mux cfg = muxCallAs mux "" Nothing cfg Nothing
+
+-- | BIDIR-18: 'muxCall' for a call that may carry an input half.
+muxCallDuplex :: Mux -> SubstrateConfig -> ST.DuplexRoute
+muxCallDuplex mux = muxCallAs mux "" Nothing
 
 -- | One call, as the agent, on the shared connection for its address and
 -- credential — dialed when there is none (one dial at a time per key),
@@ -231,10 +238,14 @@ muxCall mux = muxCallAs mux "" Nothing
 -- @--hold-for@ (else the multiplexer's). A call this side abandons (its
 -- thread cancelled, or its consumer failing) is unsubscribed, so a held
 -- connection never fills up with streams no one reads.
-muxCallAs :: Mux -> Text -> Maybe Double -> SubstrateConfig -> ST.CallRoute
-muxCallAs mux agent hf cfg onSub method params onItem
-  | shareable method params = shared mux key idle onSub method params onItem
-  | otherwise = muxCall' mux key idle onSub method params onItem
+--
+-- BIDIR-18: a call with an input half carries it on the same connection
+-- (spec/10: only the socket that holds the call may send its input), and
+-- is never shared.
+muxCallAs :: Mux -> Text -> Maybe Double -> SubstrateConfig -> ST.DuplexRoute
+muxCallAs mux agent hf cfg half onSub method params onItem
+  | Nothing <- half, shareable method params = shared mux key idle onSub method params onItem
+  | otherwise = muxCall' mux key idle half onSub method params onItem
   where
     key = keyOf agent cfg
     idle = fromMaybe (muxIdle mux) hf
@@ -263,19 +274,19 @@ shared mux ck idle onSub method params onItem = mask $ \restore -> do
     Just waiting -> restore $ readMVar waiting >>= \case
       Right items -> onSub >> mapM_ onItem items
       -- the first run went away (its call cancelled): ask for this one
-      Left e | Just (_ :: SomeAsyncException) <- fromException e -> muxCall' mux ck idle onSub method params onItem
+      Left e | Just (_ :: SomeAsyncException) <- fromException e -> muxCall' mux ck idle Nothing onSub method params onItem
       Left e -> throwIO e
     Nothing -> do
       acc <- newIORef []
-      r <- try (restore (muxCall' mux ck idle onSub method params (\i -> modifyIORef' acc (i :) >> onItem i)))
+      r <- try (restore (muxCall' mux ck idle Nothing onSub method params (\i -> modifyIORef' acc (i :) >> onItem i)))
       uninterruptibleMask_ $ do
         items <- reverse <$> readIORef acc
         modifyMVar_ (muxShared mux) (pure . Map.delete key)
         putMVar mine (either Left (const (Right items)) r)
       either throwIO pure r
 
-muxCall' :: Mux -> ConnKey -> Double -> ST.CallRoute
-muxCall' mux key idle onSub method params onItem = do
+muxCall' :: Mux -> ConnKey -> Double -> ST.DuplexRoute
+muxCall' mux key idle half onSub method params onItem = do
   now <- getMonotonicTime
   writeIORef (muxLast mux) now
   bracket_ (atomically (modifyTVar' (muxBusy mux) (+ 1)))
@@ -306,7 +317,7 @@ muxCall' mux key idle onSub method params onItem = do
               StreamError{} -> writeIORef finished True
               _ -> pure ()
             onItem i
-      S.mapM_ deliver (substrateRpcSub (upConn up) onS method params)
+      S.mapM_ deliver (substrateRpcDuplex (upConn up) half onS method params)
         `onException` do
           s <- readIORef sub
           f <- readIORef finished
@@ -484,6 +495,17 @@ heldCount mux = sum . map length . Map.elems <$> readMVar (muxUps mux)
 --                  {"t":"lost","why","sent"} the connection went (LostConnection)
 --                  {"t":"error","why"}      any other failure (a refused dial)
 --
+--   BIDIR-18, a call with an input half (the request has "input":true):
+--   holder → run   {"t":"sig","s":SIGNAL}   credit, ack or input_closed, as the
+--                                           server sent it (after "sub")
+--   run → holder   {"in":{"seq","items"}}   one <ns>.input frame
+--                  b SEQ LEN                one binary frame: this line (not
+--                                           JSON: a voice call sends 50 a second),
+--                                           then LEN bytes of payload as they are
+--                  {"end":{"seq"}}          <ns>.end
+--   The holder builds each frame with the call's subscription and sends it
+--   on the call's own connection; the run numbers them and keeps the credit.
+--
 --   run → holder   {"status":true}
 --   holder → run   {"t":"status","protocol","version","pid","cap","hold_for",
 --                   "clients","calls","held":[{"host","port","path","tls",
@@ -506,13 +528,16 @@ heldCount mux = sum . map length . Map.elems <$> readMVar (muxUps mux)
 -- 3.17.3); 2 is one holder per user, the agent in each request (3.17.4);
 -- 3 is 2 relaying plexus 0.8's items (RETURNS-36, synapse 4.0: the typed
 -- error and progress), so a 4.0 holder never serves a 3.x run nor the
--- reverse.
+-- reverse; 4 is 3 carrying a call's input half (BIDIR-18: "input", "sig",
+-- "in", "bin", "end"), so a run with input never meets a holder that
+-- would drop it.
 holdProtocol :: Int
-holdProtocol = 3
+holdProtocol = 4
 
-encodeRequest :: Text -> Maybe Double -> SubstrateConfig -> Text -> Value -> Value
-encodeRequest agent holdFor c method params = object $
+encodeRequest :: Text -> Maybe Double -> Bool -> SubstrateConfig -> Text -> Value -> Value
+encodeRequest agent holdFor input c method params = object $
   [ "hold_for" .= h | Just h <- [holdFor] ] ++
+  [ "input" .= True | input ] ++
   [ "agent" .= agent
   , "host" .= substrateHost c, "port" .= substratePort c, "path" .= substratePath c
   , "tls" .= isJust (substrateTls c)
@@ -521,7 +546,7 @@ encodeRequest agent holdFor c method params = object $
   , "method" .= method, "params" .= params ]
   where latin1 = T.pack . BS8.unpack
 
-decodeRequest :: Value -> Maybe (Text, Maybe Double, SubstrateConfig, Text, Value)
+decodeRequest :: Value -> Maybe (Text, Maybe Double, Bool, SubstrateConfig, Text, Value)
 decodeRequest = \case
   Object o -> do
     let agent = case KM.lookup "agent" o of { Just (String a) -> a; _ -> "" }
@@ -536,7 +561,7 @@ decodeRequest = \case
     let params = maybe Null id (KM.lookup "params" o)
         bytes = BS8.pack . T.unpack
     headers <- mapM (\case { [k, v] -> Just (CI.mk (bytes k), bytes v); _ -> Nothing }) (hs :: [[Text]])
-    pure ( agent, holdFor
+    pure ( agent, holdFor, KM.lookup "input" o == Just (Bool True)
          , SubstrateConfig
              { substrateHost = T.unpack host, substratePort = port, substratePath = T.unpack path
              , substrateBackend = "", substrateHeaders = headers
@@ -580,6 +605,21 @@ readLine (LineReader s buf) = go
           if BS.null chunk
             then pure Nothing
             else writeIORef buf (b <> chunk) >> go
+
+-- | BIDIR-18: exactly @n@ bytes after the line just read (a binary
+-- frame's payload), or Nothing when the socket ends first.
+readExact :: LineReader -> Int -> IO (Maybe BS.ByteString)
+readExact (LineReader s buf) n = go
+  where
+    go = do
+      b <- readIORef buf
+      if BS.length b >= n
+        then do
+          writeIORef buf (BS.drop n b)
+          pure (Just (BS.take n b))
+        else do
+          chunk <- NB.recv s (max 65536 (n - BS.length b)) `catch` \(_ :: IOException) -> pure BS.empty
+          if BS.null chunk then pure Nothing else writeIORef buf (b <> chunk) >> go
 
 sendLine :: N.Socket -> Value -> IO ()
 sendLine s v = NB.sendAll s (LBS.toStrict (encode v) <> "\n")
@@ -714,26 +754,76 @@ serveClient mux sv s = do
       sendLine s (object ["t" .= ("draining" :: Text)])
     Just v -> case decodeRequest v of
       Nothing -> sendLine s (object ["t" .= ("error" :: Text), "why" .= ("synapse holder: a request it cannot read" :: Text)])
-      Just (agent, holdFor, cfg, method, params) -> flip finally (svTouch sv) $ do
+      Just (agent, holdFor, input, cfg, method, params) -> flip finally (svTouch sv) $ do
         svTouch sv
         sendLine s (object ["t" .= ("taken" :: Text), "v" .= svVersion sv])
-        let call = muxCallAs mux agent holdFor cfg
+        -- BIDIR-18: the call's input port, once the server has taken it;
+        -- what the run sends for it goes out on the call's connection
+        port <- newEmptyMVar
+        failed <- newEmptyMVar
+        let half | input = Just InputHalf
+                     { ihPort = void . tryPutMVar port
+                     , ihSignal = \g -> sendLine s (object ["t" .= ("sig" :: Text), "s" .= inputSignalValue g]) }
+                 | otherwise = Nothing
+            call = muxCallAs mux agent holdFor cfg half
               (sendLine s (object ["t" .= ("sub" :: Text)]))
               method params
               (\i -> sendLine s (object ["t" .= ("item" :: Text), "i" .= i]))
         withAsync call $ \a -> do
-          -- the run going away (its end closed) ends the call
+          -- the run going away (its end closed) ends the call; with an
+          -- input half, the run's frames are relayed until then
           watcher <- async $ do
-            _ <- readLine rd
+            r <- try (relayInput rd port)
+            case r of
+              -- a frame the connection could not take: the call reports the loss
+              Left (_ :: LostConnection) -> void (readLine rd)
+              Right Nothing -> pure ()
+              Right (Just why) -> void (tryPutMVar failed why)
             cancel a
           r <- waitCatch a
           cancel watcher
+          bad <- tryTakeMVar failed
           let reply = case r of
+                _ | Just why <- bad -> object ["t" .= ("error" :: Text), "why" .= why]
                 Right () -> object ["t" .= ("end" :: Text)]
                 Left e | Just (LostConnection why sent) <- fromException e ->
                   object ["t" .= ("lost" :: Text), "why" .= why, "sent" .= sent]
                 Left e -> object ["t" .= ("error" :: Text), "why" .= errorText e]
           sendLine s reply `catch` \(_ :: SomeException) -> pure ()
+
+-- | BIDIR-18: the run's input frames, each sent on the call's connection
+-- through its port, until the run's end closes ('Nothing') or it sends
+-- what the holder cannot read (why, and the call is ended).
+relayInput :: LineReader -> MVar InputPort -> IO (Maybe Text)
+relayInput rd port = loop
+  where
+    loop = do
+      line <- readLine rd
+      case line of
+        Nothing -> pure Nothing
+        Just l
+          | Just rest <- BS8.stripPrefix "b " l
+          , Just (sq, rest') <- BS8.readInt rest
+          , Just (len, "") <- BS8.readInt (BS8.drop 1 rest')
+          , sq >= 0, len >= 0 -> do
+              payload <- readExact rd len
+              case payload of
+                Nothing -> pure Nothing
+                Just bytes -> do
+                  p <- readMVar port
+                  ipBinary p (fromIntegral sq) bytes >> loop
+        Just l -> case decodeStrict l of
+          Just (Object o)
+            | Just (Object f) <- KM.lookup "in" o, Just sq <- seqOf f, Just (Array items) <- KM.lookup "items" f -> do
+                p <- readMVar port
+                ipItems p sq (foldr (:) [] items) >> loop
+            | Just (Object f) <- KM.lookup "end" o, Just sq <- seqOf f -> do
+                p <- readMVar port
+                ipEnd p sq >> loop
+          _ -> pure (Just "synapse holder: an input frame it cannot read")
+    seqOf f = case KM.lookup "seq" f of
+      Just (Number n) | n >= 0 -> Just (round n)
+      _ -> Nothing
 
 -- | An exception as the run should rethrow it: an error call's message as
 -- it is ('connect' reports a failed dial as one), anything else shown.
@@ -778,13 +868,21 @@ busy e = case fromException e of
 -- the request (the request did not go out); after that, what the holder
 -- reports.
 holderCall :: FilePath -> Text -> SubstrateConfig -> ST.CallRoute
-holderCall path agent = holderCallAs path agent Nothing (const (pure ()))
+holderCall path agent cfg = holderCallDuplex path agent Nothing (const (pure ())) cfg Nothing
 
 -- | 'holderCall', the connection kept for @holdFor@ seconds idle (else the
 -- holder's own @--hold-for@), and @onTaken@ told the holder's synapse
 -- version when it takes the request.
+--
+-- BIDIR-18: with an input half, the half's port writes the frames to the
+-- holder (it sends them on the call's connection), and the holder's
+-- relayed signals reach the half.
 holderCallAs :: FilePath -> Text -> Maybe Double -> (Text -> IO ()) -> SubstrateConfig -> ST.CallRoute
-holderCallAs path agent holdFor onTaken cfg0 onSub method params onItem = do
+holderCallAs path agent holdFor onTaken cfg = holderCallDuplex path agent holdFor onTaken cfg Nothing
+
+-- | 'holderCallAs' for a call that may carry an input half.
+holderCallDuplex :: FilePath -> Text -> Maybe Double -> (Text -> IO ()) -> SubstrateConfig -> ST.DuplexRoute
+holderCallDuplex path agent holdFor onTaken cfg0 half onSub method params onItem = do
   -- a CA file named relative to this run's directory is named whole: the
   -- holder runs in / and serves every run
   cfg <- case substrateTls cfg0 of
@@ -795,7 +893,7 @@ holderCallAs path agent holdFor onTaken cfg0 onSub method params onItem = do
     Left (e :: SomeException) -> throwIO (HolderGone (T.pack (show e)))
     Right s -> pure s
   flip finally (N.close s `catch` \(_ :: SomeException) -> pure ()) $ do
-    sent <- try (sendLine s (encodeRequest agent holdFor cfg method params))
+    sent <- try (sendLine s (encodeRequest agent holdFor (isJust half) cfg method params))
     case sent of
       Left (e :: SomeException) -> throwIO (HolderGone (T.pack (show e)))
       Right () -> pure ()
@@ -810,7 +908,14 @@ holderCallAs path agent holdFor onTaken cfg0 onSub method params onItem = do
               Just (String "taken") -> do
                 mapM_ (\case { String v -> onTaken v; _ -> pure () }) (KM.lookup "v" o)
                 loop True
-              Just (String "sub") -> onSub >> loop True
+              Just (String "sub") -> do
+                mapM_ (\h -> ihPort h (holderPort s)) half
+                onSub >> loop True
+              Just (String "sig") -> do
+                case KM.lookup "s" o >>= inputSignal of
+                  Just g -> mapM_ (\h -> ihSignal h g) half
+                  Nothing -> pure ()
+                loop True
               Just (String "item") -> do
                 case fromJSON <$> KM.lookup "i" o of
                   Just (Success i) -> onItem i
@@ -826,6 +931,21 @@ holderCallAs path agent holdFor onTaken cfg0 onSub method params onItem = do
               _ -> loop taken
             Just _ -> loop taken
     loop False
+
+-- | BIDIR-18: a call's input port through the holder: each frame a line
+-- to it (a binary one, its line and then its payload). A write the
+-- holder's socket refuses is the call's connection lost — the frame may
+-- not have gone, and nothing is sent again.
+holderPort :: N.Socket -> InputPort
+holderPort s = InputPort
+  { ipItems = \sq items -> relay (sendLine s (object ["in" .= object ["seq" .= sq, "items" .= items]]))
+  , ipBinary = \sq payload -> relay $ NB.sendMany s
+      [ BS8.pack ("b " <> show sq <> " " <> show (BS.length payload) <> "\n"), payload ]
+  , ipEnd = \sq -> relay (sendLine s (object ["end" .= object ["seq" .= sq]]))
+  }
+  where
+    relay act = act `catch` \(e :: IOException) ->
+      throwIO (LostConnection ("the connection holder went away (" <> T.pack (show e) <> ")") True)
 
 -- | SYNAPSE-40: what the holder at the socket holds, as it says
 -- (@{"t":"status", …}@), or Nothing when no holder answers there.
@@ -876,7 +996,7 @@ replaceHolder path holdFor ours = void $ (try :: IO a -> IO (Either SomeExceptio
       _ -> pure ()
 
 -- | SYNAPSE-40: the one holder's socket:
--- @$XDG_RUNTIME_DIR/synapse/holder-3.sock@ (a temporary directory of the
+-- @$XDG_RUNTIME_DIR/synapse/holder-4.sock@ (a temporary directory of the
 -- user's own without one) — one per user and 'holdProtocol'.
 holderSocketPath :: IO FilePath
 holderSocketPath = (</> ("holder-" <> show holdProtocol <> ".sock")) <$> runtimeDir
@@ -985,11 +1105,11 @@ installRouter ro = do
   broken <- newIORef False
   agents <- newIORef Map.empty
   replaced <- newIORef False
-  ST.setCallRouter (\cfg -> Just (routedCall ro mux broken agents replaced cfg))
+  ST.setDuplexRouter (\cfg -> Just (routedCall ro mux broken agents replaced cfg))
   pure mux
 
-routedCall :: RouterOpts -> Mux -> IORef Bool -> IORef (Map.Map ConnKey (Maybe Text)) -> IORef Bool -> SubstrateConfig -> ST.CallRoute
-routedCall ro mux broken agents replaced cfg onSub method params onItem = do
+routedCall :: RouterOpts -> Mux -> IORef Bool -> IORef (Map.Map ConnKey (Maybe Text)) -> IORef Bool -> SubstrateConfig -> ST.DuplexRoute
+routedCall ro mux broken agents replaced cfg half onSub method params onItem = do
   b <- readIORef broken
   agent <- case roHold ro of
     Just agentFor | not b -> do
@@ -1007,7 +1127,7 @@ routedCall ro mux broken agents replaced cfg onSub method params onItem = do
   case agent of
     Just a | ours -> do
       seen <- newIORef Nothing
-      let via = holderCallAs path a (Just (roHoldFor ro)) (writeIORef seen . Just) cfg onSub method params onItem
+      let via = holderCallDuplex path a (Just (roHoldFor ro)) (writeIORef seen . Just) cfg half onSub method params onItem
           -- an older holder answered: once a run, this run's takes its place
           newer = do
             v <- readIORef seen
@@ -1027,12 +1147,12 @@ routedCall ro mux broken agents replaced cfg onSub method params onItem = do
             case r' of
               Right () -> pure ()
               Left (HolderGone _) -> local'
-    _ -> muxCall mux cfg onSub method params onItem
+    _ -> muxCallDuplex mux cfg half onSub method params onItem
   where
     -- no holder to be had: this process's own connection, for the rest of it
     local' = do
       writeIORef broken True
-      muxCall mux cfg onSub method params onItem
+      muxCallDuplex mux cfg half onSub method params onItem
 
 -- ============================================================================
 -- Files

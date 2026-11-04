@@ -159,7 +159,17 @@ inp = dict(inj); inp = {"name": "chat", "description": "chat", "hash": "c0", "ro
        "input": {"$ref": "#/$defs/Token", "$defs": tok},
        "returns": inj["returns"]}
 noinp = {"name": "plain", "description": "plain", "hash": "p0", "role": {"kind": "rpc"}, "returns": inj["returns"]}
-write('input.json', [(["tickets"], plugin("tickets", [inp, noinp]))])
+# BIDIR-18 / BIDIR-19: an Input<Bytes> item, as the BIDIR-17 bench server's
+# ingest.bytes declares it, and its Input<Item>, as ingest.items does
+binp = {"name": "audio", "description": "audio", "hash": "a0", "role": {"kind": "rpc"},
+        "input": {"contentEncoding": "base64", "contentMediaType": "application/octet-stream", "type": "string", "x-plexus-binary": True},
+        "returns": inj["returns"]}
+iinp = {"name": "items", "description": "items", "hash": "i0", "role": {"kind": "rpc"},
+        "input": {"$schema": "https://json-schema.org/draft/2020-12/schema", "description": "One item in: when its frame was sent, and a pad of the scenario's size.",
+                  "properties": {"at": {"format": "uint64", "minimum": 0, "type": "integer"}, "pad": {"type": "string"}},
+                  "required": ["at", "pad"], "title": "Item", "type": "object"},
+        "returns": inj["returns"]}
+write('input.json', [(["tickets"], plugin("tickets", [inp, noinp, binp, iinp]))])
 
 # shared types are placed by references
 ticket_ref = {"type": "string", "description": "A ticket's id, e.g. APP-21."}

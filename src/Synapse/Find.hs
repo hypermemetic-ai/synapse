@@ -67,7 +67,8 @@ import Data.Aeson (Value, object, (.=))
 import Data.Char (isAlphaNum)
 import Data.List (sortOn, foldl')
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
+import qualified Synapse.Input as In
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -515,7 +516,10 @@ renderFind FindRender{..} hits = T.unlines (dropTrailingBlanks body)
     row h = case enParam (hitEntry h) of
       Nothing ->
         let descW = max minDesc (width - col1)
-        in [ T.stripEnd ("  " <> locCell h <> descCell h descW (methodText (enMethod (hitEntry h)))) ]
+            m = enMethod (hitEntry h)
+        in T.stripEnd ("  " <> locCell h <> descCell h descW (methodText m))
+             -- BIDIR-18: a method with an input half says how its stream is given
+             : [ T.replicate col1 " " <> inputLine frIR m | isJust (mdInput m) ]
       Just p ->
         let descW = max minDesc (width - col2)
             label = flagLabel frIR p
@@ -635,6 +639,23 @@ renderNoMatch FindRender{..} near = T.unlines $
     locW = maximum (0 : map (T.length . entryLocation) near)
     desc e = fromMaybe "" (mdDescription (enMethod e))
 
+-- | BIDIR-18: what a method's input half is called and takes.
+inputNamesOf :: MethodDef -> In.InputNames
+inputNamesOf m = In.inputNames (map pdName (mdParams m))
+
+-- | The item type of an input, as a flag shows a type (bytes, which the IR
+-- does not type, as such).
+inputType :: IR -> TypeRef -> Text
+inputType ir = \case
+  RefPrimitive "string" (Just "binary") -> "bytes"
+  RefUnknown -> "any"
+  t -> flagType ir t
+
+-- | @takes a stream in: --input -|@FILE, Item items@
+inputLine :: IR -> MethodDef -> Text
+inputLine ir m = "takes a stream in: --" <> In.inStream (inputNamesOf m) <> " -|@FILE"
+  <> maybe "" (\t -> ", " <> inputType ir t <> " items") (mdInput m)
+
 -- | One hit as JSON, for @-j@.
 hitJson :: IR -> Hit -> Value
 hitJson ir h = object $
@@ -649,6 +670,8 @@ hitJson ir h = object $
          , "description" .= fromMaybe "" (pdDescription p)
          ] ++ maybe [] (\vs -> ["values" .= vs]) (paramValuesOf ir p)
        Nothing -> [ "description" .= fromMaybe "" (mdDescription m) ]
+         ++ [ "input" .= object [ "flag" .= ("--" <> In.inStream (inputNamesOf m)), "item" .= inputType ir t ]
+            | Just t <- [mdInput m] ]
   ++
   [ "group" .= (case hitGroup h of { Methods -> "methods"; Parameters -> "parameters"; Mentioned -> "mentioned" } :: Text)
   , "score" .= (fromIntegral (round (hitScore h * 100) :: Int) / 100 :: Double)

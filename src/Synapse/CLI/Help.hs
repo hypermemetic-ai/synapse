@@ -89,6 +89,7 @@ import Plexus.Schema.Recursive (MethodExample(..), MethodSchema(..), paramValues
 import Synapse.IR.Types
 import Synapse.Algebra.Render (deprecationMarker, formatDeprecationLine, fitText)
 import Synapse.CLI.Parse (isScalarElement)
+import qualified Synapse.Input as In
 
 -- ============================================================================
 -- Configuration
@@ -168,6 +169,7 @@ renderMethodPage MethodPage{..} ir md = T.unlines (dropTrailing body)
       , [""]
       , usageLines
       , optionsBlock
+      , inputBlock
       , exampleBlock
       , requiresBlock
       ]
@@ -195,7 +197,39 @@ renderMethodPage MethodPage{..} ir md = T.unlines (dropTrailing body)
     optional = [p | p <- callerParams, not (pdRequired p)]
 
     usageLines =
-      [ "Usage: " <> T.unwords ([invoke] ++ map usageFlag required ++ ["[OPTIONS]" | not (null optional)]) ]
+      [ "Usage: " <> T.unwords ([invoke] ++ map usageFlag required
+          ++ [ "--" <> In.inStream inNames <> " <-|@FILE>" | hasInput ]
+          ++ ["[OPTIONS]" | not (null optional)]) ]
+
+    -- BIDIR-18: a method with an input half takes a stream in
+    inSchema = mpSchema >>= methodInput
+    hasInput = isJust (mdInput md) || isJust inSchema
+    inNames = In.inputNames (map pdName (mdParams md))
+    inKind = case inSchema of
+      Just sch -> In.itemKind sch
+      Nothing -> case mdInput md of
+        Just (RefPrimitive "string" (Just "binary")) -> In.ItemBytes
+        Just (RefPrimitive "string" _) -> In.ItemString
+        _ -> In.ItemJson
+    inType = case (inKind, mdInput md) of
+      (In.ItemBytes, _) -> "bytes"
+      (_, Just t) -> flagType ir t
+      (In.ItemString, Nothing) -> "string"
+      (_, Nothing) -> "JSON"
+    inputBlock
+      | not hasInput = []
+      | otherwise =
+          [ "", "Input (a stream in, sent as the service grants credit):" ]
+          ++ hangAt inCol ("  --" <> In.inStream inNames <> " <-|@FILE>")
+               (wrapWords (max 20 (width - inCol)) $ "stdin (-) or a file (@FILE) of " <> inType <> " items: " <> case inKind of
+                  In.ItemBytes -> "the bytes as they are, cut into --" <> In.inChunk inNames <> " bytes, each a binary frame"
+                  In.ItemString -> "one line, one item"
+                  In.ItemJson -> "one JSON value a line (NDJSON); a line that is not one is named and nothing carries it")
+          ++ [ l | inKind == In.ItemBytes
+                 , l <- hangAt inCol ("  [--" <> In.inChunk inNames <> " <bytes>]")
+                          ["bytes a binary frame (default " <> T.pack (show In.defaultChunk) <> ")"] ]
+          ++ hangAt inCol ("  [--" <> In.inProgress inNames <> "]") ["sent, acked and credit on stderr, once a second"]
+    inCol = 2 + 24
     usageFlag p = flagOf p <> " <" <> T.toUpper (pdName p) <> ">"
 
     optionsBlock
@@ -251,7 +285,8 @@ renderMethodPage MethodPage{..} ir md = T.unlines (dropTrailing body)
     exampleLines i ex =
       [ "" | i > 0 ]
         ++ maybe [] (\n -> ["  # " <> n]) (exampleNote ex)
-        ++ ["  " <> renderExample mpProgram mpTarget md (exampleParams ex)]
+        ++ ["  " <> renderExample mpProgram mpTarget md (exampleParams ex)
+              <> (if hasInput then " --" <> In.inStream inNames <> " -" else "")]
 
     -- AUTH-8: in a caller's view, the grant and where it is held.
     requiresBlock = case mpSchema of

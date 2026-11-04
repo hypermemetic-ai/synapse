@@ -730,8 +730,10 @@ methodDefRead shared namespace pathPrefix method = do
   errorRead <- traverse (readRoot shared namespace (siteError fullPath) (rootFallback method "error")) (methodError method)
   progressRead <- traverse (readRoot shared namespace (siteProgress fullPath) (rootFallback method "progress")) (methodProgress method)
 
-  -- Input: reserved for BIDIR-6; read when a server says it.
-  inputRead <- traverse (readRoot shared namespace (siteInput fullPath) (rootFallback method "input")) (methodInput method)
+  -- Input (BIDIR-6): read when a server says it. BIDIR-18 / BIDIR-19: an
+  -- Input<Bytes> item (`x-plexus-binary`) is a string of format "binary"
+  -- (`RefPrimitive "string" (Just "binary")`, as service-codegen reads it).
+  inputRead <- traverse (readRoot shared namespace (siteInput fullPath) (rootFallback method "input") . binaryInput) (methodInput method)
 
   let allTypes = Map.unions
         [paramTypes, returnTypes, maybe Map.empty rrTypes errorRead, maybe Map.empty rrTypes progressRead, maybe Map.empty rrTypes inputRead]
@@ -865,3 +867,14 @@ schemaToTypeRef namespace v = fst (runRead (readType (docOf namespace KM.empty) 
 extractTypesFromSchema :: Text -> Value -> Map Text TypeDef
 extractTypesFromSchema namespace (Object o) = fst (runRead (readDefs (docOf namespace o)))
 extractTypesFromSchema _ _ = Map.empty
+
+-- | BIDIR-18: an @Input<Bytes>@ item schema (@"x-plexus-binary": true@,
+-- with its @contentEncoding@ and @contentMediaType@) as the IR reads it:
+-- @{"type":"string","format":"binary"}@, its description kept. Anything
+-- else is itself.
+binaryInput :: Value -> Value
+binaryInput = \case
+  Object o | KM.lookup "x-plexus-binary" o == Just (Bool True) -> Object $ KM.fromList $
+    [("type", String "string"), ("format", String "binary")]
+      ++ [ ("description", d) | Just d <- [KM.lookup "description" o] ]
+  v -> v
