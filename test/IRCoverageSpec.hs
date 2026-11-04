@@ -13,7 +13,7 @@ module Main where
 
 import Control.Monad (forM_, unless, when)
 import qualified Codec.Compression.GZip as GZ
-import Data.Aeson (Value(..), eitherDecode, encode, toJSON)
+import Data.Aeson (Value(..), eitherDecode, encode, toJSON, (.=))
 import qualified Data.Aeson as Aeson
 import Data.Aeson.Encode.Pretty (Config(..), defConfig, encodePretty')
 import qualified Data.Aeson.Key as K
@@ -27,7 +27,7 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as T
 import System.Directory (createDirectoryIfMissing, doesFileExist, findExecutable)
-import System.Environment (getEnvironment, lookupEnv)
+import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode(..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -35,11 +35,12 @@ import System.Process (CreateProcess(..), proc, readCreateProcessWithExitCode)
 import Test.Hspec
 
 import Synapse.IR.Types
-import Synapse.SchemaStore (Plan(..), Store(..), readPlan, writePlan)
+import Synapse.SchemaStore (Plan(..), Store(..), readPlan, schemasRoot, storeFor, writePlan)
+import Synapse.Endpoint (plainAt)
 import Plexus.Schema.Recursive (MethodSchema(..))
 
 import IRFixture
-import Plexus07 (methodAs07, renameParamsDef, withContract)
+import Plexus07 (methodAs07, withContract)
 import Synapse.IR.Builder (IRBuildError(..), TypeSource(..), buildIRFromSchema)
 import MockService
 
@@ -242,7 +243,7 @@ main = hspec $ do
   describe "menger, 2026-10-29, as served (0.7.0)" $
     it "every method's mdCardinality is its own streaming flag" $ do
       rows <- map (either error id . eitherDecode) . filter (not . BL.null) . BL.lines . GZ.decompress <$> BL.readFile menger20261029 :: IO [Value]
-      let served = [ (p, if p == ["chats", "inputs"] then renameParamsDef "Message" "MessageText" sch else sch)
+      let served = [ (p, sch)
                    | Object r <- rows, Just pv <- [KM.lookup "path" r], Aeson.Success p <- [Aeson.fromJSON pv]
                    , Just sch <- [KM.lookup "schema" r] ]
           flags = [ (T.intercalate "." p <> "." <> n, st)
@@ -255,15 +256,17 @@ main = hspec $ do
       env <- envWithSchemas "menger" schemas
       ir <- buildFixtureIR env []
       length flags `shouldSatisfy` (> 100)
-      [ (path, st) | (path, st) <- flags
+      -- chats.inputs is refused whole (two types titled Message), so not here
+      [ (path, st) | (path, st) <- flags, not ("chats.inputs." `T.isPrefixOf` path)
                    , fmap mdCardinality (Map.lookup path (irMethods ir)) /= Just (if st then CardinalityMany else CardinalityOne) ]
         `shouldBe` []
 
   describe "menger, 2026-10-29, whole" $ do
     -- RETURNS-13: one title in one namespace is one type. The capture's
     -- chats.inputs names two (Message: the vocabulary's string in params,
-    -- the chat's message in returns); 2.1 kept the first, 3.0 refuses.
-    -- mengerIR builds it with the params' one renamed (IRFixture).
+    -- the chat's message in returns); 2.1 kept the first, 3.0 refuses: the
+    -- one plugin's build fails, and the walk refuses that activation, naming
+    -- both, and goes on (the review, #9).
     it "as captured, chats.inputs puts two types under Message: the build fails naming both" $ do
       rows <- map (either error id . eitherDecode) . filter (not . BL.null) . BL.lines . GZ.decompress <$> BL.readFile menger20261029 :: IO [Value]
       let inputs = [ sch | Object r <- rows, KM.lookup "path" r == Just (toJSON (["chats", "inputs"] :: [Text])), Just sch <- [KM.lookup "schema" r] ]
@@ -273,16 +276,24 @@ main = hspec $ do
           (tcNamespace err, tcTitle err) `shouldBe` ("chats.inputs", "Message")
           (tcFirst err, tcSecond err) `shouldBe` (TypeSource "list" "params", TypeSource "list" "returns")
         Right _ -> expectationFailure "two types under one title built"
+    it "the walk refuses chats.inputs, naming both sites, leaves it out, and goes on" $ do
+      ir <- mengerIR
+      [ (rfSite r, rfKeyword r) | r <- irRefusals ir ] `shouldBe` [("chats.inputs", "title")]
+      [ rfDetail r | r <- irRefusals ir ] `shouldSatisfy` all (\d -> all (`T.isInfixOf` d) ["\"Message\"", "method list (params)", "method list (returns)"])
+      [ k | k <- Map.keys (irMethods ir), "chats.inputs." `T.isPrefixOf` k ] `shouldBe` []
+      [ k | k <- Map.keys (irTypes ir), "chats.inputs." `T.isPrefixOf` k ] `shouldBe` []
+      Map.member "chats.post" (irMethods ir) `shouldBe` True
+      Map.member "tickets.get" (irMethods ir) `shouldBe` True
+
     -- RETURNS-36: 2.1 refused the walk at the 21 schema methods' returns,
     -- which 0.6 left unstated; a 0.7 schema states every method's returns
-    -- (the captures are given `{}` for them, 'withContract'), so the walk
-    -- is refused nowhere and those 21 return the JSON type.
-    it "is refused nowhere; the 21 schema methods 2.1 refused return the JSON type; the root's carriers are the JSON type" $ do
+    -- (the captures are given `{}` for them, 'withContract'), so those
+    -- return the JSON type (chats.inputs' aside: it is refused whole).
+    it "the 20 schema methods 2.1 refused return the JSON type; the root's carriers are the JSON type" $ do
       ir <- mengerIR
-      map (\r -> (rfSite r, rfKeyword r)) (irRefusals ir) `shouldBe` []
       unknownSites ir `shouldBe` []
-      [ mdReturns <$> Map.lookup (T.dropEnd (T.length " returns") site) (irMethods ir) | (site, _) <- expectedMengerRefusals ]
-        `shouldBe` replicate 21 (Just RefJson)
+      let schemaMethods = [ T.dropEnd (T.length " returns") site | (site, _) <- expectedMengerRefusals, site /= "chats.inputs.schema returns" ]
+      [ mdReturns <$> Map.lookup m (irMethods ir) | m <- schemaMethods ] `shouldBe` replicate 20 (Just RefJson)
       danglingRefs ir `shouldBe` []
       param ir ".call" "params" `shouldBe` Just RefJson
       fieldType ir ".PlexusStreamItem" "data" "content" `shouldBe` Just RefJson
@@ -302,7 +313,8 @@ main = hspec $ do
         `shouldBe` [RefArray (RefTuple [RefPrimitive "string" Nothing, RefPrimitive "string" Nothing])]
       kindOf ir ".PluginHashes" `shouldSatisfy` isJust
       -- no injected param is a param any more: 88 auth, 88 user
-      length [ () | md <- Map.elems (irMethods ir), ip <- mdInjected md ] `shouldBe` 176
+      -- (chats.inputs' 10 aside: it is refused whole)
+      length [ () | md <- Map.elems (irMethods ir), ip <- mdInjected md ] `shouldBe` 166
       [ pdName p | md <- Map.elems (irMethods ir), p <- mdParams md, pdName p `elem` ["auth", "user"] ] `shouldBe` []
 
     it "equals its golden (menger-2026-10-29.ir-3.0.json)" $ do
@@ -329,6 +341,7 @@ main = hspec $ do
       let typeMismatches =
             [ "type " <> T.unpack key <> " changed:\n  old " <> show (norm v) <> "\n  new " <> show (map norm candidates)
             | (k, v) <- KM.toList oldTypes, not (changedIn20 v)
+            , not ("chats.inputs." `T.isPrefixOf` K.toText k)   -- refused whole in 3.0
             , let key = K.toText k
                   local = T.takeWhileEnd (/= '.') key
                   candidates = case Map.lookup key newTypes of
@@ -348,21 +361,30 @@ main = hspec $ do
             | (k, v) <- KM.toList oldMethods
             , let key = K.toText k
                   old' = norm (dropKeys ["mdStreaming"] (dropInjected v))
-                  new' = maybe Null (norm . unrename . dropKeys ["mdInjected", "mdInput", "mdError", "mdProgress", "mdCardinality"] . toJSON) (Map.lookup key (irMethods ir))
-            , not (changedIn20 (dropInjected v)), old' /= new' ]
+                  new' = maybe Null (norm . dropKeys ["mdInjected", "mdInput", "mdError", "mdProgress", "mdCardinality"] . toJSON) (Map.lookup key (irMethods ir))
+            , not (changedIn20 (dropInjected v)), old' /= new'
+            -- chats.inputs is refused whole in 3.0 (two types titled Message)
+            , not ("chats.inputs." `T.isPrefixOf` key) ]
           -- the name IRFixture gave chats.inputs' params' Message, back
-          unrename = \case
-            String "MessageText" -> String "Message"
-            Object x -> Object (KM.map unrename x)
-            Array x -> Array (fmap unrename x)
-            x -> x
       mapM_ putStrLn (take 5 (typeMismatches ++ methodMismatches))
       (length typeMismatches, length methodMismatches) `shouldBe` (0, 0)
       -- and the guard is not vacuous: most of 2.0 was typed
       length [ () | (_, v) <- KM.toList oldTypes, not (changedIn20 v) ] `shouldSatisfy` (> 150)
       length [ () | (_, v) <- KM.toList oldMethods, not (changedIn20 (dropInjected v)) ] `shouldSatisfy` (> 100)
 
-  describe "caches another synapse wrote" $
+  describe "caches another synapse wrote" $ do
+    -- RETURNS-36 review (#10): 4.0's schemas and plans (plexus 0.8's
+    -- shape: cardinality, no streaming) are kept apart from 3.x's
+    -- (~/.cache/synapse/schemas), so a rollback to synapse.prev never reads
+    -- an entry 4.0 wrote, nor 4.0 one of 3.x's
+    it "4.0 keeps its schema cache in a directory of its own layout, never 3.x's" $
+      withSystemTempDirectory "r36-cache" $ \dir -> do
+        setEnv "XDG_CACHE_HOME" dir
+        root <- schemasRoot
+        st <- storeFor (plainAt "127.0.0.1" 4455) "builder" "menger"
+        unsetEnv "XDG_CACHE_HOME"
+        root `shouldBe` dir </> "synapse" </> "schemas-4"
+        storeDir st `shouldStartWith` (dir </> "synapse" </> "schemas-4" </> "")
     it "a plan whose IR is 2.0 (3.16.0's) is read as no plan" $
       withSystemTempDirectory "cc8-store" $ \dir -> do
         let st = Store dir
@@ -378,28 +400,51 @@ main = hspec $ do
     exe <- runIO builtSynapse
     case exe of
       Nothing -> it "against a service with a bare object" $ pendingWith "the built synapse is not on PATH (cabal test puts it there)"
-      Just bin -> it "against a service with a bare object: the IR on stdout, the site on stderr, exit 65" $ do
-        rows <- loadSchemasValues (fixtures </> "untyped.json")
+      Just bin -> do
         let root = Object (KM.fromList
               [ ("namespace", String "menger"), ("version", String "1.0.0"), ("description", String "root")
               , ("hash", String "r-cc8"), ("methods", Array mempty)
               , ("children", toJSON [ Object (KM.fromList [("namespace", String "tickets"), ("description", String "t"), ("hash", String "t-cc8")]) ]) ])
-        writeIORef schemaOverride (Just (("", root) : rows))
-        withSystemTempDirectory "cc8-cli" $ \dir -> withMockService todaysService $ \port -> do
-          forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
-          env0 <- getEnvironment
-          let env = [ (k, v) | (k, v) <- env0, k `notElem` ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION"] ]
-                 ++ [ ("HOME", dir </> "home"), ("XDG_CACHE_HOME", dir </> "cache"), ("XDG_RUNTIME_DIR", dir </> "run")
-                    , ("PLEXUS_KEYCHAIN", "off"), ("SYNAPSE_HOLD_FOR", "3s") ]
-          (code, out, err) <- readCreateProcessWithExitCode
-            (proc bin ["--url", "ws://127.0.0.1:" <> show port <> "/ws", "-i", "menger"]) { env = Just env } ""
-          writeIORef schemaOverride Nothing
+            emitIR rows = do
+              writeIORef schemaOverride (Just (("", root) : rows))
+              withSystemTempDirectory "cc8-cli" $ \dir -> withMockService todaysService $ \port -> do
+                forM_ ["home", "cache", "run"] $ \d -> createDirectoryIfMissing True (dir </> d)
+                env0 <- getEnvironment
+                let env = [ (k, v) | (k, v) <- env0, k `notElem` ["HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "SYNAPSE_AS", "PLEXUS_SESSION"] ]
+                       ++ [ ("HOME", dir </> "home"), ("XDG_CACHE_HOME", dir </> "cache"), ("XDG_RUNTIME_DIR", dir </> "run")
+                          , ("PLEXUS_KEYCHAIN", "off"), ("SYNAPSE_HOLD_FOR", "3s") ]
+                r <- readCreateProcessWithExitCode
+                  (proc bin ["--url", "ws://127.0.0.1:" <> show port <> "/ws", "-i", "menger"]) { env = Just env } ""
+                writeIORef schemaOverride Nothing
+                pure r
+        it "against a service with a bare object: the IR on stdout, the site on stderr, exit 65" $ do
+          rows <- loadSchemasValues (fixtures </> "untyped.json")
+          (code, out, err) <- emitIR rows
           code `shouldBe` ExitFailure 65
           err `shouldSatisfy` ("tickets.Thing.bare" `isInfixOf`)
           err `shouldSatisfy` ("neither properties nor additionalProperties" `isInfixOf`)
+          -- nothing was left out: main's header
+          err `shouldSatisfy` ("nothing was dropped" `isInfixOf`)
           case eitherDecode (BL.pack out) :: Either String IR of
             Left e -> expectationFailure ("stdout is not an IR: " <> e <> "\n" <> take 400 out)
             Right ir -> map rfSite (irRefusals ir) `shouldBe` ["tickets.Thing.bare", "tickets.Thing.list[]", "tickets.Thing.mixed"]
+        -- RETURNS-36 review: a title collision leaves its activation out, so
+        -- the header says so, by namespace, and never "nothing was dropped"
+        it "against a service with two types under one title: the header says which activation was left out, exit 65" $ do
+          let pong props = object07 ["title" .= ("Pong" :: Text), "type" .= ("object" :: Text), "properties" .= props]
+              method n props = object07 [ "name" .= (n :: Text), "description" .= n, "hash" .= (n <> "0"), "streaming" .= False
+                                        , "returns" .= pong props ]
+              tickets = object07
+                [ "namespace" .= ("tickets" :: Text), "version" .= ("1" :: Text), "description" .= ("t" :: Text), "hash" .= ("t-cc8" :: Text)
+                , "methods" .= [ method "a" (object07 ["message" .= object07 ["type" .= ("string" :: Text)]])
+                               , method "b" (object07 ["reply" .= object07 ["type" .= ("integer" :: Text)]]) ] ]
+          (code, out, err) <- emitIR [("tickets", tickets)]
+          code `shouldBe` ExitFailure 65
+          err `shouldNotSatisfy` ("nothing was dropped" `isInfixOf`)
+          err `shouldSatisfy` ("left out: tickets" `isInfixOf`)
+          case eitherDecode (BL.pack out) :: Either String IR of
+            Left e -> expectationFailure ("stdout is not an IR: " <> e <> "\n" <> take 400 out)
+            Right ir -> map (\r -> (rfSite r, rfKeyword r)) (irRefusals ir) `shouldBe` [("tickets", "title")]
 
   -- RETURNS-40: synapse asks the service for its IR first — one call — and
   -- walks the raw schemas only when the service has no `ir`.
@@ -502,6 +547,9 @@ expectedMengerRefusals = sort $
 
 named :: Text -> Text -> TypeRef
 named ns n = RefNamed (QualifiedName ns n)
+
+object07 :: [(K.Key, Value)] -> Value
+object07 = Object . KM.fromList
 
 obj :: [(Text, Text)] -> Value
 obj kvs = Object (KM.fromList [ (K.fromText k, String v) | (k, v) <- kvs ])

@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 -- | AUTH-8: synapse shows each caller its own server.
 --
@@ -44,6 +45,8 @@ import Synapse.Auth
 import Synapse.Auth.Loopback
 import Synapse.Identity.Proof (generateSeed)
 import qualified Synapse.Identity.Session as Session
+import qualified Synapse.SchemaStore as Store
+import Synapse.Schema.Types (jsonLine, pattern ServiceError)
 import qualified Synapse.Log as Log
 
 import MockService
@@ -108,6 +111,7 @@ worker = Whoami
 -- RemoteError) with AUTH-2's own fields beside it
 refusalItem :: Value
 refusalItem = [aesonQQ|{"type":"error","recoverable":false,
+  "message":"needs tickets.set_status on IDENTITY","code":"-32003",
   "error":{"kind":"forbidden","reason":"missing_grant","grant":"tickets.set_status","scope":"IDENTITY",
            "roles":["editor","admin"],"held_on":["MENGER"]},
   "error_kind":"forbidden",
@@ -187,6 +191,10 @@ spec = do
           err `shouldBe` Forbidden (MissingGrant "tickets.set_status" "IDENTITY" ["editor", "admin"] ["MENGER"])
           renderRemoteError err `shouldBe` "forbidden: needs `tickets.set_status` on `IDENTITY`"
         _ -> expectationFailure "a refusal is still an error item"
+      -- the review (RETURNS-36 #1): callers read the server's line, as main did
+      case item of
+        ServiceError _ _ msg _ -> msg `shouldBe` "needs tickets.set_status on IDENTITY"
+        _ -> expectationFailure "a refusal is still an error item"
     it "the typed error alone names the same refusal" $ do
       let typed = parse [aesonQQ|{"type":"error","recoverable":false,
                     "error":{"kind":"forbidden","reason":"missing_grant","grant":"tickets.set_status","scope":"IDENTITY",
@@ -213,6 +221,74 @@ spec = do
       fmap refusalMessage (itemRefusal d) `shouldBe` Just "needs tickets.create on MENGER"
       parseRefusal [aesonQQ|{"error_kind":"forbidden"}|] `shouldBe` Just (Refusal Nothing Nothing [] [] [] "forbidden")
       parseRefusal [aesonQQ|{"error_kind":"invalid_params","message":"x"}|] `shouldBe` Nothing
+
+  -- the review (RETURNS-36 #1, #7): what synapse reads off an error frame is
+  -- the server's message; an ended session is the typed unauthenticated
+  -- with the server's reason (main's text otherwise); a cache misled is a
+  -- not-found or a param the server does not take, typed or in its words;
+  -- -j prints a Note progress as main did
+  describe "the server's line (RETURNS-36 review)" $ do
+    let meta = [aesonQQ|{"provenance":["menger"],"plexus_hash":"h","timestamp":0}|]
+        frame08 msg code err kind = parse (A.object
+          [ "type" A..= ("error" :: Text), "metadata" A..= meta, "recoverable" A..= False
+          , "message" A..= (msg :: Text), "code" A..= (code :: Text), "error" A..= (err :: Value)
+          , "error_kind" A..= (kind :: Text) ]) :: PlexusStreamItem
+        frame070 msg code = parse (A.object
+          [ "type" A..= ("error" :: Text), "metadata" A..= meta, "recoverable" A..= False
+          , "message" A..= (msg :: Text), "code" A..= (code :: Text) ]) :: PlexusStreamItem
+        signedOut08 = frame08 "Authentication required: you have signed out: sign in again" "-32001"
+                        [aesonQQ|{"kind":"unauthenticated"}|] "unauthenticated"
+        missingId08 = frame08 "Invalid params: missing field: id" "-32602"
+                        [aesonQQ|{"kind":"invalid_params","param":"id","problem":"missing"}|] "invalid_params"
+        notFound08 = parse (A.object
+          [ "type" A..= ("error" :: Text), "metadata" A..= meta, "recoverable" A..= False
+          , "message" A..= ("Method not found: tickets.get" :: Text), "code" A..= ("-32601" :: Text)
+          , "error" A..= [aesonQQ|{"kind":"method_not_found","activation":"tickets","method":"get"}|] ]) :: PlexusStreamItem
+    it "ServiceError gives the server's message" $ do
+      case signedOut08 of
+        ServiceError _ _ m _ -> m `shouldBe` "Authentication required: you have signed out: sign in again"
+        _ -> expectationFailure "an error"
+      case frame070 "boom" "-32000" of
+        ServiceError _ _ m _ -> m `shouldBe` "boom"
+        _ -> expectationFailure "an error"
+    it "a frame without message: the typed error's line, an unknown kind's too" $ do
+      let bare err = parse (A.object [ "type" A..= ("error" :: Text), "metadata" A..= meta, "recoverable" A..= False
+                                     , "error" A..= (err :: Value) ]) :: PlexusStreamItem
+      case bare [aesonQQ|{"kind":"unauthenticated"}|] of
+        ServiceError _ _ m _ -> m `shouldBe` "unauthenticated: credentials required"
+        _ -> expectationFailure "an error"
+      case bare [aesonQQ|{"kind":"too_many_writes","retry_after_ms":250,"message":"slow down"}|] of
+        ServiceError _ _ m _ -> m `shouldBe` "too_many_writes: slow down"
+        _ -> expectationFailure "an error"
+      Store.isStaleItem (bare [aesonQQ|{"kind":"too_many_connections","max":64}|]) `shouldBe` False
+    it "a signed-out or expired session is ended, 0.8 or 0.7.0" $ do
+      Session.isSessionEndedItem signedOut08 `shouldBe` True
+      Session.isSessionEndedItem (frame08 "Authentication required: your sign-in has expired: sign in again" "-32001"
+                                    [aesonQQ|{"kind":"unauthenticated"}|] "unauthenticated") `shouldBe` True
+      Session.isSessionEndedItem (frame070 "Authentication required: you have signed out: sign in again" "-32001") `shouldBe` True
+    it "an unauthenticated call without that reason, or another error saying it, is not" $ do
+      Session.isSessionEndedItem (frame08 "Authentication required: credentials required" "-32001"
+                                    [aesonQQ|{"kind":"unauthenticated"}|] "unauthenticated") `shouldBe` False
+      Session.isSessionEndedItem (frame08 "you have signed out" "-32000"
+                                    [aesonQQ|{"kind":"execution","message":"you have signed out"}|] "") `shouldBe` False
+    it "a cache misled: a missing or unknown param, a method not found — 0.8 and 0.7.0" $ do
+      Store.isStaleItem missingId08 `shouldBe` True
+      Store.isStaleItem notFound08 `shouldBe` True
+      Store.isStaleItem (frame070 "Invalid params: missing field: id" "-32602") `shouldBe` True
+      Store.isStaleItem (frame070 "Method not found: tickets.get" "-32601") `shouldBe` True
+      Store.isStaleItem (frame08 "Invalid params: unknown field `sumary`, expected one of `id`" "-32602"
+        [aesonQQ|{"kind":"invalid_params","problem":"malformed","detail":"unknown field `sumary`, expected one of `id`"}|] "invalid_params")
+        `shouldBe` True
+      Store.isStaleItem (frame08 "Execution error: boom" "-32000" [aesonQQ|{"kind":"execution","message":"boom"}|] "") `shouldBe` False
+    it "-j prints a Note progress as main did, other content as content" $ do
+      let progress c = parse (A.object [ "type" A..= ("progress" :: Text), "metadata" A..= meta
+                                       , "content_type" A..= ("tickets.import" :: Text), "content" A..= (c :: Value) ]) :: PlexusStreamItem
+          line = decode . jsonLine :: PlexusStreamItem -> Maybe Value
+      line (progress [aesonQQ|{"message":"half","percentage":50.0}|]) `shouldBe` Just [aesonQQ|
+        {"type":"progress","metadata":{"provenance":["menger"],"plexus_hash":"h","timestamp":0},"message":"half","percentage":50.0}|]
+      line (progress [aesonQQ|{"message":"started"}|]) `shouldBe` Just [aesonQQ|
+        {"type":"progress","metadata":{"provenance":["menger"],"plexus_hash":"h","timestamp":0},"message":"started","percentage":null}|]
+      line (progress [aesonQQ|{"type":"batch","done":1,"of":3}|]) `shouldBe` Just (toJSON (progress [aesonQQ|{"type":"batch","done":1,"of":3}|]))
 
   describe "the anonymous page" $ do
     it "renders the ticket's transcript" $ do

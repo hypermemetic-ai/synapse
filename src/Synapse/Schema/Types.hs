@@ -32,6 +32,8 @@ module Synapse.Schema.Types
   , pattern ServiceData
   , pattern ServiceProgress
   , pattern ServiceError
+  , serviceErrorMessage
+  , jsonLine
   , pattern ServiceDone
   , pattern ServiceGuidance
   , pattern ServiceRequest
@@ -44,7 +46,7 @@ module Synapse.Schema.Types
   , SelectOption(..)
   ) where
 
-import Data.Aeson (Value(..), encode)
+import Data.Aeson (Value(..), encode, object, toJSON, (.=))
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text (Text)
@@ -78,6 +80,8 @@ import Plexus.Types
   , Response(..)
   , StandardResponse
   , SelectOption(..)
+  , StreamMetadata(..)
+  , itemErrorMessage
   )
 
 -- | A path through the plugin tree (sequence of namespace segments)
@@ -130,11 +134,38 @@ pattern ServiceProgress hash prov msg pct <- StreamProgress hash prov _ (progres
 
 -- | Pattern synonym for error events: the call failure as one line.
 --
---   Matching only (plexus 0.7: an error frame carries a typed
---   'Plexus.RemoteError.RemoteError'); the message is its
---   'renderRemoteError' line. RETURNS-14 renders call failures properly.
+--   Matching only. The line is the server's own @message@ when the frame
+--   has one (as plexus-core writes it on every error frame, and as main read
+--   it — RETURNS-36 review), else the typed error's 'renderRemoteError' line.
 pattern ServiceError :: Text -> Provenance -> Text -> Bool -> ServiceStreamItem
-pattern ServiceError hash prov err recoverable <- StreamError hash prov (renderRemoteError -> err) recoverable
+pattern ServiceError hash prov err recoverable <- (serviceErrorView -> Just (hash, prov, err, recoverable))
+
+serviceErrorView :: ServiceStreamItem -> Maybe (Text, Provenance, Text, Bool)
+serviceErrorView item = case item of
+  StreamError hash prov _ rec -> (\m -> (hash, prov, m, rec)) <$> serviceErrorMessage item
+  _ -> Nothing
+
+-- | An error item's line: the server's @message@, else the typed error's.
+serviceErrorMessage :: ServiceStreamItem -> Maybe Text
+serviceErrorMessage item = case item of
+  StreamError _ _ err _ -> Just (maybe (renderRemoteError err) id (itemErrorMessage item))
+  _ -> Nothing
+
+-- | RETURNS-36 review: an item as @-j@ prints it — as plexus-protocol
+--   writes it, but a progress item whose content is the default progress
+--   type, a Note (@message@, @percentage@), as main printed one:
+--   @{type, metadata, message, percentage}@.
+jsonLine :: ServiceStreamItem -> LBS.ByteString
+jsonLine item = case item of
+  StreamProgress hash prov _ (Object o)
+    | Just (String msg) <- KM.lookup "message" o
+    , all (`elem` ["message", "percentage"]) (KM.keys o) ->
+        encode $ object
+          [ "type" .= ("progress" :: Text)
+          , "metadata" .= StreamMetadata prov hash 0
+          , "message" .= msg
+          , "percentage" .= maybe Null id (KM.lookup "percentage" o) ]
+  _ -> encode (toJSON item)
 
 -- | A progress value as the 0.6-style message and percentage.
 progressMessage :: Value -> (Text, Maybe Double)
