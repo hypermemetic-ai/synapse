@@ -79,8 +79,6 @@ import qualified Synapse.Endpoint as E
 import qualified Synapse.Log as Log
 import Synapse.Monad
 import Synapse.Schema.Types (ServiceStreamItem, pattern ServiceData, pattern ServiceError, pattern ServiceGuidance)
-import Plexus.RemoteError (RemoteError(..))
-import Plexus.Types (pattern StreamError)
 import Synapse.Transport (invoke)
 
 -- ============================================================================
@@ -464,10 +462,9 @@ isSessionEndedItem item = case item of
   ServiceData _ _ _ (Object o)
     | KM.lookup "type" o == Just (String "error")
     , Just (String m) <- KM.lookup "message" o -> isSessionEndedText m
-  -- RETURNS-36 review: decided by the typed error — unauthenticated, with
-  -- the server's reason (its message) saying the session ended
-  StreamError _ _ Unauthenticated _ | ServiceError _ _ m _ <- item -> isSessionEndedText m
-  StreamError _ _ _ _ -> False
+  -- RETURNS-36 re-review #6: main's text on any error item — the server's
+  -- message, and so the typed unauthenticated's reason where there is one
+  ServiceError _ _ m _ -> isSessionEndedText m
   _ -> False
 
 isSessionEndedText :: Text -> Bool

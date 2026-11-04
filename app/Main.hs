@@ -1675,7 +1675,7 @@ metaCommands =
       , ""
       , "A connection held between runs (SYNAPSE-28, SYNAPSE-40):"
       , "  the first call starts the holder, one process for all your calls"
-      , "  ($XDG_RUNTIME_DIR/synapse/holder-2.sock), which keeps a signed-in socket per"
+      , "  ($XDG_RUNTIME_DIR/synapse/holder-3.sock), which keeps a signed-in socket per"
       , "  address and agent; later calls cost one round trip. A socket whose server is"
       , "  gone is let go at once, one idle for --hold-for (10m) closed, past 256 the"
       , "  longest idle first; the holder exits when it has held nothing for --hold-for."
