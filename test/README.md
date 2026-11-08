@@ -1,32 +1,19 @@
 # Synapse Test Suite
 
-This directory contains comprehensive tests for the Synapse CLI, including unit tests, integration tests, and bidirectional communication tests.
+This directory contains comprehensive tests for the Synapse CLI, including unit tests and integration tests.
 
 ## Test Suites
 
 ### 1. Unit Tests
 
-#### `bidir-test` - Bidirectional Communication Unit Tests
-Tests for the bidirectional communication types and handlers in `Synapse.Bidir`.
+#### `ask-test` - A method that asks (ASK-3)
+The built synapse against the mock service's methods that propose
+(`needs_input`): on a terminal (a pty) `[y/N]` and a prompt per field, then
+the same call with the fields and `confirm`; no terminal: the proposal, the
+ready command on stderr, exit 10; `--yes`; `--help`'s `--confirm TOKEN`; the
+IR's `mdAsks`.
 
-**What it tests:**
-- Request type constructors (Confirm, Prompt, Select, CustomRequest)
-- Response type constructors (Confirmed, Value, Selected, CustomResponse, Cancelled)
-- JSON serialization/deserialization for Request and Response types
-- SelectOption type handling
-- BidirMode parsing and equality
-- Request/Response type compatibility
-- Complex scenarios (nested JSON, multiple selections, etc.)
-- Edge cases (empty strings, empty lists, etc.)
-
-**Run it:**
-```bash
-HOME=/tmp/cabal312home cabal-3.12.1.0 test bidir-test --project-dir=/workspace/hypermemetic/synapse
-```
-
-**Test count:** 56 examples
-
-**No backend required** - Pure unit tests
+**Run it:** `cabal test ask-test` (no backend required)
 
 ---
 
@@ -61,37 +48,6 @@ HOME=/tmp/cabal312home cabal-3.12.1.0 test typeref-json --project-dir=/workspace
 ---
 
 ### 2. Integration Tests
-
-#### `bidir-integration-test` - Bidirectional Schema Integration
-Tests for schema-driven bidirectional communication features.
-
-**What it tests:**
-- IR builder correctly populates `mdBidirType` field
-- Methods with `bidirectional: true` in schema are detected
-- `mdBidirType` is set to `RefAny` for standard bidirectional methods
-- Type references in `mdBidirType` resolve correctly
-- Bidirectional methods have valid structure (name, path, return type)
-- Schema-driven dispatch assumptions
-- Statistical reporting of bidirectional coverage
-
-**Requires:** Running Service backend (default: localhost:4444)
-
-**Run it:**
-```bash
-# Default: localhost:4444, backend "plexus"
-HOME=/tmp/cabal312home cabal-3.12.1.0 test bidir-integration-test \
-  --project-dir=/workspace/hypermemetic/synapse \
-  --test-options="plexus"
-
-# Custom port
-HOME=/tmp/cabal312home cabal-3.12.1.0 test bidir-integration-test \
-  --project-dir=/workspace/hypermemetic/synapse \
-  --test-options="plexus --port 5555"
-```
-
-**Graceful degradation:** If no backend is running, the test will report a connection error but won't crash. If no bidirectional methods exist in the schema, tests will be informational only.
-
----
 
 #### `ir-test` - IR Integration Tests
 Tests for the Intermediate Representation builder.
@@ -150,8 +106,7 @@ HOME=/tmp/cabal312home cabal-3.12.1.0 test --project-dir=/workspace/hypermemetic
 
 ```
 test/
-├── BidirSpec.hs                  # Unit tests for bidirectional types
-├── BidirIntegrationSpec.hs       # Integration tests for bidir + IR
+├── AskSpec.hs                    # A method that asks (needs_input), against the mock
 ├── CLISpec.hs                    # CLI integration tests
 ├── IRSpec.hs                     # IR builder integration tests
 ├── ParseSpec.hs                  # Parser unit tests
@@ -160,43 +115,6 @@ test/
 ├── validate_codegen.sh           # Codegen validation script
 └── README.md                     # This file
 ```
-
----
-
-## Bidirectional Communication Test Coverage
-
-The bidirectional tests cover the complete feature set:
-
-### 1. Type Handling (`BidirSpec.hs`)
-- ✅ Request constructors: Confirm, Prompt, Select, CustomRequest
-- ✅ Response constructors: Confirmed, Value, Selected, CustomResponse, Cancelled
-- ✅ SelectOption handling
-- ✅ JSON serialization (Request → JSON → Request)
-- ✅ JSON deserialization (Response → JSON → Response)
-- ✅ Wire format compatibility (Value response uses "text" tag)
-
-### 2. Mode Handling (`BidirSpec.hs`)
-- ✅ BidirMode parsing from strings
-- ✅ Mode equality and comparison
-- ✅ Default mode selection
-
-### 3. Schema Integration (`BidirIntegrationSpec.hs`)
-- ✅ IR builder sets `mdBidirType` field
-- ✅ Bidirectional methods detected from schema
-- ✅ Type inference (RefAny for standard bidir)
-- ✅ Type reference resolution
-- ✅ Method structure validation
-- ✅ Coverage statistics
-
-### Not Tested (require actual subprocess/TTY)
-- ❌ BidirCmd mode (subprocess spawning)
-- ❌ BidirRespond mode (stdout printing)
-- ❌ BidirInteractive mode (TTY prompts)
-- ❌ BidirJson mode (stdin/stdout piping)
-- ❌ BidirAutoCancel mode (stderr warnings)
-- ❌ BidirDefaults mode (default value handling)
-
-These modes require integration tests with actual I/O, which are better suited for end-to-end testing or manual verification.
 
 ---
 
@@ -247,7 +165,7 @@ Follow the same steps as unit tests, but:
 - Use `pending` for tests that can't run without backend
 - Report informational messages with `putStrLn`
 
-See `BidirIntegrationSpec.hs` for a complete example.
+See `IRSpec.hs` for an example.
 
 ---
 
@@ -264,7 +182,7 @@ To run tests in CI:
 
 For unit tests only (no backend required):
 ```bash
-cabal test bidir-test parse-test path-normalization-test typeref-json
+cabal test ask-test parse-test path-normalization-test typeref-json
 ```
 
 ---
@@ -275,11 +193,6 @@ cabal test bidir-test parse-test path-normalization-test typeref-json
 - Ensure a Service backend is running on the specified port
 - Check firewall settings
 - Verify the backend name matches the running backend
-
-### "No bidirectional methods found"
-- This is informational, not a failure
-- The backend may not have any methods marked with `#[bidirectional]`
-- Tests will pass but report zero coverage
 
 ### Build errors
 - Ensure cabal is up to date: `cabal update`
@@ -299,38 +212,25 @@ As of the latest run:
 
 | Test Suite | Status | Count | Backend Required |
 |------------|--------|-------|------------------|
-| bidir-test | ✅ PASS | 56 | No |
-| bidir-integration-test | ⚠️ Requires backend | - | Yes |
+| ask-test | ✅ PASS | 21 | No |
 | ir-test | ⚠️ Requires backend | - | Yes |
 | cli-test | ⚠️ Requires binary | - | Yes |
 | parse-test | ✅ (existing) | - | No |
 | path-normalization-test | ✅ (existing) | - | No |
 | typeref-json | ✅ (existing) | - | No |
 
-**Total bidirectional unit tests: 56 ✅**
-
 ---
 
 ## Future Improvements
 
-1. **BidirHandler I/O Tests**
-   - Mock stdin/stdout for Json mode
-   - Test subprocess creation for Cmd mode
-   - Verify stderr output for AutoCancel mode
-
-2. **End-to-End Bidir Tests**
-   - Full workflow: schema → dispatch → handler → response
-   - Test with actual bidirectional methods
-   - Verify request/response round-trip
-
-3. **Performance Tests**
+1. **Performance Tests**
    - JSON parsing benchmarks
    - Large payload handling
    - Streaming performance
 
-4. **Property-Based Tests**
+2. **Property-Based Tests**
    - Use QuickCheck for JSON roundtrip properties
-   - Generate random Request/Response values
+   - Generate random stream items
    - Test invariants (e.g., decode . encode = id)
 
 ---

@@ -4,7 +4,7 @@
 --
 -- One value, from the command line (@--url@, or @-H@ / @-P@ with @--tls@
 -- and @--path@), carried to every dial: the probe, the call, the stream and
--- its reconnects, the schema, a bidirectional response, @_login@ and the
+-- its reconnects, the schema, a proposal's answer call, @_login@ and the
 -- session a call carries. The store keys a session by 'addressKey': a
 -- plain @ws://HOST:PORT/@ keeps the @HOST:PORT@ it always had (no stored
 -- session moves), anything else is keyed by its whole URL, so a @ws@ and a

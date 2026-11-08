@@ -24,6 +24,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, try)
 import Control.Monad (forM_)
 import Data.Aeson
+import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as Key
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
@@ -249,25 +250,20 @@ outputSpec exe = describe "synapse -o FILE (SYNAPSE-39)" $ do
         err `shouldContain` "tickets.set_status"
         doesFileExist file >>= (`shouldBe` False)
 
-  it "a two-way request's line goes to stderr, its answer to FILE" $
+  -- ASK-3: a proposal nobody can answer (no terminal) is the call's
+  -- answer: FILE holds it; the command that confirms it goes to stderr
+  it "a proposal with no terminal: FILE holds it, the command to confirm on stderr, exit 10" $
     withRun $ \dir spawn -> do
       warm spawn
+      resetAsks
       let file = dir </> "answer.out"
-      (Just inp, Just out, Just err, ph) <- createProcess (spawn ["--bidir-mode", "json", "-o", file] ["tickets", "ask"])
-      let untilRequest = do
-            l <- hGetLine err
-            if "bidir_request" `isInfixOf` l then pure l else untilRequest
-      req <- timeout 10000000 untilRequest
-      req `shouldSatisfy` (/= Nothing)
-      hPutStrLn inp "{\"type\":\"confirmed\",\"value\":true}"
-      hFlush inp
-      code <- timeout 10000000 (waitForProcess ph)
-      code `shouldBe` Just ExitSuccess
-      o <- BS.hGetContents out
-      BS.length o `shouldBe` 0
+      (code, out, err) <- reading (spawn ["-j", "-o", file]) ["tickets", "archive", "--filter", "label stale"]
+      (code, out) `shouldBe` (ExitFailure 10, "")
+      err `shouldContain` "--confirm v1.1794100000.archive-1"
       body <- readFile' file
-      body `shouldContain` "answered"
-      body `shouldNotContain` "bidir_request"
+      body `shouldContain` "\"needs_input\""
+      modeOf file `shouldReturn` 0o600
+      leftovers dir "answer.out" >>= (`shouldBe` [])
 
   forM_ [("a SIGTERM", ExitFailure 143)] $ \(how, want) ->
    it (how <> " during an answer leaves no FILE and no temporary file") $
@@ -356,7 +352,7 @@ ticketsWithWrites = object
       , m "amend" "Replace a ticket's body" (Just "write") False [("id", True), ("body", False)]
       , m "flood" "Ticks, every 100 ms, until unsubscribed" (Just "read") True []
       , m "set_status" "Change a ticket's status" (Just "write") False [("id", True)]
-      , m "ask" "Ask the caller to confirm" (Just "write") False []
+      , asking "archive" "Archive the tickets a filter matches" [("filter", True)]
         -- the service's tickets.watch, said here to be unary: one item, and no end
       , m "watch" "One item, and no end" (Just "read") False [] ] ]
   where
@@ -368,3 +364,8 @@ ticketsWithWrites = object
           , "required" .= [ p | (p, True) <- ps ]
           , "properties" .= object [ Key.fromText p .= object ["type" .= ("string" :: Text)] | (p, _) <- ps ] ] ]
       <> maybe [] (\g' -> ["group" .= g']) g
+    -- ASK-3: a method that asks (ASK-1)
+    asking :: Text -> Text -> [(Text, Bool)] -> Value
+    asking n d ps = case m n d (Just "write") False (ps ++ [("confirm", False)]) of
+      Object o -> Object (KM.insert "asks" (Bool True) o)
+      v -> v

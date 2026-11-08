@@ -143,7 +143,7 @@ data FlagArity
 -- unless that begins with @--@ and is not exactly @--@. That is enough to find
 -- the path. Once the method is known, 'pairFlags' pairs the flag arguments
 -- again by type; the pairs returned here serve only where there is no method
--- schema (@_self@, @respond@, a method missing from the IR).
+-- schema (@_self@, a method missing from the IR).
 --
 -- Example: ["echo", "once", "--message", "hello", "--count", "3"]
 --       -> (["echo", "once"], [("message", "hello"), ("count", "3")],

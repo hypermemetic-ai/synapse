@@ -4,9 +4,7 @@
     "irMetadata": null,
     "irMethods": {
         ".call": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "many",
             "mdDescription": "Route a call to a registered activation",
             "mdError": null,
@@ -55,9 +53,7 @@
             }
         },
         ".hash": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plexus configuration hash (from the recursive schema)\n\n This hash changes whenever any method or child plugin changes.\n It's computed from the method hashes rolled up through the schema tree.",
             "mdError": null,
@@ -80,9 +76,7 @@
             }
         },
         ".hashes": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin hashes for cache validation",
             "mdError": null,
@@ -105,9 +99,7 @@
             }
         },
         ".schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -125,9 +117,7 @@
             }
         },
         "auth.login": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Sign in — a person through the browser, an agent with its key",
             "mdError": null,
@@ -166,9 +156,7 @@
             }
         },
         "auth.logout": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Sign out: end this session",
             "mdError": null,
@@ -191,9 +179,7 @@
             }
         },
         "auth.providers": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The ways in this server offers",
             "mdError": null,
@@ -215,9 +201,7 @@
             }
         },
         "auth.requires": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "What a method needs: its grant, target, and the roles that list it",
             "mdError": null,
@@ -256,9 +240,7 @@
             }
         },
         "auth.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -276,9 +258,7 @@
             }
         },
         "auth.signup": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Create an account, or ask for access",
             "mdError": null,
@@ -320,9 +300,7 @@
             }
         },
         "auth.whoami": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Who you are: principal, roles held where, ceiling",
             "mdError": null,
@@ -345,9 +323,7 @@
             }
         },
         "chats.activity": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Say what the caller is doing in a chat, live; yields activity { activity } — never a message (CHAT-18).\n\nBy a participant: `started` (it has the message), `working` (the\ndefault: a line of what it does now, or a heartbeat with none),\n`ended` (the turn is over). Every participant's `watch` hears\n`activity`; nothing is stored — the server keeps each chat's last\n200 in memory for `activity_log`, lost on a restart. A line is cut\nat 500 characters. A chat the caller is not in is `not_found`.",
             "mdError": null,
@@ -443,9 +419,7 @@
             }
         },
         "chats.activity_log": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "A chat's live work kept in memory — its last 200 activity items, oldest first; an activity { activity } each, then the end (CHAT-18).\n\nFor a participant, so a viewer opening a chat mid-turn sees what has\nbeen done; anyone else is answered `not_found`. Empty after a restart.",
             "mdError": null,
@@ -500,9 +474,7 @@
             }
         },
         "chats.add": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Add a participant to a chat; yields added { chat }.\n\nBy a participant, to an open chat; the one added must be able to read\nthe ticket, or it is `refused`. One already in it is the chat as it is.\nCHAT-14: to a group, one holding a grant in its organization, by a\nparticipant or an admin of the organization; a direct message is\nrefused (it stays between two: start a group). CHAT-16: an admin of\nthe chat's scope adds anyone, in it or not; one who can't read it is\nadded only with `grant` — `ticket` (viewer on the ticket alone) or\n`chat` (this chat only) — the add and the grant one write, answered\n`added { chat, granted }`; without it, `needs_grant { choices }` and\nnothing written.",
             "mdError": null,
@@ -594,9 +566,7 @@
             }
         },
         "chats.await_message": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "many",
             "mdDescription": "Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — or one answered { … } to an input in the caller's own messages (input: that one alone), and the end; timed_out after timeout_minutes.\n\nThe first message after `since` (unix seconds, at or after it; without\nit, after the call) and after the message `after` by anyone but the\ncaller — so a reconnect with the `since` that `waiting` said, or the\nlast message it read as `after` (exact, where a second can hold two\nmessages), loses nothing. While it waits, the chats it waits on\nshow the caller as `listening` on `watch`. A chat the caller is not\nin is `not_found`.",
             "mdError": null,
@@ -744,9 +714,7 @@
             }
         },
         "chats.candidates": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Who could be in a chat — on a ticket, or (without one) outside tickets: a candidate { principal, reads, name?, agent } each — every principal holding a grant in the organization (a team's members by name), and those in the caller's chats there — then the end.\n\nCHAT-4's picker: `reads` says whether the principal can read the\nticket now (`open` and `add` refuse one that cannot). The caller is\nnot among them. A ticket the caller cannot read is `refused` as one\nthat is none. A participant who holds no grant there now (one kept\nbefore ACCESS-24, when login could be off) is listed all the same, as\none of the chats' participants. CHAT-14: without a ticket, those\nholding a grant in the caller's organizations (`reads`: may be in a\ndirect message or a group); each by the `name` the server knows it\nby (signed in with — a synapse key's name too), and `agent` for an\nagent (an `agent:` or `key:` principal, or a standing chat member).",
             "mdError": null,
@@ -804,9 +772,7 @@
             }
         },
         "chats.close": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Close a chat; yields closed { chat }. A closed chat is read-only, kept on its ticket.\n\nBy any participant. Closing a closed chat changes nothing.",
             "mdError": null,
@@ -861,9 +827,7 @@
             }
         },
         "chats.delete": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Delete messages in a chat — kept and marked deleted { at, by }, never gone; yields messages_deleted { chat, ids, by, at, unread } (CHAT-44).\n\nA message's author deletes it, and an admin of the chat's ticket\n(outside tickets, of its organization) deletes any. Name them by\n`ids`, or every message of the chat from `from` to `to`. All or\nnone: one the caller may not delete, or not the chat's, is\n`refused`, naming each; one already deleted is not named again.\n`messages` still answers a deleted message, marked; it is no one's\nunread and no `await_message` reply. `watch` carries\n`messages_deleted` to every participant.",
             "mdError": null,
@@ -975,9 +939,7 @@
             }
         },
         "chats.inputs": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "A message's inputs — `chats.inputs.list` / `answer` / `clear` / `close` / `reopen` (CHAT-20).",
             "mdError": null,
@@ -995,9 +957,7 @@
             }
         },
         "chats.link": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Link tickets to a chat, as a builder's work from it; yields linked { chat, tickets, how } — those new to it (CHAT-55).\n\nBy a participant; each ticket one the caller reads, or the call is\n`refused`, naming each, and nothing is linked. `watch` carries\n`linked` to every participant.",
             "mdError": null,
@@ -1070,9 +1030,7 @@
             }
         },
         "chats.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The caller's chats, by last activity, newest first — on a ticket, with or without unread, open or closed; a chat { chat } each, then page { next }.\n\nWithout `ticket`, the chats the caller is in; with it, those on that\nticket the caller is in — every one there, for an admin of it. Each\nchat's `unread` is the caller's. `after` (a chat id) continues a page;\n`limit` is 50 unless given, at most 500.",
             "mdError": null,
@@ -1206,9 +1164,7 @@
             }
         },
         "chats.messages": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "A page of a chat's messages, oldest first within it; a message { message } each, then page { next }.\n\nFor a participant (or an admin of its ticket); anyone else is\nanswered `not_found`. `after` (a message id) pages forward, `next`\nthe page's last while newer remain. CHAT-8: `newest: true` is the\nnewest page, and `before` (a message id) pages back from one — `next`\nthe page's first while older remain, what `before` takes to go on.\n`limit` is 100 unless given, at most 1,000.",
             "mdError": null,
@@ -1335,9 +1291,7 @@
             }
         },
         "chats.open": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Open a chat on a ticket, or outside tickets — a direct message or a group — with the principals named; yields opened { chat } — the open chat they already have, when they do (existing: true).\n\nThe caller and `others` are the participants (CHAT-1's `with`, which\nTypeScript does not take as a parameter's name). On a ticket,\n`others` empty or absent is a chat of one, the caller's alone, to\nadd to later (CHAT-6); every one of them must be able to read the\nticket, or the call is `refused { reasons }`, naming each who cannot,\nand nothing is made. A ticket the caller cannot read is refused as\none that is none. DEPLOY-47: on a ticket, a `title` finds only their\nopen chat of that title — a chat per subject. CHAT-14: without a ticket, one other is a direct\nmessage (the one the two have, when they have one) and several a\ngroup (`title` names it); each must hold a grant in the caller's\norganization, and only its participants read it. `watch` carries\n`opened` to each participant.",
             "mdError": null,
@@ -1434,9 +1388,7 @@
             }
         },
         "chats.post": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Post a message in a chat; yields posted { message, inputs }, signed by the caller.\n\nOnly a participant posts; a closed chat is `refused`. The body is markdown, not blank, at most the ticket body cap; its `<m-decision id>` / `<m-input id kind>`\nare inputs, born `open` (CHAT-20; a malformed one refuses the post). A chat the caller\ndoes not see is `not_found`. `watch` carries `posted` to every participant, and it answers their `await_message`. CHAT-66: a body\nthat starts `[↩](message:N)` replies to N — its `reply_to` and `quote`; N outside this chat is `refused`, naming it.",
             "mdError": null,
@@ -1506,9 +1458,7 @@
             }
         },
         "chats.read": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Mark a chat read up to a message; yields read { chat, upto, unread }.\n\nMoves the caller's own mark forward (never back) to the latest of\nthe chat's messages at or before `upto`; `unread` counts after it.\n`watch` carries `read` to the caller's other watches.",
             "mdError": null,
@@ -1578,9 +1528,7 @@
             }
         },
         "chats.remove": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Take a participant out of a chat; yields removed { chat, principal, revoked } (CHAT-14; CHAT-16: revoke takes back the grant their add made).\n\nA group's or a ticket's chat, by a participant (itself too: it\nleaves) or, outside tickets, an admin of the chat's organization; a\ndirect message is refused (close it instead). One not in it is the\nchat as it is. The one removed hears `left` on its `watch`.",
             "mdError": null,
@@ -1668,9 +1616,7 @@
             }
         },
         "chats.rename": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Rename a chat; yields renamed { chat } — the composer's /title (CHAT-7).\n\nBy any participant. No title, or a blank one, clears it (the chat is\nthen named by who is in it). The same title changes nothing.",
             "mdError": null,
@@ -1743,9 +1689,7 @@
             }
         },
         "chats.reopen": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Reopen a closed chat; yields reopened { chat }.\n\nBy any participant. Reopening an open chat changes nothing.",
             "mdError": null,
@@ -1800,9 +1744,7 @@
             }
         },
         "chats.restore": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Put deleted messages back in a chat; yields messages_restored { chat, ids, by, at, unread } (CHAT-44).\n\n`delete`'s rule: a message's author, or an admin of the chat's\nticket (outside tickets, its organization); by `ids`, or `from` …\n`to`; all or none. One not deleted is not named again. `watch`\ncarries `messages_restored` to every participant.",
             "mdError": null,
@@ -1914,9 +1856,7 @@
             }
         },
         "chats.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -1934,9 +1874,7 @@
             }
         },
         "chats.tickets": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The tickets a chat names — in its messages, filed from it or linked to it — each a ticket { ticket } with its stage, newest first (CHAT-55).\n\nA message's codes count from when it is posted (a deleted message's\ndrop out); `tickets create --chat` and `link` add theirs. Only the\ntickets the caller reads; a chat it does not see is `not_found`.\nThe stage: waits_on_you, ready, in_progress, in_review, on_test,\nshipped (closed, other: not work in hand).",
             "mdError": null,
@@ -1991,9 +1929,7 @@
             }
         },
         "chats.watch": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "many",
             "mdDescription": "Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, messages_deleted, messages_restored, listening, left — until disconnect.\n\nThe chats the caller is in (with `ticket`, those on it — every one\nthere for an admin of it), each change as the caller sees it: its own\nunread, its own `read`s. A chat whose ticket leaves the caller's\nreach is said once as `left { chat }`. ACCESS-12: the caller is\nverified again as its grants move; refused, the watch ends with\n`watch_closed { reason, message }`. `lagged { missed }` where a slow\nsubscriber lost changes.",
             "mdError": null,
@@ -2051,9 +1987,7 @@
             }
         },
         "comments.add": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Leave a comment at an anchor (route, path, label, excerpt, and ticket when the element belongs to one); yields the comment.\n\nKeeps a comment: `anchor` says where it was left — `route` (the app\npage, beginning `#/`), `path` (where on the page), `label` and\n`excerpt` (what was there, in words; the excerpt may be empty), and\n`ticket` when the element belongs to one, which must name a ticket\nand is kept with that ticket's `updated_unix` as `version` (set by\nthe server). ACCESS-19: the comment is signed by the caller — its\nprincipal kept, its name the author (the principal when it has no\nname; `owner` on one kept before ACCESS-24, when login could be off);\nno call names its author. Yields\nexactly one event: `comment` — the comment as kept: its id, state\n`open`, the time (`at`, unix seconds), the author, its anchor and\nbody — or an in-band `error` naming the problem (an empty body, a\nmalformed anchor, a ticket that is none), with nothing kept. `watch`\ncarries `added`. IDENTITY-37: a comment left on a ticket's page\n(`route` `#/ticket/X`) is `X`'s to see whatever its anchor names — the\ncaller needs the role on `X` as well as on the anchor's ticket, and it\nis listed and watched only by those who can view both. The anchor is\nkept as given (`ticket` stays what the element belonged to).\nACCESS-19: a comment on the app (naming no ticket) is seen only by\nits author and the admins of `*`. COMMENT-8: with `reply_to`, a reply\nto that comment — no anchor (one given is refused): it takes its\nthread's root's, and so its ticket and who sees it; a reply to a\nreply answers the same root; a resolved root is reopened in the same\nwrite (`watch` carries `added`, then `reopened`). The answer carries\n`reply_to`, the root's id.",
             "mdError": null,
@@ -2144,9 +2078,7 @@
             }
         },
         "comments.failures": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "COMMENT-9: the comments the app could not keep, newest first — `failure { failure }` each.\n\nThe caller's own reports and those whose comment it would see had it\nbeen kept; at most `limit` (default 50, at most 200).",
             "mdError": null,
@@ -2204,9 +2136,7 @@
             }
         },
         "comments.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.\n\nThe comments matching every filter given, newest first — one\n`comment` event each — then exactly one `page { next }`: `next` is\nthe id to pass as the next call's `after`, `null` when nothing more\nmatches. `after` starts the page strictly after (older than) that\ncomment; `limit` caps it (ACCESS-29: 500 unless given, at most 1,000,\n[`crate::limits`]). The filters:\n`ticket` (the anchor's ticket), `under` (a ticket or a shortcode: the\ncomment's ticket is in its lineage — itself, its ancestors, its\nshortcode and the shortcodes hosting it — as the filter language's\n`under`, read as the tree stands now), `route` (exactly), `path` (a\nprefix of the anchor's), `state` (`open` or `resolved`), `author`\n(exactly) and `text` (in the body, the label or the excerpt, whatever\nits ASCII case) and `intent` (APP-23: `comment` or `changes`). A blank filter is none. An unknown `state`, or an\n`after` that names no comment, is one in-band `error` and nothing\nelse. Only the comments the caller sees (ACCESS-10; a comment on the\napp, its author's and the admins' of `*`). From the cache.",
             "mdError": null,
@@ -2452,9 +2382,7 @@
             }
         },
         "comments.reopen": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Reopen a resolved comment; yields the comment, open.\n\nYields exactly one event: `comment`, state `open` — as it was, if it\nalready was — or an in-band `error` for an id that names no comment.\nA comment the caller does not see is answered as one that is not\nthere, naming nothing (ACCESS-3 #7). `watch` carries `reopened`.",
             "mdError": null,
@@ -2509,9 +2437,7 @@
             }
         },
         "comments.report": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "COMMENT-9: report a comment the app could not keep; yields `reported { failure }`.\n\nThe app's word that a comment was not kept — the socket down, no\nanswer, a refusal — with the draft, so whoever can see where it was\nbeing left reads it with `failures`. Kept in memory (the newest 200;\na restart forgets them) and logged; never a comment.",
             "mdError": null,
@@ -2632,9 +2558,7 @@
             }
         },
         "comments.resolve": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Resolve a comment; yields the comment, resolved.\n\nYields exactly one event: `comment`, state `resolved` — as it was,\nif it already was, and then nothing is written or broadcast — or an\nin-band `error` for an id that names no comment. A comment the\ncaller does not see is answered as one that is not there, naming\nnothing (ACCESS-3 #7). `watch` carries `resolved`.",
             "mdError": null,
@@ -2689,9 +2613,7 @@
             }
         },
         "comments.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -2709,9 +2631,7 @@
             }
         },
         "comments.watch": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "many",
             "mdDescription": "Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes.\n\n`added`, `resolved` and `reopened`, each with the comment as the\nchange left it, in the order the writes were acknowledged, until the\nclient goes; `lagged { missed }` where a slow subscriber lost changes\n(`list` again to catch up). Nothing a ticket's write does is here —\nthat is `tickets.watch`. IDENTITY-37: what it relays follows the\ncaller's grants as they stand at each change, and a caller who can\nsee nothing any more is told so in band and the stream ends —\nACCESS-12: with one `watch_closed { reason, message }`, at once when\na revoke or sign-out ends it.",
             "mdError": null,
@@ -2733,9 +2653,7 @@
             }
         },
         "deployments.environments": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Each environment: what it runs, since when, its last deployment, how many tickets run there",
             "mdError": null,
@@ -2777,9 +2695,7 @@
             }
         },
         "deployments.for_ticket": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Where a ticket's work runs: running { environment, since, deployment, behind, version } per environment, not_running for the rest",
             "mdError": null,
@@ -2819,9 +2735,7 @@
             "mdTarget": "id"
         },
         "deployments.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "List deployments newest first, by project, environment, state and ticket; each with the tickets it carried",
             "mdError": null,
@@ -2960,9 +2874,7 @@
             }
         },
         "deployments.running": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }], staged: [{ ticket, stage }] } per environment",
             "mdError": null,
@@ -3043,9 +2955,7 @@
             }
         },
         "deployments.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -3063,9 +2973,7 @@
             }
         },
         "deployments.watch": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "many",
             "mdDescription": "Watch deployments: deployed, then environment_changed, as each is recorded",
             "mdError": null,
@@ -3088,9 +2996,7 @@
             }
         },
         "epics.current": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The epic you are in, in the organization — your choice (switch), else its default; yields current { epic, moved? } (moved: an archive moved you here, until dismiss). A filtered read answers there unless its filter names epic (epic any: every live one).",
             "mdError": null,
@@ -3148,9 +3054,7 @@
             }
         },
         "epics.dismiss": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Dismiss the notice that an archive moved you (your own setting): current stops carrying moved. Yields dismissed { org }.",
             "mdError": null,
@@ -3208,9 +3112,7 @@
             }
         },
         "epics.get": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "One epic of the organization by name; `not_found` when it has none of that name.",
             "mdError": null,
@@ -3283,9 +3185,7 @@
             }
         },
         "epics.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The organization's live epics, oldest first: one `epic { org, name, first, default, current, members_on, shortcodes, tickets, created_unix, archived? }` each (--archived true: the archived ones too).",
             "mdError": null,
@@ -3361,9 +3261,7 @@
             }
         },
         "epics.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -3381,9 +3279,7 @@
             }
         },
         "epics.switch": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Be in another epic of the organization (your own setting): short forms resolve there first, and filtered reads answer there. Yields current { epic }.",
             "mdError": null,
@@ -3456,9 +3352,7 @@
             }
         },
         "epics.watch": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "many",
             "mdDescription": "Follow your organizations' epics, open-ended: epic_changed { org, name, what } (created, renamed, deleted, archived, restored, default_moved), and moved { org, moved } when an archive moves you; lagged { missed }; watch_closed { reason, message } when your grants end it.",
             "mdError": null,
@@ -3480,9 +3374,7 @@
             }
         },
         "media.get": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "An image's bytes by its hash; yields media { hash, mime, bytes, width, height, data } (data base64), or not_found.\n\nYields exactly one event: `media` — the image as kept, its bytes in\nstandard base64 — or `not_found { hash }` for a hash that names no\nimage, and alike for one put only for tickets the caller cannot see\n(ACCESS-10: not found ≡ not yours). COMMENT-10: with `ticket`, held\nto that ticket's body — the image only when it was put for that\nticket (one kept for another ticket, a chat or the app is\n`not_found` there). The bytes are read from the database, never the\ncache.",
             "mdError": null,
@@ -3555,9 +3447,7 @@
             }
         },
         "media.put": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Keep an image for a ticket (PNG, JPEG, GIF or WebP, at most 7 MiB, base64); yields stored { hash, mime, bytes, width, height, duplicate }.\n\nThe image is named by its SHA-256 (`hash`, 64 hex digits); a body\nshows it as `![alt](media:<hash>)`. Its type is read from its own\nmagic bytes — PNG, JPEG, GIF or WebP, never SVG — and must be the\n`mime` given; its width and height from its header. At most 7 MiB\n(an image travels as base64 in one WebSocket message, whose limit is\n10 MiB). Yields exactly one event: `stored` — `duplicate: true` when\nthe same bytes were kept already (one row: nothing new is stored but,\nfor a second ticket, that it is that one's too) — or `refused {\nreason, message, bytes?, max? }` (`too_large`, `not_an_image`,\n`type_mismatch`, `truncated`, `bad_data`), naming why, with nothing\nkept; `not_found { ticket }` for a ticket that is none or out of\nreach. The image belongs to `ticket`: `get` answers it to whoever can\nsee that ticket (an editor's: a viewer is answered `not_found`).\nCHAT-14: with `chat` instead, it is that chat's — `get` answers it to\nits participants alone; `not_found { hash: null }` for a chat the\ncaller is not in. Without `ticket` (a comment on the app) it is the\nputter's, and the admins' of `*`. Through synapse the data is a file\n(`base64 -w0 shot.png > shot.b64`, then `--data @shot.b64`) or stdin\n(`--data -`), never `\"$(base64 …)\"`, which Linux caps at 128 KB\n(README \"Comments\").",
             "mdError": null,
@@ -3664,9 +3554,7 @@
             "mdTarget": "ticket"
         },
         "media.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -3684,9 +3572,7 @@
             }
         },
         "members.mine": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Who you are, then your teams, then each grant you hold (a team's as team:<name>, everyone's as everyone).\n\nOne `me { principal, name, admin_everywhere }`, then (ACCESS-22) one\n`team` per team the caller is in, then one `grant` per grant the\ncaller holds — its own, each team's (`principal: team:<name>`) and\n(ACCESS-57) everyone's (`principal: everyone`).",
             "mdError": null,
@@ -3708,9 +3594,7 @@
             }
         },
         "members.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -3728,9 +3612,7 @@
             }
         },
         "notes.add": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Write a note: dated, untitled, kept in one place; yields the note",
             "mdError": null,
@@ -3787,9 +3669,7 @@
             }
         },
         "notes.get": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get one note by id",
             "mdError": null,
@@ -3828,9 +3708,7 @@
             }
         },
         "notes.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "List notes newest first, by state, author and text; paged with after and limit",
             "mdError": null,
@@ -3948,9 +3826,7 @@
             }
         },
         "notes.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -3968,9 +3844,7 @@
             }
         },
         "notes.upgrade": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Make a note a ticket, titled by its first line unless given; yields the note",
             "mdError": null,
@@ -4086,9 +3960,7 @@
             }
         },
         "orgs.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The organizations you hold a role in",
             "mdError": null,
@@ -4111,9 +3983,7 @@
             }
         },
         "orgs.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -4131,9 +4001,7 @@
             }
         },
         "session.login": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Mint a session for this identity: login { token, principal, agent, expires_at, scope }.\n\nIDENTITY-42: a session for this connection's identity. Yields\n`login { token, principal, agent, expires_at, scope }`, or an in-band\n`error`. The token (`mgs_…`) opens later connections as this\nidentity — `Authorization: Bearer mgs_…` or `Cookie:\naccess_token=mgs_…` — until `expires_at` or `logout`. `ttl_secs`:\ndefault 43200 (12 h), at most 86400. `scope`: the session's ceiling,\n`role@SCOPE` each (`editor@IDENTITY`, `viewer@*`, `editor@MENGER-12`):\nevery check then passes only if the principal's grants AND the scope\nallow it. A session minted from a scoped session keeps that scope too.",
             "mdError": null,
@@ -4212,9 +4080,7 @@
             }
         },
         "session.logout": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "End this connection's session: logged_out.\n\nIDENTITY-42: ends the session this connection is on (its token stops\nopening connections, and its open connections stop answering).\nYields `logged_out`, or an in-band `error` when the connection holds\nno session.",
             "mdError": null,
@@ -4236,9 +4102,7 @@
             }
         },
         "session.providers": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The providers this menger admits callers through: provider { name, kind, issuer, audience }.\n\nIDENTITY-15: one `provider { name, kind, issuer, audience }` each, in\nthe order they were configured; none when only agents' keys are\nadmitted (`key` is offered to no person, ACCESS-24). Nothing here\nis secret: it is what a sign-in needs to find the provider — so it is\n`public` (ACCESS-19), answered before anyone has signed in.",
             "mdError": null,
@@ -4260,9 +4124,7 @@
             }
         },
         "session.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -4280,9 +4142,7 @@
             }
         },
         "session.whoami": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Who this connection is: identity { principal, name, roles, tenant, provider }, or anonymous.\n\nYields exactly one event: `identity` — `principal` (`idp:<uuid>`,\n`oidc:<provider>/<sub>` or `nostr:<hex>`), `name`, `roles`, `tenant`\nand `provider` — always someone: menger has no open mode (ACCESS-24),\nand an anonymous connection reaches only `auth.*`. The identity is\nsettled when the connection opens; reconnect to change it.\nACCESS-19 (ACCESS-3 #14): the caller is verified as every method's\nis — a sign-in signed out or expired is refused `unauthenticated`,\nnever reported as signed in.",
             "mdError": null,
@@ -4304,9 +4164,7 @@
             }
         },
         "themes.define": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Define (or redefine) a theme: its token overrides for light and dark; yields the theme",
             "mdError": null,
@@ -4387,9 +4245,7 @@
             }
         },
         "themes.get": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get one theme by name",
             "mdError": null,
@@ -4428,9 +4284,7 @@
             }
         },
         "themes.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Every theme, then what the site and each shortcode say",
             "mdError": null,
@@ -4453,9 +4307,7 @@
             }
         },
         "themes.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -4473,9 +4325,7 @@
             }
         },
         "themes.set": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Set what the site or a shortcode says: the theme it adopts, its reach and takeover; yields the setting",
             "mdError": null,
@@ -4577,9 +4427,7 @@
             }
         },
         "themes.theme_for": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Who wears what for a ticket: each region's theme (site, ticket view, frame) and the level it came from",
             "mdError": null,
@@ -4619,9 +4467,7 @@
             "mdTarget": "id"
         },
         "themes.watch": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "many",
             "mdDescription": "Subscribe to themes: theme_changed (defined, a ```theme block written, orphaned or adopted), theme_removed (an unused orphan gone) and setting (site or shortcode), until disconnect; lagged { missed } where a slow subscriber lost changes",
             "mdError": null,
@@ -4644,9 +4490,7 @@
             }
         },
         "tickets.amend": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Replace a ticket's title and/or body (whole values); yields amended { ticket, changed }.\n\nMNG-16: replaces a ticket's title and/or body — the correction a\nDB-first store otherwise has no way to make (a worker's branch, a\ndivergence note, a contract patched with its finding). Whole values,\nlast writer wins. Yields exactly one event: `Amended { ticket,\nchanged }` — `changed` names what moved, and is empty when nothing\ndid (neither given, or the values already there), which writes and\nbroadcasts nothing — `NotFound` if `id` names no ticket, or an\nin-band `Error` for a title that is empty after trimming. `watch`\ncarries every `Amended` that changed something. COMP-3: a new body\nmoves the component registry — its ` ```component ` blocks and `<tag`\nreferences — and `watch` says so after the `Amended`; a malformed\nblock, or a name another ticket defines, is an in-band `Error` (the\nlatter naming that ticket) and nothing is written, title included.",
             "mdError": null,
@@ -4738,9 +4582,7 @@
             "mdTarget": "id"
         },
         "tickets.archive": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Archive tickets — each named (or a filter's) with its whole subtree, live work included and named (live); out of every view unless a filter says archived; status unchanged; yields archived { ids, live, unqueued, mark, dry_run }.\n\nARCHIVE-2 ([`crate::store::ArchiveAnswer`]'s module): a mark apart from status — status, kind, place and blockers stay; one already archived is a no-op; a queued one leaves the queue. dry_run: the answer, nothing written.",
             "mdError": null,
@@ -4892,9 +4734,7 @@
             "mdTarget": "ids"
         },
         "tickets.assign": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Assign or unassign a ticket's people and agents — principals that read it — or many tickets' (ids; one write, all or none); yields assignees_changed { ticket, added, removed } per ticket.\n\nTICKETS-9: moves a ticket's assignees — `add` assigned, `remove`\nunassigned ([`crate::assignees::apply`]: sorted, each once, a\nprincipal in both added, at most 16). Every principal added must read\nthe ticket: one that cannot is refused in band, naming why, and\nnothing is written. Each one moved is a line of `history`\n(`assign_record`: who, when, by whom); `watch` carries every\n`assignees_changed` that moved something; the filter cells are\n`assigned <who>`, `assigned me`, `assigned` and `unassigned`. Both\nlists empty in the answer: nothing moved, nothing written.",
             "mdError": null,
@@ -5057,9 +4897,7 @@
             "mdTarget": "id"
         },
         "tickets.await_reply": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "many",
             "mdDescription": "Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes.\n\nAPP-24: after queueing, an agent waits here — `waiting`, then one `replied` (or `timed_out`), then the end.",
             "mdError": null,
@@ -5168,9 +5006,7 @@
             }
         },
         "tickets.commits": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The commits that finished a ticket — `tickets.commits.link` / `unlink` (ACCESS-15).",
             "mdError": null,
@@ -5188,9 +5024,7 @@
             }
         },
         "tickets.commits.link": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Link commits to a ticket, or to many (ids; one write, all or none) — the commits that finished it; yields commits_linked { ticket, added } per ticket.\n\nSDLC-9: records which commits finished a ticket. Each entry is a\ncommit reference — a hexadecimal object name of 7 to 64 characters\n(stored lowercase), optionally prefixed by a repository and `@`\n(`77df9a0`, `plexus-macros@4f7114a`) — compared as text: the server\nhas no repository, so link the form you want kept. Every entry not\nalready on the ticket is appended, in the order given. Yields\nexactly one event: `CommitsLinked { ticket, added }` — `added` is\nwhat was newly linked, empty when nothing was (every entry already\nlinked, or none given), which writes and broadcasts nothing —\n`NotFound` if `id` names no ticket, or an in-band `Error` for a link\npast 256 commits on the ticket; an entry that is not a reference is\n`invalid_params` naming it, before the method runs. An error writes\nnothing. Moves `updated_unix` and nothing else — not the status.\n`watch` carries every `CommitsLinked` that added something. ACT-2:\n`ids` instead of `id` links them to each, in one write, all or none,\none `CommitsLinked` per ticket (`cells_stream`).",
             "mdError": null,
@@ -5288,9 +5122,7 @@
             "mdTarget": "id"
         },
         "tickets.commits.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -5308,9 +5140,7 @@
             }
         },
         "tickets.commits.unlink": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Unlink commits from a ticket; yields commits_unlinked { ticket, removed }.\n\nSDLC-9: the inverse of `link` — every entry the ticket carries comes\noff. The same references, compared the same way, all or nothing.\nYields exactly one event: `CommitsUnlinked { ticket, removed }` —\n`removed` empty when none of them was linked, which writes and\nbroadcasts nothing — or `NotFound`; an entry that is not a reference\nis `invalid_params` naming it. `watch` carries every\n`CommitsUnlinked` that removed something.",
             "mdError": null,
@@ -5384,9 +5214,7 @@
             "mdTarget": "id"
         },
         "tickets.components": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The component registry — `tickets.components.list` (COMP-3, ACCESS-18), through the caller's reach.",
             "mdError": null,
@@ -5404,9 +5232,7 @@
             }
         },
         "tickets.components.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Every component in the registry, in name order: its source, its owner (null: an orphan), what references it, its docs (summary, typed attributes, slots, examples, help; null without <docs>) and its preview attributes.\n\nCOMP-3: the component registry. Yields one `Component` per component\na ticket defines or once defined, in name order — its `source` (the\n` ```component <name> ` block's content), its `owner` (`null` for an\norphan: no ticket defines it any more, and something still uses it)\nand its `references` (the tickets whose bodies hold `<name` as an\nHTML tag, in the store's order, then the components whose sources\ndo). COMP-8: and its help — `docs`, the source's `<docs>` parsed\n(summary, typed attributes, slots, examples, markdown help; `null`\nwithout one) — and `preview`, the attributes on the block's opening\nline. Nothing trails them — the stream's own `done` is the whole\nanswer, as for `nav groups`. From the cache alone; `tickets.watch`\nkeeps a client's copy current with `ComponentChanged` and\n`ComponentRemoved`. IDENTITY-37: a caller who cannot view every\nshortcode gets the components whose owner it can view — no orphan —\neach with only the references it can view.",
             "mdError": null,
@@ -5428,9 +5254,7 @@
             }
         },
         "tickets.components.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -5448,9 +5272,7 @@
             }
         },
         "tickets.create": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc.\n\nCreates a ticket in an epic. The store allocates the next `EPIC-N`\nid; status starts at `Pending` (only a human promotes to `Ready`);\n`kind` defaults to `build`, and one outside the six yields the\nin-band error naming them. SDLC-11: a `doc` starts — and stays — in\n`Doc`; it may be a shortcode's first ticket, as a scope may; a doc\nwith a `blocked_by`, a `blocked_by` naming a doc, and a doc born as\nan id some `blocked_by` already names are in-band errors (a doc never\ncompletes, so nothing may wait on one). `parent` (AGS-19) files the ticket as an\noutput of an existing ticket in any epic; one that names no ticket,\nor that would make the newborn its own ancestor, is an in-band error\nnaming the reason. MNG-14: omitted, `parent` defaults to the\nshortcode's scope root; given, it must be inside the same shortcode\n— except for the scope root itself, whose parent is the shortcode\nit hangs under. Every shortcode starts with a scope (MNG-12) or a\ndoc (SDLC-11): the first ticket of a prefix must be `kind: scope` or\n`kind: doc`, and anything else is an in-band error naming the rule,\nwith nothing allocated. WAVE-10: `path` gives the ticket a path\naddress in its shortcode (`<SHORTCODE>/<path>`, which `get` resolves)\n— accepted only when it starts with `_MENGER/` and names something\nafter it, `kind` is `doc`, and `parent` is the shortcode's scope root\n(or omitted, which defaults to it); a path another ticket of the\nshortcode already holds is an in-band error naming that ticket.\nCOMP-3: a body's ` ```component <tag> ` blocks register components\n(`watch` says so after the rest of the birth); a block whose tag is\nnot a component name, a name defined twice, and a name another\nticket defines are in-band errors — the last naming that ticket —\nwith nothing stored or allocated.\nYields exactly one event: `Created` or `Error`.",
             "mdError": null,
@@ -5681,9 +5503,7 @@
             }
         },
         "tickets.filters": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Saved filters — `tickets.filters.list | get | save | rename | delete | check` (FILTER-46).",
             "mdError": null,
@@ -5701,9 +5521,7 @@
             }
         },
         "tickets.filters.check": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Read a filter without saving it: yields filter_checked with the filter as canonical text and how many tickets in reach it admits — or an in-band error naming the chunk and where it stands, a name that does not resolve, a cycle. Writes nothing.",
             "mdError": null,
@@ -5758,9 +5576,7 @@
             }
         },
         "tickets.filters.delete": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Delete a saved filter by name; an in-band error when there is none. Yields filter_deleted. A filter that names it stops resolving.",
             "mdError": null,
@@ -5815,9 +5631,7 @@
             }
         },
         "tickets.filters.get": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "One saved filter, by name (matched by its slug: `Open Builds` is `open-builds`), with its count; an in-band error when there is none.",
             "mdError": null,
@@ -5872,9 +5686,7 @@
             }
         },
         "tickets.filters.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Every saved filter of the caller's organization, by name: its filter, how many tickets in reach it admits, who saved it and when (`Needs you` among them until one is saved under that name).",
             "mdError": null,
@@ -5896,9 +5708,7 @@
             }
         },
         "tickets.filters.rename": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Give a saved filter another name, keeping its filter and who saved it; refused in band when the new name is another filter's. Yields filter_saved with `renamed_from`. A filter that names the old name stops resolving.",
             "mdError": null,
@@ -5968,9 +5778,7 @@
             }
         },
         "tickets.filters.save": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Save a filter under a name in the caller's organization — new, or replacing the one of that name (who first saved it is kept). Refused in band, nothing written: a filter the language cannot read (the chunk and where it stands are named), one holding `text`, a `saved \"…\"` that names none or makes a cycle. Yields filter_saved with the row.",
             "mdError": null,
@@ -6040,9 +5848,7 @@
             }
         },
         "tickets.filters.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -6060,9 +5866,7 @@
             }
         },
         "tickets.find": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Find tickets whose id or title contains the query (case-insensitive), optionally under a filter; summary rows, paged with after + limit.\n\nSCALE-6: the jump palette's question, answered where the rows are\n— so a client that does not hold every row (SCALE-7) can still\nfind one. Yields one `summary` row per ticket whose id or title\ncontains `query`, case-insensitively with ASCII folding (AGS-18's\nrule, the palette's own), in (epic, seq) order — at most `limit`,\ndefault 50, what the palette shows — then exactly one `page`\nevent: `remaining` plus the rows is the palette's total. `query`\nis trimmed; empty or blank matches every ticket, so the palette\nopens on the head of the store. `after` pages it exactly as\n`list` (MNG-9) — a position, not a match — and one naming no\nticket is one in-band `error`. Ids and titles only: a jump aid,\nnot search over bodies.\n\nFILTER-15: `filter` (the language's text, FILTER-10) keeps the text\nmatches the filter admits, in the same order, paged and counted as\nwithout it — the needle tested only on the candidates the filter's\ncells admit, never on the rest of the store. A filter not taken, or\none that asks `under` or `text`, is one in-band `error`; one that\nnarrows nothing (empty, a display part alone) is no filter.",
             "mdError": null,
@@ -6189,9 +5993,7 @@
             }
         },
         "tickets.get": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get one ticket by id, or by path address SHORTCODE/path (e.g. PLEXUS/_MENGER/board).\n\nYields exactly one event: `Ticket` if found, `NotFound` otherwise.\nWAVE-10: `id` may be a path address, `<SHORTCODE>/<path>` — the\nshortcode case-insensitive, the path exact — naming the one ticket of\nthat shortcode that holds the path; `NotFound` carries the address.",
             "mdError": null,
@@ -6246,9 +6048,7 @@
             }
         },
         "tickets.health": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Heartbeat — version, unix time, ticket count.\n\nReturns the binary version, the server's unix time, and\nhow many tickets the store holds.",
             "mdError": null,
@@ -6270,9 +6070,7 @@
             }
         },
         "tickets.history": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then its queue records (MENGER-39), then history_end (when the log began; what a restore would put back; since when it has held its status).\n\nMENGER-13: a ticket's history — every change of its status and its\nkind since the log began, as the store keeps them. Yields one\n`Transition` per transition of the ticket's, oldest first — `from` →\n`to`, when, who (`actor`: a principal, `system`, or `anonymous` on one\nkept before ACCESS-24, when login could be off; `name`), from where (`source`: app, api, pipeline,\ncascade), why (`message`) and what caused it (`cause`, a transition\nid) — then one per transition those caused in other tickets (a\ncancel's cascade, a restore's), in the order written, then exactly one\n`HistoryEnd { began_unix, restorable }`: when the log began (nothing\nbefore it has a history), and for a canceled ticket the descendants\n`set_status { restore_children: true }` would put back. `NotFound` for\nan id that names no ticket (or one out of the caller's reach). From\nthe cache; `watch` carries each new `Transition`.",
             "mdError": null,
@@ -6327,9 +6125,7 @@
             }
         },
         "tickets.inputs": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "A ticket's inputs — `tickets.inputs.<method>`: list, answer, clear, close, reopen (INPUT-3, ACCESS-14).",
             "mdError": null,
@@ -6347,9 +6143,7 @@
             }
         },
         "tickets.inputs.answer": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Answer an input: record a value (checked against its kind and options) with a rationale, the time, and where it came from (said by the server); yields input_changed.\n\nINPUT-3: answers an input — records `value` against `ticket`'s input\n`input`, with its `rationale` and the time. ACCESS-14: its `source`\nis the server's — `app` for a person signed in through a provider,\n`api` for an agent's key and for a call that proves no one. The value\nis typed by the input's kind and checked against the options its\nbody declares: `{\"type\": \"choice\", \"option\": …}` names one,\n`{\"type\": \"multi\", \"options\": […]}` a set (kept in the body's order,\neach once; empty: none ticked), `{\"type\": \"text\", \"text\": …}` a\nreply, not blank. Every answer is a history entry — a changed one,\nand the same one again. Yields exactly one event: `InputChanged` (the\ninput as it is now, its answer and history included), `NotFound` for\na ticket that is none, or an in-band `Error` — the ticket declares no\nsuch input, the value does not answer it, it is closed, or it was\nremoved from its body — and nothing is written. Never touches the\nbody. `tickets.watch` carries the `InputChanged`.",
             "mdError": null,
@@ -6453,9 +6247,7 @@
             "mdTarget": "ticket"
         },
         "tickets.inputs.ask": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "File a question for the owner on a ticket: a new text input appended to its body (one write, one revision); yields input_changed with the input.\n\nAPP-90: the chat composer's `/ask`. Appends `<m-input id=\"ask-N\"\nkind=\"text\"><m-question>…</m-question></m-input>` to `ticket`'s\nbody — `N` the lowest no input of the ticket has had, so the id is\nunique in it; the question escaped, so it is text and never markup —\nthrough `amend`'s write (its revision, `asking` moved in it,\n`amended` and `input_changed` broadcast). Yields exactly one event:\n`InputChanged` (the new input, `open`), `NotFound`, or an in-band\n`Error` — the body would pass `--max-body-bytes`, or its markup\nelsewhere is malformed — and nothing is written.",
             "mdError": null,
@@ -6526,9 +6318,7 @@
             "mdTarget": "ticket"
         },
         "tickets.inputs.clear": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Clear an input's answer (open again; kept in its history, with where it came from, said by the server); yields input_changed.\n\nINPUT-3: clears an input's answer — `open` again, the clear in its\nhistory, with its source (ACCESS-14: the server's, as for `answer`).\nYields exactly one event: `InputChanged`; `Input` when it held no\nanswer (nothing written); `NotFound`; or an in-band `Error` — no\nsuch input, closed, removed.",
             "mdError": null,
@@ -6599,9 +6389,7 @@
             "mdTarget": "ticket"
         },
         "tickets.inputs.close": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Close an input: freeze its answer (or its lack of one); yields input_changed.\n\nINPUT-3: closes an input — frozen (a decision's DECIDED), with its\nanswer or without one; an answer or a clear is refused until it is\nreopened. Yields exactly one event: `InputChanged`; `Input` when it\nwas closed already; `NotFound`; or an in-band `Error` — no such\ninput, removed.",
             "mdError": null,
@@ -6672,9 +6460,7 @@
             "mdTarget": "ticket"
         },
         "tickets.inputs.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket.\n\nINPUT-3: the inputs store. Yields one `Input` per input of `ticket`\n(every ticket's, without one) whose ticket is in the shortcode `epic`\nand which is in `state` — its ticket, id, kind (`choice`, `multi`,\n`text`), question, options (`{ value, label, recommended }`, the\nbody's order), recommendation, state (`open`, `answered`, `closed`,\n`removed`), current answer (`{ value, rationale, source, at_unix }`,\n`null` with none) and whole history, oldest first — in the store's\norder of tickets, each ticket's inputs in its body's order and the\nremoved after. Nothing trails them; the stream's own `done` is the\nwhole answer. `NotFound` when `ticket` names no ticket. From the\ncache; `tickets.watch` keeps a client's copy current with\n`InputChanged`.\n\nFILTER-15: `filter` (the language's text, FILTER-10) keeps the inputs\nwhose ticket the filter admits — each such ticket one lookup in the\nfilter's admitted cells; every other parameter as without it. A\nfilter not taken, or one that asks `under` or `text`, is one in-band\n`error`; one that narrows nothing (empty, a display part alone) is no\nfilter.",
             "mdError": null,
@@ -6811,9 +6597,7 @@
             }
         },
         "tickets.inputs.reopen": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Reopen a closed input; yields input_changed.\n\nINPUT-3: reopens a closed input — `answered` again when it holds an\nanswer, else `open`. Yields exactly one event: `InputChanged`;\n`Input` when it was not closed; `NotFound`; or an in-band `Error` —\nno such input, removed.",
             "mdError": null,
@@ -6884,9 +6668,7 @@
             "mdTarget": "ticket"
         },
         "tickets.inputs.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -6904,9 +6686,7 @@
             }
         },
         "tickets.label": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Add or remove a ticket's labels (e.g. needs-you), or many tickets' (ids; one write, all or none); yields labels_changed { ticket, added, removed } per ticket.\n\nMENGER-12: moves a ticket's labels — free-form tags such as\n`needs-you`, which puts the ticket on Home's \"Needs you\" panel.\n`add` and `remove` are label names (letters, digits and `-`, at most\n32 characters, folded to lower case); a label in both is added. The\nticket keeps its labels sorted, each once, at most 16. Yields exactly\none event: `LabelsChanged { ticket, added, removed }` — both empty\nwhen nothing moved (every added label already held, every removed one\nnot), which writes and broadcasts nothing — `NotFound` if `id` names\nno ticket, or an in-band `Error` naming every entry that is not a\nlabel, or a result past 16; an error writes nothing. Moves\n`updated_unix` and the ticket's filter cell (`label <name>`), nothing\nelse. `watch` carries every `LabelsChanged` that moved something.\nACT-2: `ids` instead of `id` moves each one's, in one write, all or\nnone, one `LabelsChanged` per ticket (`cells_stream`).",
             "mdError": null,
@@ -7028,9 +6808,7 @@
             "mdTarget": "id"
         },
         "tickets.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at.\n\nYields one row event per match, ordered by (epic, seq), then\nexactly one `page` event saying where the walk stands. The\n`parent` filter (AGS-19) yields exactly that ticket's children —\nsince SCALE-4 the one way to read them (a row carries only their\n`child_count`), and a page of them costs the page.\n\nMNG-9 adds the page: `after` is the exclusive cursor (a ticket id\n— the order is total and unique, so an id is a position), `limit`\ncaps the page, and `summary` swaps the `ticket` rows for `summary`\nrows that carry every field but the body. ACCESS-29: a page is 1,000\nrows unless `limit` says, and never past 10,000 ([`crate::limits`]).\nAn `after` naming no ticket\nis one in-band `error` and nothing else. SCALE-14: the rows come\nfrom the cache and the bodies from the database, read a page at a\ntime as the rows go out — the same events, never every body at\nonce.\n\nFILTER-4: `filter` (the language's text, FILTER-10) narrows the\nmatches further — ANDed with `epic`, `status` and `parent`, which are\nsugar beside it — answered from the cells, never by testing a\nticket; and `at` starts the page at a position among the matches\n(0-based) instead of after a cursor. Given either, the page event\ncarries `first`, the page's first row's position among the matches;\n`at` past the end is an empty page with `first = at` and `next:\nnull`; `at` with `after` is an in-band `error`, and so is a filter\nthe language does not take (every bad chunk named) or one that\nasks `under` or `text` (each named, with where it lives). Given\nneither, every event is what it was.\n\nFILTER-24: with a filter, `keep` (a ticket id: the nav's open ticket)\nis listed and counted as a match whatever the filter says of it — at\nits place, in `first` and `remaining` — when it is inside `epic`,\n`status` and `parent` and inside the caller's reach; otherwise, and\nwithout a filter, it changes nothing.",
             "mdError": null,
@@ -7263,9 +7041,7 @@
             }
         },
         "tickets.nav": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "What the nav and the menus ask — `tickets.nav.<method>`: groups, extents, tree, counts, facets, member (ACCESS-16).",
             "mdError": null,
@@ -7283,9 +7059,7 @@
             }
         },
         "tickets.nav.counts": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Each shortcode's number of tickets matching a filter, in shortcode order — the filtered extents (every ticket without one).\n\nFILTER-4: the filtered `extents`. Yields one `Count { epic, held }`\nper shortcode that holds a match of `filter`, in shortcode order,\nand nothing after them — the stream's own `done` ends it, as for\n`extents`. Without a filter, each shortcode's tickets. A sum over\nthe kept counts of the cells the filter admits: no ticket is tested,\nand the cost is the shortcodes and the cells, never the tickets.\nWith the counts, a client turns a position among the matches into a\n(shortcode, rank) by prefix sums, and asks `list { filter, at }`. A\nfilter not taken, or one that asks `under` or `text`, is one in-band\n`error` and nothing else. FILTER-24: `keep` (a ticket id inside the\ncaller's reach) is counted as a match whatever the filter says of it —\nonce — as `list { filter, keep }` pages it.",
             "mdError": null,
@@ -7379,9 +7153,7 @@
             }
         },
         "tickets.nav.extents": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Each shortcode's last sequence (a deleted ticket's too: numbers are never reused) and the holes below it, in shortcode order — where each shortcode ends in the store's order.\n\nSCALE-16: where each shortcode ends in the store's order. Yields\none `Extent` per shortcode that holds a ticket, in shortcode order\n— its highest sequence, read from the per-shortcode sequence\n`create` allocates from (SCALE-3), so the cost is the number of\nshortcodes. ACT-5: past every deleted number, which a shortcode's\n`holes` name — sequences are dense but for them, so with these a\nclient turns a position in the store's order into a cursor without\nwalking to it:\nprefix sums find the shortcode E and the row k, and `list { after:\n\"E-k\" }` starts at row k + 1. Nothing trails the extents — there is\nno cursor to hand back — so the stream's own `done` is the whole\nanswer, as for `groups` and `blockers`. No watch event keeps them:\n`created` already carries the newborn's `epic` and `seq`.",
             "mdError": null,
@@ -7403,9 +7175,7 @@
             }
         },
         "tickets.nav.facets": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value.\n\nFILTER-4: the counts behind every menu (Linear's facets). For each\nfield — `status`, `category`, `kind`, `severity`, `blocked`, `ready`,\n`has commits`, `menger doc` (FILTER-21), `in`, in that order — the\ntickets matching `base` and `filter` with `filter`'s own groups for\nthat field set aside (a group is a field's own when every predicate\nin it names that field; `base`'s are never set aside), counted by\nvalue: one `Facet { field, value, held }` per value with `held` above\n0 — `field` as the language spells it, `value` canonical (`Coding`,\n`build`, `none`, `yes`/`no` for the four flags, the shortcode for\n`in`), statuses in the store's order of statuses, shortcodes in\nshortcode order — then the stream's done. A sum over kept cell\ncounts, never a ticket. A filter not taken, or one that asks `under`\nor `text`, is one in-band `error` and nothing else.",
             "mdError": null,
@@ -7499,9 +7269,7 @@
             }
         },
         "tickets.nav.groups": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "One roll-up per shortcode: done/total over its subtree's work, its docs, its root (with the root's title, status and kind), and the host it nests under.\n\nMNG-10: the nav's tree without its rows. Yields one `Group` per\nshortcode row the nav draws, in shortcode order — `done/total` over\nthe row's whole subtree (SDLC-11: its work; `docs` counts its docs,\nwhich have no completion), its scope (or doc) `root`, and the `host` ticket it\nnests under when it is a sub-shortcode — exactly as AGS-20's\n`plan()` computes them from every row. AGS-23: and the root's own\nrow — its title, status and kind (`root_row`) — which the nav draws\nas the shortcode's top row, so its top level needs nothing else.\nNothing trails the groups:\nunlike `list` there is no cursor to hand back, so the stream's own\n`done` is the whole answer, as for `blockers`. `watch` keeps a\nclient's copy current with `GroupChanged`. ACCESS-10: the shortcodes\nthe caller sees; a root or host out of reach is none (the shortcode\nat the top for this caller).",
             "mdError": null,
@@ -7523,9 +7291,7 @@
             }
         },
         "tickets.nav.member": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids.\n\nFILTER-15: which of some tickets a filter admits — what a page that\nshows tickets it did not list (a ticket page, its blockers, its\nunlocks) asks of the global filter. Yields one `Member { id, matched\n}` per id, in the order given — `id` as given, `matched` whether the\nfilter admits the ticket it names; an id (or `SHORTCODE/path`\naddress) that names no ticket is `matched: false` — and nothing\nafter them: the stream's own `done` ends it. Each id is one lookup in\nthe filter's admitted cells, never a test of the ticket. At most\n1,000 ids: more, a filter not taken, or one that asks `under` or\n`text`, is one in-band `error` and nothing else.",
             "mdError": null,
@@ -7616,9 +7382,7 @@
             }
         },
         "tickets.nav.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -7636,9 +7400,7 @@
             }
         },
         "tickets.nav.tree": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page; matches_only: the matches nearest below instead, then the hosted shortcodes drawn there.\n\nFILTER-13: the nav under a filter — the rows the nav would show at an\naddress unfiltered (`parent`: that ticket's children, as `list {\nparent }` gives them; `epic`: the shortcode's top level — its root,\nor, for a shortcode with none, its tickets as `list { epic }` gives\nthem), only those that match `filter` or hold a match below them, in\nthe store's order. One `Node { summary, matched, below }` per row —\n`matched` whether the row matches, `below` how many matches are\nstrictly under it — then one `Page { next, remaining }`, paged as\n`list` pages (`after` a ticket id, at most `limit`). Answered from the\nkept tree: a parent's children under a filter are (C(P) ∩ M) ∪ the\nholders of every admitted cell, and `below` a sum over the row's\ntally — no subtree is walked. Exactly one of `parent` and `epic`; a\nfilter not taken, or one that asks `text`, is one in-band `error` and\nnothing else.\n\nFILTER-23: `matches_only` — the nav that draws only matches, no\nticket that only holds them. At `parent`, the matches nearest below\nit: its children that match and, in place of a child that does not,\nthat child's own nearest matches, at any depth, in the store's order\n— then the hosted shortcodes whose row is drawn there (hosted at the\nparent, or at a ticket between that is not drawn), in shortcode\norder, each as its root's node, whether or not it holds a match. At\n`epic`, the root when it matches, else the top of the shortcode: what\nthe root's `parent` address answers (a shortcode with no root: its\ntickets that match). Paged the same way. Off, `tree` is FILTER-13's,\nbyte for byte.\n\nFILTER-24: `keep`, with `matches_only` — a ticket id (the nav's open\nticket) answered as if it matched: a row where a match would be, its\nown nearest matches answered under it rather than above, a hosted\nshortcode placed at it; its node still says `matched: false`. A\nmatch, a shortcode's root, an id naming no ticket, or one outside the\ncaller's reach changes nothing.",
             "mdError": null,
@@ -7819,9 +7581,7 @@
             }
         },
         "tickets.queue": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why, with the inputs it asks (repeat --input; --blocking the one you are idle on) and views of mockups to look at (repeat --mockup); queued again it is raised, never lowered, and its inputs and views added; yields queued { entry, ticket, action }.\n\nMENGER-39: puts a ticket in front of the owner — at an urgency, for a\nreason; `blocking` names the input that answers it. Queued again: the\nurgency raised, never lowered. APP-86: several inputs, in order, and\nthe one the caller is idle on. Yields one `queued`, or an `error`.",
             "mdError": null,
@@ -8014,9 +7774,7 @@
             "mdTarget": "id"
         },
         "tickets.queued": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The owner's queue, most urgent first, then oldest: a queue_row { entry, ticket } each, then queue_end { count, snoozed, now_unix }.\n\nMENGER-39: the owner's queue, most urgent first, then the oldest.",
             "mdError": null,
@@ -8074,9 +7832,7 @@
             }
         },
         "tickets.request_changes": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix }.\n\nAPP-23: hands a queued ticket back — a comment (intent `changes`) on its conversation and the entry unqueued, one write.",
             "mdError": null,
@@ -8170,9 +7926,7 @@
             "mdTarget": "id"
         },
         "tickets.reshortcode": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Move tickets into another shortcode, renumbered there in the order given (a scope moved into a new code becomes its root; --new-scope makes the shortcode first; a root moves with --with-children as a rename); old ids keep resolving (get says moved_from); all or none; yields reshortcoded { moves, tickets }.\n\nACT-6: tickets moved into another shortcode ([`crate::store::Reshortcoded`]'s module).",
             "mdError": null,
@@ -8336,9 +8090,7 @@
             "mdTarget": "ids"
         },
         "tickets.restore": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Restore archived tickets — each named (or a filter's archived ones) back in every view with its archived ancestors; with_children, the subtree archived with it; yields restored { ids, ancestors, still_archived, by, dry_run }.\n\nARCHIVE-2: the ancestor chain comes back, never its other children (ARCHIVE-1); what stays archived below is named (still_archived). dry_run: the answer, nothing written.",
             "mdError": null,
@@ -8508,9 +8260,7 @@
             "mdTarget": "ids"
         },
         "tickets.revisions": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "A ticket's revisions — `tickets revisions list | get | diff | restore` (TICKETS-7, activation/revisions.rs).",
             "mdError": null,
@@ -8528,9 +8278,7 @@
             }
         },
         "tickets.revisions.diff": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "What changed between two revisions: field by field, the frontmatter key by key, the body as a line diff with words within a changed line; yields revision_diff { diff }.\n\nTICKETS-7: `from` → `to` — `to` omitted, the latest; `from` omitted,\nthe revision before `to`. Each field that differs with its value in\neach; the body's frontmatter key by key; the body's line diff in hunks\n(three lines of context; a line changed in place carries its words),\nof its source — or, `text: true`, of the text a reader sees (no\nmarkup, no scripts or styles, no frontmatter). At most 4,000 lines of\nhunks (`truncated` says so).",
             "mdError": null,
@@ -8639,9 +8387,7 @@
             }
         },
         "tickets.revisions.get": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The ticket exactly as it was at a revision; yields revision_at { revision, ticket }.\n\nTICKETS-7: every field a revision keeps (title, body, status, kind,\nseverity, parent, blockers, labels, commits) as it was then; the rest\n(its id, address, children, placement) as it is now. A body that uses\na component or a theme renders with today's definitions. `NotFound`\nfor a ticket out of reach; an `Error` for a revision it does not have.",
             "mdError": null,
@@ -8711,9 +8457,7 @@
             }
         },
         "tickets.revisions.list": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "A ticket's revisions, newest first: rev, when, who, from where, why, what changed, the body's hash, size and +/- lines; then revisions_end { count, latest, next }.\n\nTICKETS-7: yields one `Revision` per revision of the ticket, newest\nfirst — at most `limit` (100; at most 500), below `before` when\ngiven — then `RevisionsEnd { count, latest, next }` (`next`: the\n`before` of the next page, `null` at the oldest). A ticket older than\nrevisions has none until it is first changed; that write keeps its\nversion before (`source: baseline`) and its own. Transitions stay in\n`history`. `NotFound` for a ticket out of the caller's reach. From\nstorage, not the cache.",
             "mdError": null,
@@ -8804,9 +8548,7 @@
             }
         },
         "tickets.revisions.restore": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Put a revision's fields back — all it keeps but its commits, or those named — as one update, itself a new revision; yields revision_restored { ticket, from_rev, changed, rev }.\n\nTICKETS-7: writes the chosen fields of revision `rev` (default: title,\nbody, status, kind, severity, parent, blocked_by, labels — each that\ndiffers from now) through `update`'s rules: a parent that no longer\nexists, a blocker cycle, a duplicate input id, a component another\nticket defines are refused, naming why, and nothing is written. The\nrevision it keeps says what it restored, from which revision, and\n`message`. Nothing differing writes nothing (`changed: []`, `rev:\nnull`). A deleted ticket is undeleted first; commits are never\nrestored; a parent is moved, never cleared.",
             "mdError": null,
@@ -8939,9 +8681,7 @@
             "mdTarget": "id"
         },
         "tickets.revisions.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -8959,9 +8699,7 @@
             }
         },
         "tickets.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -8979,9 +8717,7 @@
             }
         },
         "tickets.search": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Search inside tickets: the tickets whose title or body holds every word of the query (prefixes and typos too), best first, each with the passage that matched; optionally under a filter, paged with offset + limit.\n\nSEARCH-2: search inside tickets — the tickets whose title or body's\ntext holds every word of `query`, best first, from the search index\nin the database (the store's `search`): a word matches itself and as\na prefix; one of four letters or more that the index does not know,\nor holds in only a few tickets, also matches the index's words one\nedit away (two from eight letters); a word joined by `-` `_` `.` `/`, or a `\"quoted phrase\"`,\nis a phrase. Tickets matched without a correction come first, then\nthe rest; BM25 within each, a title weighing 4 to the text's 1.\n\nYields one `hit { summary, title, snippet, corrected }` per ticket of\nthe page, then one `searched { matched, next, words }`. `filter` (the\nlanguage's text, FILTER-10) keeps the matches it admits (`under`\ntoo); one not taken, or one that asks `text`, is one in-band `error`\nand nothing else. `limit` is [`SEARCH_LIMIT`] unless given, at most\n[`SEARCH_MAX`]; `offset` skips that many matches.",
             "mdError": null,
@@ -9108,9 +8844,7 @@
             }
         },
         "tickets.set_kind": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Set a ticket's kind; everything kept by kind moves with it (to a doc: status Doc; from a doc: the status given, else Epic for a scope and Pending otherwise).\n\nSDLC-13: changes a ticket's kind — the one write that does — and\neverything kept by kind with it, in the one write. Yields exactly one\nevent: `KindChanged { ticket, previous }`, `NotFound` if `id` names no\nticket, or an in-band `Error` naming what it refuses. The status goes\nwith the kind across the doc line: to a doc it becomes `Doc` (a\n`status` other than `Doc` is an `Error`); from a doc it becomes\n`status` when given (never `Doc`), else `Epic` for a scope and\n`Pending` for any other kind; between two other kinds it stays unless\n`status` is given (`Doc` an `Error`). Refused: a ticket that waits on\na blocker, or that a ticket waits on, becoming a doc (both named); a\nshortcode's root becoming a kind that roots nothing (the shortcode\nnamed — doc ↔ scope on a root is allowed); a ticket holding a path\naddress becoming work; an unknown kind or status. A lower-seq ticket\nthat becomes a scope or a doc becomes its shortcode's root. The kind\n(and status) it already has writes and sends nothing: `KindChanged`\nwith `previous` equal to its kind. `watch` carries `KindChanged`\nfirst, then the `GroupChanged`, `PlacementsChanged` and (filtered)\n`Entered` / `Left` it caused, as for a status change.",
             "mdError": null,
@@ -9261,9 +8995,7 @@
             "mdTarget": "id"
         },
         "tickets.set_parent": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one.\n\nMNG-12: files an existing ticket as an output of `parent` — the\nverb AGS-19 left out. Adopts a ticket born parentless, or moves\none. Yields exactly one event: `ParentChanged` (the child, with the\nparent it had before), `NotFound` if `id` names no ticket, or an\nin-band `Error` when the parent does not exist or the chain would\nmake the ticket its own ancestor. `watch` also carries the parents'\nside: `ChildrenChanged` for the new parent and `ChildRemoved` for\nthe old one — each the parent's id and new `child_count` (SCALE-4).",
             "mdError": null,
@@ -9334,9 +9066,7 @@
             "mdTarget": "id"
         },
         "tickets.set_status": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children).\n\nYields exactly one event: `StatusChanged`, `NotFound`, or `Error`.\nSDLC-7: the vocabulary is nine — the worker states `Coding` and\n`In Review` included — and the write is free: any status to any\nother, nothing gated (SDLC-4 owns transitions). SDLC-11: a doc has no\nlifecycle — `set_status` on one is an in-band `Error`, whatever the\nstatus — and `Doc` is a doc's own: setting it on any other kind is an\nin-band `Error` too. Neither writes anything.\n\nMENGER-13: the change is a transition — the caller's (always\nsomeone, ACCESS-24), from `source` (`api` unless the call says `app` or\n`pipeline`), with its `message` — kept in the log and said on `watch`\nright after the `StatusChanged`. Into `Canceled`, the ticket's open\ninputs are withdrawn and every descendant still open work is\ncanceled in the same write, each a transition of `system`'s naming\nthe cause. Out of `Canceled`, its withdrawn inputs come back; with\n`restore_children`, so do the descendants its cancel canceled (and\nnothing has moved since), to the statuses they had.",
             "mdError": null,
@@ -9478,9 +9208,7 @@
             "mdTarget": "id"
         },
         "tickets.snooze": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Snooze a queued ticket for some minutes (1 to a week): off the alerting surfaces, still queued; yields snoozed { entry, ticket }.\n\nMENGER-39: a queued ticket off the alerting surfaces for a while; it\nstays queued. Yields one `snoozed`, or an `error`.",
             "mdError": null,
@@ -9574,9 +9302,7 @@
             "mdTarget": "id"
         },
         "tickets.unqueue": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued.\n\nMENGER-39: takes a ticket out of the queue. Yields one `unqueued`,\n`not_queued` (nothing written), or an `error`.",
             "mdError": null,
@@ -9655,9 +9381,7 @@
             "mdTarget": "id"
         },
         "tickets.update": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Change any part of a ticket in one write — title, body, kind, status, parent, severity, blockers (block / unblock); all lands or none does; yields updated { ticket, changed }.\n\nMENGER-30: any part of a ticket in one write, all of it or none — the\nrules, the steps and the events are [`crate::store::Update`]'s\nmodule's. Yields exactly one event: `Updated { ticket, changed }`\n(`changed` empty: nothing written or sent), `NotFound`,\n`BodyTooLarge`, or one `Error` naming every refusal.",
             "mdError": null,
@@ -9932,9 +9656,7 @@
             "mdTarget": "id"
         },
         "tickets.update_many": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The same update to many tickets in one write — kind, status, parent, severity, blockers, labels; by ids or a filter; all lands or none does; yields updated_many { ids, changed, tickets, unchanged }.\n\nACT-2: `update`'s change to many tickets in one write, all or none —\nthe selection, the rules, the steps and the events are\n[`crate::store::UpdatedMany`]'s module's. Yields exactly one event:\n`UpdatedMany { ids, changed, tickets, unchanged }`, or one `Error`\nnaming every refused ticket and why.",
             "mdError": null,
@@ -10317,9 +10039,7 @@
             "mdTarget": "ids"
         },
         "tickets.watch": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "many",
             "mdDescription": "Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / AssigneesChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.\n\nThe reactive primitive: an open-ended stream of every mutation, as\n`Created` / `StatusChanged` / `UnlocksChanged` / `ChildrenChanged`\nevents. Runs until the client disconnects. Every event carries the\nfull affected ticket, so a client that listed once and then only\nwatches can compute the ready set — and the parent tree — itself.\n\nSCALE-5: the stream is fed from the store's bounded broadcast, and\na consumer that falls more than it holds behind loses the oldest\nchanges. That used to be silent — the stream went on as if whole and\nthe client's copy was stale with nothing to say so. Now the gap is\none `Lagged { missed }` where the lost changes were, then the oldest\nchange still held, in order, no change twice. Delivered past the\n`epic` filter: whether a lost change was in the epic is exactly what\ncannot be known. Raising the capacity instead would move the cliff\nand keep the silence.\n\nMNG-10: a mutation that moves a roll-up is followed, after its\nticket events, by one `GroupChanged` per group whose row moved,\ninnermost first — the whole group, so applying it is one upsert.\nThe `epic` filter applies to a group by the group's own shortcode.\nAGS-23: a group's row includes its root's (`root_row`), so a status\nchange of a shortcode's root moves its group whether or not it\ncrosses `Complete`.\n\nMNG-16: an `amend` that changed something is one `Amended`, and\nmoves no group — AGS-23: but a new title on a shortcode's root, which\nis followed by its group's `GroupChanged`.\n\nSDLC-9: so is a `commits.link` or `commits.unlink` that changed\nsomething — one `CommitsLinked` or `CommitsUnlinked`, the whole\nticket, no group.\n\nSDLC-13: a `set_kind` that changed something is one `KindChanged`\n— the whole ticket — then what it moved, as a status change's: a\n`GroupChanged` per row (a root's whenever its kind or status\nchanged; every row a re-rooted shortcode moved), the\n`PlacementsChanged`, and with a filter the `Entered` / `Left`.\n\nSCALE-4: a parent's side of a birth or a move is the exception to\n\"the full ticket\": `ChildrenChanged` / `ChildRemoved` carry the\nparent's id, the child, and the parent's new `child_count` — the\nchild's own `Created` / `ParentChanged` already says where it\nhangs. The `epic` filter applies to them by the parent's shortcode.\n\nCOMP-3: a `create` or `amend` that moved the component registry ends\nwith one `ComponentChanged` per component it registered or moved\n(source, owner, references — the whole component), in name order,\nthen one `ComponentRemoved` per component it took out — after every\nother event of the write. A component is in no shortcode, so both\npass any `epic` filter.\n\nINPUT-3: an input a write moved is one `InputChanged` — the whole\ninput — after every other event of the write, the component events\nincluded: an `inputs.answer`, `inputs.clear`, `inputs.close` or\n`inputs.reopen`; or a `create` or `amend` whose body declared,\nre-declared or removed inputs (in the body's order, the removed\nafter). The `epic` filter applies to it by its ticket's shortcode.\n\nFILTER-4: with a `filter`, the same stream plus, as each write's\nlast events, one `Entered { id, epic, seq }` or `Left { id, epic,\nseq }` per ticket the write moved into or out of the filter — a\nbirth, a status change, every ticket its blocker crossing moved, a\nfirst commit or a last — in the store's order; a write that moves\nmore than 256 sends instead one `Recount { epic, held }` per\nshortcode it moved, the filter's count there as the write left it.\n`epic` filters them by their own shortcode. `membership` sends only\nthose three and `Lagged` — for a client whose rows already ride an\nunfiltered `watch`. Without a filter or `membership`, the stream is\nexactly what it was. A filter not taken, or one that asks `under` or\n`text`, is one in-band `error` and the stream ends.\n\nACCESS-12: it hears only what the caller's reach admits, each row\nredacted as a read's is, and follows the caller's grants: when they\nmove it says what entered and left (`entered` / `left`, past 256\n`recount`) and hears through the new reach; refused — signed out,\nexpired, held nowhere — it ends with `watch_closed { reason, message }`.",
             "mdError": null,
@@ -10449,9 +10169,7 @@
             }
         },
         "tickets.work": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The order of work — `tickets work ready | waves | waves_under | waves_to | blockers` (ACCESS-17, activation/work.rs).",
             "mdError": null,
@@ -10469,9 +10187,7 @@
             }
         },
         "tickets.work.blockers": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "One ticket's blockers resolved to current statuses; dangling ids marked; those out of your reach counted, never named.\n\n\"Why can't this start?\" in one call. Yields, in `blocked_by`\norder, one `Blocker` event per blocker that exists (the full\nticket, at its current status) and one `DanglingBlocker` event per\nid that names no ticket yet; `NotFound` if the queried ticket\nitself doesn't exist (or is out of the caller's reach). An empty\n`blocked_by` yields nothing. ACCESS-17 (ACCESS-10): a blocker the\ncaller may not see — and, to a reader restricted to part of the\nstore, an id that names no ticket — is neither resolved nor named:\nthe answer ends with one `HiddenBlockers { count }` saying how many,\nyielded only when there are any.",
             "mdError": null,
@@ -10526,9 +10242,7 @@
             }
         },
         "tickets.work.ready": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter.\n\nThe DAG query: which tickets can start now? Yields one row event\nper member of the ready set — status `Ready` and every\n`blocked_by` entry `Complete` or `Superseded`; never a doc (SDLC-11),\nwhose status is `Doc` for good — ordered by\n(epic, seq), then one `page` event. A dangling blocker keeps its\nticket out (use `blockers` to see which ids dangle). The epic\nfilter applies to membership; blockers resolve globally.\n`after` / `limit` / `summary` page it exactly as `list` (MNG-9).\n\nFILTER-15: `filter` (the language's text, FILTER-10) narrows it to\nthe ready set ∧ the filter — a filtered page of `ready and (filter)`\nfrom the cells (`ready` is the ready set's rule), paged and counted\nas without it, the page event without `first`. A filter not taken,\nor one that asks `under` or `text`, is one in-band `error`; one that\nnarrows nothing (empty, a display part alone) is no filter.\nACCESS-17: was `tickets ready_set`.",
             "mdError": null,
@@ -10676,9 +10390,7 @@
             }
         },
         "tickets.work.schema": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "Get plugin or method schema. Pass {\"method\": \"name\"} for a specific method.",
             "mdError": null,
@@ -10696,9 +10408,7 @@
             }
         },
         "tickets.work.waves": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts.\n\nWAVE-4: the order of work, for a board. Yields one `Placed` per\nticket of the shortcodes `epics` (case-insensitive; one with no\ntickets contributes nothing) whose kind is in `kinds` — default\n`build`, `spike`, `gap`; never a doc — then exactly one\n`WaveCounts`. Each ticket's placement is computed over the whole\n`blocked_by` graph by MNG-4's rule, following blockers into any\nshortcode: `done` when it is `Complete` or `Superseded`;\n`missing_blocker` when it, or anything it waits on, names a blocker\nthat is no ticket; otherwise `wave { n }` — 1 with every blocker\nsatisfied, else 1 + the highest wave among its unsatisfied ones.\n`waiting_on` is its unsatisfied direct blockers in the caller's\nreach, in `blocked_by` order, distinct (one out of reach holds it\nback, never named). Order: waves ascending, inside a wave Coding, In\nReview, Ready, Pending, Blocked, Draft, Epic and then (epic, seq);\nthen the missing lane; then the done — each in (epic, seq). `epics`\nempty, or a kind outside the six, is one in-band `Error` and\nnothing else. WAVE-6: each placement is the one the store keeps on the\nrow (the same rule, kept current by every write that moves one); rows\nonly.",
             "mdError": null,
@@ -10784,9 +10494,7 @@
             }
         },
         "tickets.work.waves_to": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The wave board whose final state is one ticket: its blockers transitively (and a scope's open descendants) placed in waves, done blockers done, the ticket alone in the last wave; cycles named; then the wave counts.\n\nMENGER-31: the wave board whose final state is `id` (activation/waves.rs).",
             "mdError": null,
@@ -10869,9 +10577,7 @@
             }
         },
         "tickets.work.waves_under": {
-            "mdBidirResponseSchema": null,
-            "mdBidirResponseType": null,
-            "mdBidirType": null,
+            "mdAsks": false,
             "mdCardinality": "one",
             "mdDescription": "The order of work under one ticket: each ticket of its subtree placed in its wave (or missing_blocker, or done) with what it waits on, then the wave counts.\n\nMENGER-31: the wave board of `id`'s subtree (activation/waves.rs).",
             "mdError": null,
@@ -28802,5 +28508,5 @@
             "tdNamespace": "tickets.revisions"
         }
     },
-    "irVersion": "3.0"
+    "irVersion": "3.1"
 }

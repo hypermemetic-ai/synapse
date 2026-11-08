@@ -64,8 +64,8 @@ mkSourceEnv cwd home = do
   pure SourceEnv { seCwd = cwd, seHome = home, seStdin = readToEnd stdin, seCache = cache }
 
 -- | All of a handle, without closing it: 'BS.getContents' semi-closes
--- stdin, and the bidirectional mode's terminal check later throws on a
--- closed handle.
+-- stdin, and a proposal's terminal check (ASK-3) later throws on a closed
+-- handle.
 readToEnd :: Handle -> IO BS.ByteString
 readToEnd h = go []
   where
@@ -73,8 +73,9 @@ readToEnd h = go []
       chunk <- BS.hGetSome h 65536
       if BS.null chunk then pure (BS.concat (reverse acc)) else go (chunk : acc)
 
--- | Whether some value has taken stdin: the bidirectional JSON mode reads it
--- too, and the two cannot share.
+-- | Whether some value has taken stdin: a proposal's prompt (ASK-3) reads
+-- it too, and the two cannot share — such a run answers as one with no
+-- terminal.
 stdinWasRead :: SourceEnv -> IO Bool
 stdinWasRead env = maybe False (const True) <$> readIORef (seCache env)
 

@@ -407,7 +407,7 @@ hashTypeStructure TypeDef{..} =
       other -> other
 
 -- | SYNAPSE-CC-8: how often each type is named, by full name — in every
---   method's params, returns, input and bidirectional type, and every type's
+--   method's params, returns and input, and every type's
 --   fields, before deduplication. A namespace names only its own copy, so a
 --   copy's count is how much its namespace refers to it.
 refCounts :: Set.Set (Text, Text) -> IR -> Map (Text, Text) Int
@@ -419,7 +419,7 @@ refCounts contested ir
          ++ concatMap (kindNames . tdKind) (Map.elems (irTypes ir))
     methodNames md = concatMap refKeys
       (map pdType (mdParams md) ++ [mdReturns md] ++ maybe [] pure (mdError md) ++ maybe [] pure (mdProgress md)
-        ++ maybe [] pure (mdInput md) ++ maybe [] pure (mdBidirType md))
+        ++ maybe [] pure (mdInput md))
     kindNames = \case
       KindStruct fs -> concatMap (refKeys . fdType) fs
       KindEnum _ vs _ -> concatMap (\v -> concatMap (refKeys . fdType) (vdFields v) ++ maybe [] refKeys (vdRef v)) vs
@@ -474,9 +474,8 @@ updateMethodRefs redirects md = md
   , mdReturns = updateTypeRef redirects (mdReturns md)
   , mdError = fmap (updateTypeRef redirects) (mdError md)
   , mdProgress = fmap (updateTypeRef redirects) (mdProgress md)
-  , mdBidirType = fmap (updateTypeRef redirects) (mdBidirType md)
   , mdInput = fmap (updateTypeRef redirects) (mdInput md)
-  -- mdRole, mdBidirResponse*: left unchanged via record-update syntax
+  -- mdRole, mdAsks: left unchanged via record-update syntax
   }
 
 -- | Update type references in a parameter
@@ -744,15 +743,15 @@ methodDefRead shared namespace pathPrefix method = do
         , mdFullPath = fullPath
         , mdNamespace = namespace
         , mdDescription = Just (methodDescription method)
-        , mdParams = params
+        , mdParams = params ++ [ confirmParam | methodAsks method, "confirm" `notElem` map pdName params ]
         , mdReturns = returnRef
         , mdError = rrRef <$> errorRead
         , mdProgress = rrRef <$> progressRead
         , mdCardinality = methodCardinality method
           -- RETURNS-13: the schema's cardinality, never inferred
-        , mdBidirType = inferBidirType method
-        , mdBidirResponseType = Nothing  -- TODO: could extract from response_type title
-        , mdBidirResponseSchema = methodResponseType method
+        , mdAsks = methodAsks method
+          -- ASK-1: a method that asks takes confirm (ConfirmToken, a
+          -- string); a schema that does not list it gets it here
         , mdRole = methodRole method
           -- IR-12: lift MethodSchema.role onto the IR so service-codegen's
           -- typed-handle codegen (IR-9) sees DynamicChild/StaticChild tags.
@@ -766,17 +765,20 @@ methodDefRead shared namespace pathPrefix method = do
         }
     )
 
--- | Infer the bidirectional type parameter from a MethodSchema.
---
--- Returns:
---   Nothing    – method is not bidirectional
---   Just RefJson – method is bidirectional with default T=Value (StandardBidirChannel)
---
--- TODO: When the activation macro emits a structured "bidir_type", read it here.
-inferBidirType :: MethodSchema -> Maybe TypeRef
-inferBidirType method
-  | not (methodBidirectional method) = Nothing
-  | otherwise = Just RefJson  -- StandardBidirChannel's T = serde_json::Value
+-- | ASK-1: the @confirm@ parameter of a method that asks — the standard
+-- type @ConfirmToken@, a string, opaque: the token of the proposal the
+-- method made, sent back as it came.
+confirmParam :: ParamDef
+confirmParam = ParamDef
+  { pdName = "confirm"
+  , pdType = RefPrimitive "string" Nothing
+  , pdDescription = Just "The token of a proposal this method made (needs_input): the same call with it does what the proposal said"
+  , pdRequired = False
+  , pdDefault = Nothing
+  , pdDeprecation = Nothing
+  , pdSource = Nothing
+  , pdValues = Nothing
+  }
 
 -- ============================================================================
 -- Parameter Extraction

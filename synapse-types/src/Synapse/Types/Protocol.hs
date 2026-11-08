@@ -57,8 +57,7 @@ mkProvenance name = NE.singleton name
 
 -- | Stream metadata attached to most stream items
 --
--- Required for: data, error, done, progress items
--- NOT required for: request items (bidirectional)
+-- Required for every item: data, error, done, progress
 data StreamMetadata = StreamMetadata
   { smProvenance :: !Provenance    -- ^ Call chain (non-empty)
   , smPlexusHash :: !PlexusHash     -- ^ Schema hash (16 hex chars)
@@ -93,7 +92,6 @@ data StreamItemType
   | ErrorItem     -- ^ Error termination (has metadata)
   | DoneItem      -- ^ Success termination (has metadata)
   | ProgressItem  -- ^ Progress update (has metadata)
-  | RequestItem   -- ^ Bidirectional request (NO metadata)
   deriving stock (Show, Eq, Ord, Enum, Bounded, Generic)
   deriving anyclass (FromJSON, ToJSON)
 

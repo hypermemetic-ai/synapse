@@ -316,18 +316,6 @@ plexusItemToValue (PT.StreamDone hash prov) =
         , "timestamp" .= (0 :: Int)
         ]
     ]
-plexusItemToValue (PT.StreamRequest hash prov reqId reqData timeout) =
-  object
-    [ "type" .= ("request" :: Text)
-    , "request_id" .= reqId
-    , "request_data" .= reqData
-    , "timeout" .= timeout
-    , "metadata" .= object
-        [ "provenance" .= provenanceToValue prov
-        , "plexus_hash" .= hash
-        , "timestamp" .= (0 :: Int)
-        ]
-    ]
 plexusItemToValue (PT.StreamGuidance hash prov errType suggestion availMethods methodSchema) =
   object $
     [ "type" .= ("guidance" :: Text)

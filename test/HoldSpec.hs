@@ -56,6 +56,7 @@ import Test.Hspec
 import Plexus.Client (SubstrateConfig(..), LostConnection(..), defaultConfig)
 import Plexus.Input (InputHalf(..), InputPort(..), InputSignal(..))
 import Plexus.Types (PlexusStreamItem(..))
+import Plexus.NeedsInput (NeedsInput(..), needsInputOf)
 import qualified Synapse.Hold as Hold
 
 import MockService
@@ -148,20 +149,22 @@ main = hspec $ do
             (fromException e :: Maybe LostConnection) `shouldSatisfy` (\x -> case x of { Nothing -> True; Just _ -> False })
           Right _ -> expectationFailure "a call to a closed port answered"
 
-    it "carries a bidirectional request and its answer" $
+    -- ASK-3: no question routing — a proposal is an item like any other,
+    -- and its answer an ordinary call through the holder
+    it "carries a proposal and the call that answers it" $
       withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         let sock = dir </> "h.sock"
+            archive ps = Object (KM.fromList [("method", String "tickets.archive"), ("params", Object (KM.fromList ps))])
+            stale = ("filter", String "label stale")
         _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
-        answered <- newIORef Nothing
-        let onItem i = case i of
-              StreamRequest {} -> void $ collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.respond"
-                (Object (KM.fromList [ ("request_id", String "req-1")
-                                     , ("response_data", Object (KM.fromList [("type", String "confirmed"), ("value", Bool True)])) ]))
-              StreamData _ _ "tickets.ask" v -> writeIORef answered (Just v)
-              _ -> pure ()
-        Hold.holderCall sock "a1" (serviceAt port) (pure ()) "menger.call" (Object (KM.fromList [("method", String "tickets.ask")])) onItem
-        readIORef answered >>= (`shouldSatisfy` isJust)
+        first <- collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (archive [stale])
+        let tokens = [ t | Just ni <- map needsInputOf first, let t = niToken ni ]
+        length tokens `shouldBe` 1
+        answer <- collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (archive [stale, ("confirm", String (head tokens))])
+        [ v | StreamData _ _ "tickets.archive" (Object v) <- answer, KM.lookup "type" v == Just (String "archived") ]
+          `shouldSatisfy` ((== 3) . length)
+        map needsInputOf answer `shouldSatisfy` all (== Nothing)
 
     it "exits when it has held nothing for --hold-for, and takes its socket with it" $
       withSystemTempDirectory "hold" $ \dir -> do
@@ -340,10 +343,10 @@ main = hspec $ do
     -- RETURNS-36: 4.0 changes the items the holder relays (plexus 0.8's
     -- typed error and progress), so its holder is protocol 3, apart from
     -- 3.17.x's (2)
-    it "is holder-4.sock in the runtime directory, whatever the address or agent" $ do
+    it "is holder-6.sock in the runtime directory, whatever the address or agent" $ do
       p <- Hold.holderSocketPath
-      takeFileName p `shouldBe` "holder-4.sock"
-      Hold.holdProtocol `shouldBe` 4
+      takeFileName p `shouldBe` "holder-6.sock"
+      Hold.holdProtocol `shouldBe` 6
 
   describe "the CLI, sending first" $ do
     synapse <- runIO (findExecutable "synapse")
@@ -364,10 +367,10 @@ cliSpec exe = do
     out `shouldStartWith` "4.0"
 
   -- re-review #5: help names the holder's socket as it is
-  it "help names holder-4.sock" $ do
+  it "help names holder-6.sock" $ do
     (_, out, err) <- readCreateProcessWithExitCode (proc exe ["--help"]) ""
-    (out <> err) `shouldContain` "holder-4.sock"
-    (out <> err) `shouldNotContain` "holder-3.sock"
+    (out <> err) `shouldContain` "holder-6.sock"
+    (out <> err) `shouldNotContain` "holder-4.sock"
 
   it "answers cold, fills the cache, and opens one connection for the probe, the schema and the call" $
     withRun $ \run _ -> do

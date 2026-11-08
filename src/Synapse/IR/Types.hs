@@ -187,12 +187,13 @@ instance FromJSON IR where
     <*> o .:? "irPluginRoles"
     <*> o .:? "irRefusals" .!= []
 
--- | The IR format this synapse writes: 3.0 (RETURNS-13: a method's returns,
---   error, progress and cardinality, read from the plexus 0.7 schema) over
---   2.1's forms (SYNAPSE-CC-8). A cache holding any other is discarded and
+-- | The IR format this synapse writes: 3.1 (ASK-3, as plexus-core's ASK-2
+--   writes it: each method's @mdAsks@ in place of 3.0's @mdBidir*@) over 3.0
+--   (RETURNS-13: a method's returns, error, progress and cardinality, read
+--   from the plexus 0.7 schema) and 2.1's forms (SYNAPSE-CC-8). A cache holding any other is discarded and
 --   built again.
 currentIrVersion :: Text
-currentIrVersion = "3.0"
+currentIrVersion = "3.1"
 
 -- ============================================================================
 -- IR 2.1: refusals, injected params, refinements
@@ -288,7 +289,7 @@ instance FromJSON EnumRepr where
 -- | Empty IR for folding
 emptyIR :: IR
 emptyIR = IR
-  { irVersion = currentIrVersion  -- 3.0: MethodDef carries returns · error · progress · cardinality (plexus 0.7); 2.1's SYNAPSE-CC-8 forms kept
+  { irVersion = currentIrVersion  -- 3.1 (ASK-3): 3.0 with mdAsks in place of mdBidir*; 3.0: MethodDef carries returns · error · progress · cardinality (plexus 0.7); 2.1's SYNAPSE-CC-8 forms kept
   , irBackend = ""  -- Will be set by buildIR
   , irHash = Nothing
   , irMetadata = Nothing
@@ -434,34 +435,14 @@ data MethodDef = MethodDef
   , mdCardinality :: Cardinality
     -- ^ One item or many. From @MethodSchema.cardinality@ — never inferred
     --   from the shape of 'mdReturns'.
-  , mdBidirType   :: Maybe TypeRef
-    -- ^ Bidirectional channel type parameter T, when the method uses
-    -- BidirChannel<StandardRequest<T>, StandardResponse<T>>.
-    --
-    -- Populated from the "bidirectional" / "request_type" fields in the
-    -- MethodSchema (emitted by plexus-macros when #[bidirectional] is set).
-    --
-    -- - Nothing  → method is not bidirectional, OR uses the default
-    --              T = serde_json::Value (StandardBidirChannel)
-    -- - Just RefJson → bidirectional with T=Value (explicit marker)
-    -- - Just (RefNamed ...) → bidirectional with a specific named T type
-    --
-    -- NOTE: The substrate schema currently emits 'bidirectional: true' but
-    -- does not yet include a structured 'bidir_type' field.  When that field
-    -- is added to MethodSchema, populate it here from methodRequestType.
-    -- For now this is always Nothing.
-  , mdBidirResponseType :: Maybe TypeRef
-    -- ^ Expected response type for bidirectional methods.
-    --
-    -- Populated from the "response_type" field in the MethodSchema.
-    -- This allows agents to know what response format is expected
-    -- when they receive a bidirectional request.
-  , mdBidirResponseSchema :: Maybe Value
-    -- ^ Full JSON Schema for the bidirectional response type.
-    --
-    -- Cached from MethodSchema.response_type so synapse can include it
-    -- in bidir_request output. Synapse controls whether to print this
-    -- (e.g., first request, --bidir-schemas flag, etc.)
+  , mdAsks        :: Bool
+    -- ^ ASK-1: the method may finish a call with a proposal (a data item
+    --   @{"type":"needs_input", …}@) and takes @confirm@, the token that
+    --   answers it. From @MethodSchema.asks@; an older schema's
+    --   @bidirectional@ reads as 'False'. IR 3.1 (as plexus-core writes it,
+    --   ASK-2): always written; a 3.0 IR's absent one reads as 'False' and
+    --   its @mdBidirType@ / @mdBidirResponseType@ / @mdBidirResponseSchema@
+    --   are read past.
   , mdRole        :: MethodRole
     -- ^ Structural role of this method in the activation graph
     -- (IR-12). Mirrors 'Plexus.Schema.Recursive.MethodRole' /
@@ -506,9 +487,7 @@ instance ToJSON MethodDef where
     , "mdError"               .= mdError
     , "mdProgress"            .= mdProgress
     , "mdCardinality"         .= mdCardinality
-    , "mdBidirType"           .= mdBidirType
-    , "mdBidirResponseType"   .= mdBidirResponseType
-    , "mdBidirResponseSchema" .= mdBidirResponseSchema
+    , "mdAsks"                .= mdAsks
     , "mdRole"                .= mdRole
     ] <> catMaybes
     -- AUTH-9: present only when the schema says them, so a pre-AUTH
@@ -532,9 +511,7 @@ instance FromJSON MethodDef where
     <*> o .:? "mdError"
     <*> o .:? "mdProgress"
     <*> o .:  "mdCardinality"
-    <*> o .:? "mdBidirType"
-    <*> o .:? "mdBidirResponseType"
-    <*> o .:? "mdBidirResponseSchema"
+    <*> o .:? "mdAsks" .!= False
     <*> o .:? "mdRole" .!= MethodRoleRpc
     <*> o .:? "mdGrant"
     <*> o .:? "mdTarget"

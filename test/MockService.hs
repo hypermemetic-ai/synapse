@@ -43,6 +43,9 @@ module MockService
     -- * RETURNS-40: a service that writes its own IR
   , irAnswer
   , irAsked
+    -- * ASK-3: methods that ask (ASK-1's needs_input)
+  , askCalls
+  , resetAsks
     -- * BIDIR-18: methods with an input half
   , InputPlan(..)
   , defaultInputPlan
@@ -55,8 +58,7 @@ module MockService
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, tryPutMVar, tryTakeMVar)
-import System.Timeout (timeout)
+import Data.Maybe (isJust)
 import Control.Exception (SomeException, bracket, finally, try)
 import Control.Monad (forever, void)
 import Data.Aeson
@@ -439,10 +441,6 @@ handleCall sc c next inputs signedIn _o rid method params = do
                     Right () -> threadDelay 100000 >> tick (n + 1)
           tick 0
           atomicModifyIORef' floodsEnded (\n -> (n + 1, ()))
-        -- waits for its answer off the connection's loop, as a real service
-        -- runs calls side by side (SYNAPSE-28: the answer may come on this
-        -- very connection)
-        "tickets.ask" -> void $ forkIO (askBack emit meta dat err >> done)
         -- SYNAPSE-28: a stream that never ends by itself (until unsubscribed)
         "tickets.watch" -> dat "tickets.watch" (object ["type" .= ("watching" :: Text)])
         -- BIDIR-18: a method with an input half: credit at once, then the
@@ -465,10 +463,6 @@ handleCall sc c next inputs signedIn _o rid method params = do
         "tickets.schema" | renamed, scView sc /= AnonymousView, not (scCatalog sc) ->
           dat "tickets.schema" (renameGet (ticketsSchema sc)) >> done
         _ -> callMethod sc signedIn inner args dat err >> done
-    -- SCAFFOLD-21: a bidirectional answer, on a connection of its own
-    "menger.respond" -> do
-      void (tryPutMVar responses (KM.lookup "response_data" params))
-      done
     _ -> err ("Invalid method format: " <> method) [] >> done
   where
     send :: Value -> IO ()
@@ -591,25 +585,58 @@ code070 m extra
   | "not found" `T.isInfixOf` m = "-32601"
   | otherwise = "-32000"
 
--- | SCAFFOLD-21: the answers to 'askBack's requests (@menger.respond@'s
--- @response_data@), as they arrive on any connection.
-{-# NOINLINE responses #-}
-responses :: MVar (Maybe Value)
-responses = unsafePerformIO newEmptyMVar
+-- | ASK-3: every call of a method that asks, its params as they came
+-- (this process), oldest first.
+{-# NOINLINE askCalls #-}
+askCalls :: IORef [(Text, Object)]
+askCalls = unsafePerformIO (newIORef [])
 
--- | A bidirectional method (@tickets.ask@): it asks the caller to confirm
--- (a @request@ item), waits up to 5 s for @menger.respond@, and answers
--- with what came back.
-askBack :: (Value -> IO ()) -> Value -> (Text -> Value -> IO ()) -> (Text -> [(K.Key, Value)] -> IO ()) -> IO ()
-askBack emit meta dat err = do
-  _ <- tryTakeMVar responses
-  emit (object
-    [ "type" .= ("request" :: Text), "metadata" .= meta, "request_id" .= ("req-1" :: Text)
-    , "request" .= object ["type" .= ("confirm" :: Text), "message" .= ("go on?" :: Text)] ])
-  got <- timeout 5000000 (takeMVar responses)
-  case got of
-    Just (Just r) -> dat "tickets.ask" (object ["type" .= ("answered" :: Text), "response" .= r])
-    _ -> err "no response to req-1" []
+-- | ASK-3: the last token each method that asks proposed, and how many it has.
+{-# NOINLINE askTokens #-}
+askTokens :: IORef (Map.Map Text (Text, Int))
+askTokens = unsafePerformIO (newIORef Map.empty)
+
+resetAsks :: IO ()
+resetAsks = writeIORef askCalls [] >> writeIORef askTokens Map.empty
+
+-- | ASK-1's methods that ask, as plexus-core answers them: a call with no
+-- valid confirm changes nothing and yields needs_input; the same call with
+-- the last token proposed does it. @tickets.archive@ is a confirmation (no
+-- fields) — its filter @moving@ moves the plan once (the first answer gets
+-- a fresh proposal) and @none@ matches nothing (answered directly);
+-- @tickets.purge@ needs @children@ (options, a default); @tickets.close@
+-- needs @reason@ (no default).
+askMethod :: Text -> Object -> (Text -> Value -> IO ()) -> IO ()
+askMethod inner args dat = do
+  atomicModifyIORef' askCalls (\cs -> (cs ++ [(inner, args)], ()))
+  tokens <- readIORef askTokens
+  let given = case KM.lookup "confirm" args of { Just (String t) -> Just t; _ -> Nothing }
+      current = Map.lookup inner tokens
+      valid = isJust given && fmap fst current == given
+      issued = maybe 0 snd current
+      moves = inner == "tickets.archive" && str "filter" args == "moving" && issued < 2
+      propose summary effects fields = do
+        let n = issued + 1
+            token = "v1.1794100000." <> T.drop (T.length "tickets.") inner <> "-" <> T.pack (show n)
+        atomicModifyIORef' askTokens (\m -> (Map.insert inner (token, n) m, ()))
+        dat inner (object
+          [ "type" .= ("needs_input" :: Text), "summary" .= (summary :: Text), "effects" .= (effects :: [Value])
+          , "fields" .= (fields :: [Value]), "token" .= token, "expires" .= ("2026-11-07T12:00:00Z" :: Text) ])
+  case inner of
+    "tickets.archive"
+      | str "filter" args == "none" -> dat inner (object ["type" .= ("archived" :: Text), "count" .= (0 :: Int)])
+      | valid && not moves -> mapM_ (\i -> dat inner (object ["type" .= ("archived" :: Text), "id" .= (i :: Text)])) ids
+      | otherwise -> propose ("archive " <> T.intercalate ", " ids <> " (" <> T.pack (show (length ids)) <> " not done)")
+          (map String ids) []
+      where ids = ["MENGER-4", "MENGER-5", "MENGER-6"] ++ [ "MENGER-7" | issued >= 1, str "filter" args == "moving" ]
+    "tickets.purge"
+      | valid -> dat inner (object ["type" .= ("purged" :: Text), "ids" .= KM.lookup "ids" args, "children" .= KM.lookup "children" args])
+      | otherwise -> propose "KILN-2 has 4 children" [String "KILN-3", String "KILN-4", String "KILN-5", String "KILN-6"]
+          [object ["name" .= ("children" :: Text), "options" .= (["reparent", "delete"] :: [Text]), "default" .= ("reparent" :: Text), "help" .= ("what moves" :: Text)]]
+    _ -- tickets.close
+      | valid -> dat inner (object ["type" .= ("closed" :: Text), "id" .= str "id" args, "reason" .= KM.lookup "reason" args])
+      | otherwise -> propose ("close " <> str "id" args) []
+          [object ["name" .= ("reason" :: Text), "help" .= ("why it closes" :: Text)]]
 
 infoFor :: Scenario -> Value
 infoFor sc = case scView sc of
@@ -653,6 +680,7 @@ callMethod' sc _signedIn inner args dat err =
       , "memberships" .= [object ["role" .= ("editor" :: Text), "scope" .= ("MENGER" :: Text)]]
       , "ceiling" .= (["editor@MENGER-12"] :: [Text]) ])
   "tickets.get" -> dat "tickets.get" (object ["type" .= ("ticket" :: Text), "id" .= ("MENGER-12" :: Text)])
+  _ | inner `elem` ["tickets.archive", "tickets.purge", "tickets.close"] -> askMethod inner args dat
   "tickets.set_status"
     | scView sc == CallerView -> err "needs tickets.set_status on IDENTITY"
         [ ("error_kind", "forbidden"), ("grant", "tickets.set_status"), ("scope", "IDENTITY")
@@ -750,12 +778,31 @@ ticketsSchema :: Scenario -> Value
 ticketsSchema sc = object $
   [ "namespace" .= ("tickets" :: Text), "version" .= ("0.5.0" :: Text), "hash" .= ("t0" :: Text)
   , "description" .= ("Plans as data" :: Text)
-  , "methods" .= map method
+  , "methods" .= (map method
       [ ("get", "One ticket by id", ["MENGER"], Just "id")
       , ("list", "Tickets, filtered and paged", ["MENGER"], Nothing)
-      , ("set_status", "Change a ticket's status", ["MENGER-12"], Just "id") ] ]
+      , ("set_status", "Change a ticket's status", ["MENGER-12"], Just "id") ]
+      ++ askingMethods) ]
   <> [ "view" .= ("caller" :: Text) | caller ]
   where
+    -- ASK-3: methods that ask (asks: true); archive and purge declare
+    -- confirm as plexus-core 0.10 does, close leaves it to synapse
+    askingMethods =
+      [ asking "archive" "Archive the tickets a filter matches" "many"
+          [("filter", object ["type" .= ("string" :: Text), "description" .= ("Which tickets" :: Text)])] ["filter"] True
+      , asking "purge" "Delete tickets for good" "one"
+          [ ("ids", object ["type" .= ("array" :: Text), "items" .= object ["type" .= ("string" :: Text)], "description" .= ("Tickets to delete" :: Text)])
+          , ("children", object ["type" .= ("string" :: Text), "enum" .= (["reparent", "delete"] :: [Text]), "description" .= ("What moves" :: Text)]) ] ["ids"] True
+      , asking "close" "Close a ticket" "one"
+          [ ("id", object ["type" .= ("string" :: Text), "description" .= ("Ticket id" :: Text)])
+          , ("reason", object ["type" .= ("string" :: Text), "description" .= ("Why" :: Text)]) ] ["id"] False ]
+    asking n d card props req declaresConfirm = object
+      [ "name" .= (n :: Text), "description" .= (d :: Text), "hash" .= (n <> "0"), "returns" .= object []
+      , "cardinality" .= (card :: Text), "asks" .= True
+      , "params" .= object
+          [ "type" .= ("object" :: Text), "required" .= (req :: [Text])
+          , "properties" .= object ([ (K.fromText k, v) | (k, v) <- props ]
+              ++ [ "confirm" .= object ["type" .= ("string" :: Text), "description" .= ("ConfirmToken: the token of a proposal" :: Text)] | declaresConfirm ]) ] ]
     caller = scView sc == CallerView
     method (n, d, held, target) = object $
       [ "name" .= (n :: Text), "description" .= (d :: Text), "hash" .= (n <> "0"), "returns" .= object []

@@ -7,8 +7,9 @@
 -- 0600 and exclusive, as 'openBinaryTempFile' makes it), so every printer
 -- writes there unchanged and in the same form it would have had on a pipe
 -- (@-j@ lines with @-j@, the rendered answer without). When the run ends
--- with 0 the temporary file is renamed over FILE: a reader never sees half
--- an answer. When it ends with anything else, the temporary file is
+-- with 0 — or with 10, a proposal nobody answered (ASK-3), which is the
+-- call's answer — the temporary file is renamed over FILE: a reader never
+-- sees half an answer. When it ends with anything else, the temporary file is
 -- removed and so is an older FILE — no stale answer is left to be read as
 -- this one — and the run's own code stands (75, 77, 69…).
 --
@@ -27,7 +28,7 @@
 -- in stdout's buffer and make the exit 1.
 --
 -- What must be seen while the call waits goes to stderr under @-o@, not
--- FILE: a two-way request's prompt ('promptHandle'), and under @-j@ an error
+-- FILE: a proposal's prompt ('promptHandle', ASK-3), and under @-j@ an error
 -- or a refusal — FILE goes with the failed run, so its line alone would be
 -- lost. A SIGTERM or SIGHUP ends the run as a failed one (143, 129): the
 -- temporary file is removed. A SIGKILL can leave it behind.
@@ -38,6 +39,7 @@ module Synapse.Output
   , promptHandle
   , exitCannotCreate
   , exitCannotWrite
+  , exitNeedsInput
   ) where
 
 import Control.Exception (SomeException, IOException, catch, fromException, throwIO, try)
@@ -56,6 +58,11 @@ import System.Posix.Signals (Handler(..), installHandler, sigHUP, sigTERM)
 import System.Directory (doesDirectoryExist)
 
 import Synapse.Reconnect (isStdoutFailure)
+
+-- | ASK-3: the call finished with a proposal nobody answered (nothing was
+-- done). The proposal is the call's answer: FILE holds it, as on success.
+exitNeedsInput :: Int
+exitNeedsInput = 10
 
 -- | sysexits' EX_CANTCREAT: FILE could not be made.
 exitCannotCreate :: Int
@@ -135,7 +142,7 @@ finish out code = do
       -- a stream keeps what came; one that brought nothing leaves no FILE
       size <- (fileSize <$> getFileStatus (oFile out)) `catch` \(_ :: SomeException) -> pure 1
       when (size == 0) $ quietly (removeFile (oFile out))
-    else if code == ExitSuccess
+    else if code == ExitSuccess || code == ExitFailure exitNeedsInput
       then renameFile (oTmp out) (oFile out) `catch` \(e :: IOException) -> do
         quietly (removeFile (oTmp out))
         cannotWrite (oFile out) e
@@ -148,12 +155,14 @@ finish out code = do
 active :: IO Bool
 active = maybe False (const True) <$> readIORef current
 
--- | Where a prompt goes that must be seen while the call waits: stderr
--- under @-o@ (stdout is FILE), else stdout.
+-- | Where a prompt goes that must be seen while the run waits: stderr
+-- under @-o@ (stdout is FILE) or when stdout is not a terminal (a pipe's
+-- reader would get the question and the person none), else stdout.
 promptHandle :: IO Handle
 promptHandle = do
   a <- active
-  pure (if a then stderr else stdout)
+  tty <- hIsTerminalDevice stdout
+  pure (if a || not tty then stderr else stdout)
 
 -- | The call is a stream: FILE is its temporary file from now on, each
 -- item in it as it is printed.

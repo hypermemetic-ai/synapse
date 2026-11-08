@@ -152,8 +152,8 @@ method :: Text -> Maybe Text -> Maybe Value -> MethodSchema
 method name grp params = MethodSchema
   { methodName = name, methodDescription = "", methodHash = "h", methodParams = params
   , methodReturns = Object mempty, methodError = Nothing, methodProgress = Nothing
-  , methodCardinality = CardinalityOne, methodBidirectional = False, methodHttpMethod = "POST"
-  , methodRequestType = Nothing, methodResponseType = Nothing, methodDeprecation = Nothing
+  , methodCardinality = CardinalityOne, methodAsks = False, methodHttpMethod = "POST"
+  , methodDeprecation = Nothing
   , methodParamSchemas = Nothing, methodRole = MethodRoleRpc, methodLongDescription = Nothing
   , methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False
   , methodGroup = grp, methodExamples = [], methodInput = Nothing }
@@ -179,8 +179,8 @@ main = hspec $ do
       csRead (callShape (method "list" (Just "inputs") Nothing)) `shouldBe` True
       csRead (callShape (method "answer" (Just "inputs") Nothing)) `shouldBe` False
       csRead (callShape (method "post" Nothing Nothing)) `shouldBe` False
-    it "is never a read when bidirectional" $
-      csRead (callShape ((method "get" (Just "read") Nothing) { methodBidirectional = True })) `shouldBe` False
+    it "is never a read when it asks (ASK-1)" $
+      csRead (callShape ((method "get" (Just "read") Nothing) { methodAsks = True })) `shouldBe` False
     it "takes since when its params have one" $ do
       let ps = object ["type" .= ("object" :: Text), "properties" .= object ["since" .= object [], "id" .= object []]]
       csSince (callShape (method "await_reply" (Just "read") (Just ps))) `shouldBe` True

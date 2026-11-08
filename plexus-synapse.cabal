@@ -34,8 +34,7 @@ flag live-tests
   description: Build the suites that need a live service: cli-test,
                websocket-raw-test and ir-test (a substrate and registry on
                127.0.0.1:4444; cli-test also a synapse binary at a fixed
-               dist-newstyle path) and bidir-integration-test (a backend
-               named in --test-options). Opt-in, so a default `cabal test`
+               dist-newstyle path). Opt-in, so a default `cabal test`
                needs nothing running. Enable with: cabal test -f live-tests
   default:     False
   manual:      True
@@ -54,6 +53,7 @@ library
     Synapse.Transport
     Synapse.Reconnect
     Synapse.Output
+    Synapse.Ask
     Synapse.Cache
     Synapse.Deprecation
     Synapse.Renderer
@@ -61,7 +61,6 @@ library
     Synapse.IR.Builder
     Synapse.IR.Read
     Synapse.IR.Cache
-    Synapse.Bidir
     Synapse.CLI.Help
     Synapse.CLI.Parse
     Synapse.CLI.Support
@@ -105,7 +104,7 @@ library
     base >= 4.17 && < 5,
     -- SYNAPSE-28: setCallRouter, substrateRpcSub, unsubscribe; RETURNS-12:
     -- the plexus 0.7 schema and envelope
-    plexus-protocol >= 0.6 && < 0.7,
+    plexus-protocol >= 0.7 && < 0.8,
     aeson >= 2.0 && < 2.3,
     aeson-pretty >= 0.8 && < 0.9,
     text >= 2.0 && < 2.2,
@@ -411,42 +410,39 @@ test-suite websocket-raw-test
   if !flag(live-tests)
     buildable: False
 
-test-suite bidir-test
+test-suite ask-test
+  -- ASK-3: a method that asks (ASK-1's needs_input) — the built synapse
+  -- against the mock service: on a terminal (a pty) the summary and [y/N]
+  -- or a prompt per field, then the same call with the fields and
+  -- confirm; no or nothing "nothing done", exit 0; a plan that moved asked
+  -- again; with no terminal the proposal printed (a line under -j), the
+  -- ready command on stderr and exit 10; --yes confirming when every field
+  -- has a default and refusing, naming the field, when one has none; and
+  -- --help's --confirm TOKEN.
   type:             exitcode-stdio-1.0
-  main-is:          BidirSpec.hs
+  main-is:          AskSpec.hs
+  other-modules:    MockService, Plexus07
+  build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
-    plexus-protocol,
-    plexus-synapse,
-    text >= 2.0 && < 2.2,
-    bytestring >= 0.11 && < 0.13,
     aeson >= 2.2 && < 2.3,
+    bytestring >= 0.11 && < 0.13,
+    containers >= 0.6 && < 0.8,
+    directory >= 1.3 && < 1.4,
+    filepath >= 1.4 && < 1.6,
+    network >= 3.1 && < 3.3,
+    process >= 1.6 && < 1.7,
+    temporary >= 1.3 && < 1.4,
+    text >= 2.0 && < 2.2,
+    unix >= 2.7 && < 2.9,
+    vector >= 0.12 && < 0.14,
+    websockets >= 0.13 && < 0.14,
     hspec >= 2.10 && < 2.12
   hs-source-dirs:   test
   default-language: GHC2021
   default-extensions:
     OverloadedStrings
-    RecordWildCards
   ghc-options:      -threaded
-
-test-suite bidir-integration-test
-  type:             exitcode-stdio-1.0
-  main-is:          BidirIntegrationSpec.hs
-  build-depends:
-    base >= 4.17 && < 5,
-    plexus-synapse,
-    text >= 2.0 && < 2.2,
-    containers >= 0.6 && < 0.8,
-    hspec >= 2.10 && < 2.12,
-    katip >= 0.8 && < 0.9
-  hs-source-dirs:   test
-  default-language: GHC2021
-  default-extensions:
-    OverloadedStrings
-    RecordWildCards
-  ghc-options:      -threaded
-  if !flag(live-tests)
-    buildable: False
 
 test-suite stream-tracker-test
   type:             exitcode-stdio-1.0

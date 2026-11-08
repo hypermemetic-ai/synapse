@@ -12,7 +12,7 @@
 --   per user__ (and per 'holdProtocol'), in the manner of ssh's
 --   ControlMaster. It keeps signed-in WebSockets open between runs, one per
 --   address, agent and credential, and listens on a unix socket
---   (@$XDG_RUNTIME_DIR/synapse/holder-4.sock@, 0600, in a 0700 directory).
+--   (@$XDG_RUNTIME_DIR/synapse/holder-6.sock@, 0600, in a 0700 directory).
 --   A run hands it each request, with the agent it calls as, and reads the
 --   reply back, so a warm call costs local IPC and one round trip. The
 --   first run starts it. A connection whose server has gone is let go at
@@ -531,9 +531,15 @@ heldCount mux = sum . map length . Map.elems <$> readMVar (muxUps mux)
 -- error and progress), so a 4.0 holder never serves a 3.x run nor the
 -- reverse; 4 is 3 carrying a call's input half (BIDIR-18: "input", "sig",
 -- "in", "bin", "end"), so a run with input never meets a holder that
--- would drop it.
+-- would drop it. 5 was VISION-7's unmerged question routing (a
+-- @{ns}.respond@ sent on the asking connection), never released and never
+-- reused; 6 is 4 with bidir gone (ASK-3): its items are plexus-protocol
+-- 0.7's, with no @request@ item, and nothing about it routes an answer — a
+-- proposal (ASK-1's @needs_input@) is an ordinary item, and its answer an
+-- ordinary call. A 4 or 5 holder is never reused by a 6 run, nor the
+-- reverse.
 holdProtocol :: Int
-holdProtocol = 4
+holdProtocol = 6
 
 encodeRequest :: Text -> Maybe Double -> Bool -> SubstrateConfig -> Text -> Value -> Value
 encodeRequest agent holdFor input c method params = object $
@@ -1014,7 +1020,7 @@ replaceHolder path holdFor ours = void $ (try :: IO a -> IO (Either SomeExceptio
       _ -> pure ()
 
 -- | SYNAPSE-40: the one holder's socket:
--- @$XDG_RUNTIME_DIR/synapse/holder-4.sock@ (a temporary directory of the
+-- @$XDG_RUNTIME_DIR/synapse/holder-6.sock@ (a temporary directory of the
 -- user's own without one) — one per user and 'holdProtocol'.
 holderSocketPath :: IO FilePath
 holderSocketPath = (</> ("holder-" <> show holdProtocol <> ".sock")) <$> runtimeDir
