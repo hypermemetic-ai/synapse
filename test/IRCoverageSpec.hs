@@ -370,9 +370,9 @@ main = hspec $ do
             [ "method " <> T.unpack key <> ":\n  old " <> show old' <> "\n  new " <> show new'
             | (k, v) <- KM.toList oldMethods
             , let key = K.toText k
-                  -- ASK-3: 3.1's mdAsks in place of 2.0's mdBidir*
+                  -- ASK-1: 3.1 drops 2.0's mdBidir*
                   old' = norm (dropKeys ["mdStreaming", "mdBidirType", "mdBidirResponseType", "mdBidirResponseSchema"] (dropInjected v))
-                  new' = maybe Null (norm . dropKeys ["mdInjected", "mdInput", "mdError", "mdProgress", "mdCardinality", "mdAsks"] . toJSON) (Map.lookup key (irMethods ir))
+                  new' = maybe Null (norm . dropKeys ["mdInjected", "mdInput", "mdError", "mdProgress", "mdCardinality"] . toJSON) (Map.lookup key (irMethods ir))
             , not (changedIn20 (dropInjected v)), old' /= new'
             -- chats.inputs is refused whole in 3.0 (two types titled Message)
             , not ("chats.inputs." `T.isPrefixOf` key) ]

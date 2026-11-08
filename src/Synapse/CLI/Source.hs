@@ -64,7 +64,7 @@ mkSourceEnv cwd home = do
   pure SourceEnv { seCwd = cwd, seHome = home, seStdin = readToEnd stdin, seCache = cache }
 
 -- | All of a handle, without closing it: 'BS.getContents' semi-closes
--- stdin, and a proposal's terminal check (ASK-3) later throws on a closed
+-- stdin, and a later read of it (an input stream's) throws on a closed
 -- handle.
 readToEnd :: Handle -> IO BS.ByteString
 readToEnd h = go []
@@ -73,9 +73,8 @@ readToEnd h = go []
       chunk <- BS.hGetSome h 65536
       if BS.null chunk then pure (BS.concat (reverse acc)) else go (chunk : acc)
 
--- | Whether some value has taken stdin: a proposal's prompt (ASK-3) reads
--- it too, and the two cannot share — such a run answers as one with no
--- terminal.
+-- | Whether some value has taken stdin: an input stream (BIDIR-18) reads
+-- it too, and the two cannot share.
 stdinWasRead :: SourceEnv -> IO Bool
 stdinWasRead env = maybe False (const True) <$> readIORef (seCache env)
 

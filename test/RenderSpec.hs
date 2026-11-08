@@ -32,7 +32,7 @@ method :: Text -> Text -> Maybe Value -> MethodSchema
 method name desc params = MethodSchema
   { methodName = name, methodDescription = desc, methodHash = "h", methodParams = params
   , methodReturns = Object mempty, methodError = Nothing, methodProgress = Nothing
-  , methodCardinality = CardinalityMany, methodAsks = False, methodHttpMethod = "POST"
+  , methodCardinality = CardinalityMany, methodHttpMethod = "POST"
   , methodDeprecation = Nothing
   , methodParamSchemas = Nothing, methodRole = MethodRoleRpc
   , methodLongDescription = Nothing, methodGrant = Nothing, methodTarget = Nothing, methodHeldOn = Nothing, methodPublic = False

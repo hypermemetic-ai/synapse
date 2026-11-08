@@ -475,7 +475,7 @@ updateMethodRefs redirects md = md
   , mdError = fmap (updateTypeRef redirects) (mdError md)
   , mdProgress = fmap (updateTypeRef redirects) (mdProgress md)
   , mdInput = fmap (updateTypeRef redirects) (mdInput md)
-  -- mdRole, mdAsks: left unchanged via record-update syntax
+  -- mdRole: left unchanged via record-update syntax
   }
 
 -- | Update type references in a parameter
@@ -743,15 +743,12 @@ methodDefRead shared namespace pathPrefix method = do
         , mdFullPath = fullPath
         , mdNamespace = namespace
         , mdDescription = Just (methodDescription method)
-        , mdParams = params ++ [ confirmParam | methodAsks method, "confirm" `notElem` map pdName params ]
+        , mdParams = params
         , mdReturns = returnRef
         , mdError = rrRef <$> errorRead
         , mdProgress = rrRef <$> progressRead
         , mdCardinality = methodCardinality method
           -- RETURNS-13: the schema's cardinality, never inferred
-        , mdAsks = methodAsks method
-          -- ASK-1: a method that asks takes confirm (ConfirmToken, a
-          -- string); a schema that does not list it gets it here
         , mdRole = methodRole method
           -- IR-12: lift MethodSchema.role onto the IR so service-codegen's
           -- typed-handle codegen (IR-9) sees DynamicChild/StaticChild tags.
@@ -764,21 +761,6 @@ methodDefRead shared namespace pathPrefix method = do
         , mdInput = rrRef <$> inputRead
         }
     )
-
--- | ASK-1: the @confirm@ parameter of a method that asks — the standard
--- type @ConfirmToken@, a string, opaque: the token of the proposal the
--- method made, sent back as it came.
-confirmParam :: ParamDef
-confirmParam = ParamDef
-  { pdName = "confirm"
-  , pdType = RefPrimitive "string" Nothing
-  , pdDescription = Just "The token of a proposal this method made (needs_input): the same call with it does what the proposal said"
-  , pdRequired = False
-  , pdDefault = Nothing
-  , pdDeprecation = Nothing
-  , pdSource = Nothing
-  , pdValues = Nothing
-  }
 
 -- ============================================================================
 -- Parameter Extraction

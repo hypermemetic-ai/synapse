@@ -36,13 +36,6 @@ module Synapse.Schema.Types
   , jsonLine
   , pattern ServiceDone
   , pattern ServiceGuidance
-
-    -- * Asking (ASK-1): a proposal a call finished with (re-exported)
-  , NeedsInput(..)
-  , NeedsInputField(..)
-  , ConfirmToken
-  , needsInputOf
-  , answerParams
   ) where
 
 import Data.Aeson (Value(..), encode, object, toJSON, (.=))
@@ -55,7 +48,6 @@ import Data.Scientific (toRealFloat)
 import GHC.Generics (Generic)
 
 import Plexus.RemoteError (renderRemoteError)
-import Plexus.NeedsInput (NeedsInput(..), NeedsInputField(..), ConfirmToken, needsInputOf, answerParams)
 
 -- Re-export from plexus-protocol
 import Plexus.Schema.Recursive

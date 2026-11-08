@@ -16,7 +16,6 @@ import Control.Concurrent (forkIO, killThread)
 import Control.Exception (SomeException, bracket, finally, try)
 import Control.Monad (forever, void)
 import Data.Aeson (Value(..), decodeStrict, object, (.=))
-import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
@@ -43,7 +42,7 @@ import qualified Synapse.Identity.Proof as Proof
 import qualified Synapse.Identity.Session as Session
 import qualified Synapse.Log as Log
 import Synapse.Monad (initEnvAt, runSynapseM)
-import Synapse.Schema.Types (pattern ServiceData, NeedsInput(..), needsInputOf, answerParams)
+import Synapse.Schema.Types (pattern ServiceData)
 import Synapse.Transport (invoke, invokeStreamingCall)
 import Synapse.Reconnect (CallShape(..))
 
@@ -161,24 +160,23 @@ specs = do
         proofs `shouldSatisfy` (not . null)
         mapM_ (\p -> KM.lookup "aud" p `shouldBe` Just (String ("wss://localhost:" <> T.pack (show port)))) proofs
 
-    -- ASK-3: a proposal and the call that answers it, both through TLS
-    it "carries a proposal and the call that answers it (two calls, both over wss)" $ \pki ->
+    -- ASK-1: a write is an ordinary call; the call after it another, both
+    -- through TLS at the path
+    it "carries a write and the call after it (two calls, both over wss)" $ \pki ->
       withMockService todaysService $ \service -> withTerminator pki service $ \port heads -> do
         lg <- logger
         env <- initEnvAt (Endpoint "localhost" port True "/ws" [pkiCa pki]) "menger" lg Nothing
         seen <- newIORef []
-        let shape = CallShape { csStream = True, csRead = False, csSince = False }
-            params = object ["filter" .= ("label stale" :: Text)]
-            call ps = runSynapseM env $ invokeStreamingCall shape (pure Nothing) (const (pure ()))
-              ["tickets"] "archive" ps (\i -> modifyIORef' seen (++ [i]))
-        call params >>= (`shouldSatisfy` either (const False) (const True))
-        proposals <- mapMaybe needsInputOf <$> readIORef seen
-        map niToken proposals `shouldSatisfy` ((== 1) . length)
-        writeIORef seen []
-        call (answerParams params [] (niToken (head proposals))) >>= (`shouldSatisfy` either (const False) (const True))
+        let shape = CallShape { csStream = False, csRead = False, csSince = False }
+            call m ps = runSynapseM env $ invokeStreamingCall shape (pure Nothing) (const (pure ()))
+              ["tickets"] m ps (\i -> modifyIORef' seen (++ [i]))
+        call "set_status" (object ["id" .= ("MENGER-12" :: Text), "status" .= ("Ready" :: Text)])
+          >>= (`shouldSatisfy` either (const False) (const True))
+        call "get" (object ["id" .= ("MENGER-12" :: Text)])
+          >>= (`shouldSatisfy` either (const False) (const True))
         items <- readIORef seen
-        [v | ServiceData _ _ _ (Object v) <- items, KM.lookup "type" v == Just (String "archived")]
-          `shouldSatisfy` ((== 3) . length)
+        [ t | ServiceData _ _ _ (Object v) <- items, Just (String t) <- [KM.lookup "type" v] ]
+          `shouldBe` ["status_changed", "ticket"]
         hs <- readIORef heads
         length (filter (BS.isPrefixOf "GET /ws HTTP/1.1") hs) `shouldSatisfy` (>= 1)
 

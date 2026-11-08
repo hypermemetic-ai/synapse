@@ -56,7 +56,6 @@ import Test.Hspec
 import Plexus.Client (SubstrateConfig(..), LostConnection(..), defaultConfig)
 import Plexus.Input (InputHalf(..), InputPort(..), InputSignal(..))
 import Plexus.Types (PlexusStreamItem(..))
-import Plexus.NeedsInput (NeedsInput(..), needsInputOf)
 import qualified Synapse.Hold as Hold
 
 import MockService
@@ -149,22 +148,21 @@ main = hspec $ do
             (fromException e :: Maybe LostConnection) `shouldSatisfy` (\x -> case x of { Nothing -> True; Just _ -> False })
           Right _ -> expectationFailure "a call to a closed port answered"
 
-    -- ASK-3: no question routing — a proposal is an item like any other,
-    -- and its answer an ordinary call through the holder
-    it "carries a proposal and the call that answers it" $
+    -- ASK-1: no question routing — a write is an ordinary call, and the
+    -- call after it another, each through the holder
+    it "carries a write and the call after it" $
       withSystemTempDirectory "hold" $ \dir -> withMockService todaysService $ \port -> do
         let sock = dir </> "h.sock"
-            archive ps = Object (KM.fromList [("method", String "tickets.archive"), ("params", Object (KM.fromList ps))])
-            stale = ("filter", String "label stale")
+            call m ps = Object (KM.fromList [("method", String m), ("params", Object (KM.fromList ps))])
         _ <- forkIO $ Hold.runHolder (Hold.holdOpts sock 30) `catchAll` const (pure ())
         waitFor (doesFileExist sock)
-        first <- collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (archive [stale])
-        let tokens = [ t | Just ni <- map needsInputOf first, let t = niToken ni ]
-        length tokens `shouldBe` 1
-        answer <- collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (archive [stale, ("confirm", String (head tokens))])
-        [ v | StreamData _ _ "tickets.archive" (Object v) <- answer, KM.lookup "type" v == Just (String "archived") ]
-          `shouldSatisfy` ((== 3) . length)
-        map needsInputOf answer `shouldSatisfy` all (== Nothing)
+        written <- collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call"
+          (call "tickets.set_status" [("id", String "MENGER-12"), ("status", String "Ready")])
+        [ v | StreamData _ _ "tickets.set_status" (Object v) <- written ]
+          `shouldBe` [KM.fromList [("type", String "status_changed")]]
+        got <- collect (Hold.holderCall sock "a1" (serviceAt port)) "menger.call" (call "tickets.get" [("id", String "MENGER-12")])
+        [ v | StreamData _ _ "tickets.get" (Object v) <- got, KM.lookup "type" v == Just (String "ticket") ]
+          `shouldSatisfy` ((== 1) . length)
 
     it "exits when it has held nothing for --hold-for, and takes its socket with it" $
       withSystemTempDirectory "hold" $ \dir -> do

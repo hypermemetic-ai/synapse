@@ -348,7 +348,6 @@ methodWith params = MethodDef
   , mdError = Nothing
   , mdProgress = Nothing
   , mdCardinality = CardinalityOne
-  , mdAsks = False
   , mdRole = MethodRoleRpc
   , mdGrant = Nothing
   , mdTarget = Nothing

@@ -6,17 +6,6 @@ This directory contains comprehensive tests for the Synapse CLI, including unit 
 
 ### 1. Unit Tests
 
-#### `ask-test` - A method that asks (ASK-3)
-The built synapse against the mock service's methods that propose
-(`needs_input`): on a terminal (a pty) `[y/N]` and a prompt per field, then
-the same call with the fields and `confirm`; no terminal: the proposal, the
-ready command on stderr, exit 10; `--yes`; `--help`'s `--confirm TOKEN`; the
-IR's `mdAsks`.
-
-**Run it:** `cabal test ask-test` (no backend required)
-
----
-
 #### `parse-test` - CLI Parsing Tests
 Tests for command-line argument parsing.
 
@@ -106,7 +95,6 @@ HOME=/tmp/cabal312home cabal-3.12.1.0 test --project-dir=/workspace/hypermemetic
 
 ```
 test/
-├── AskSpec.hs                    # A method that asks (needs_input), against the mock
 ├── CLISpec.hs                    # CLI integration tests
 ├── IRSpec.hs                     # IR builder integration tests
 ├── ParseSpec.hs                  # Parser unit tests
@@ -182,7 +170,7 @@ To run tests in CI:
 
 For unit tests only (no backend required):
 ```bash
-cabal test ask-test parse-test path-normalization-test typeref-json
+cabal test parse-test path-normalization-test typeref-json
 ```
 
 ---
@@ -212,7 +200,6 @@ As of the latest run:
 
 | Test Suite | Status | Count | Backend Required |
 |------------|--------|-------|------------------|
-| ask-test | ✅ PASS | 21 | No |
 | ir-test | ⚠️ Requires backend | - | Yes |
 | cli-test | ⚠️ Requires binary | - | Yes |
 | parse-test | ✅ (existing) | - | No |

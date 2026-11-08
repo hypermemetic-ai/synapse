@@ -187,8 +187,8 @@ instance FromJSON IR where
     <*> o .:? "irPluginRoles"
     <*> o .:? "irRefusals" .!= []
 
--- | The IR format this synapse writes: 3.1 (ASK-3, as plexus-core's ASK-2
---   writes it: each method's @mdAsks@ in place of 3.0's @mdBidir*@) over 3.0
+-- | The IR format this synapse writes: 3.1 (ASK-1: 3.0 without the
+--   @mdBidir*@ keys, nothing in their place) over 3.0
 --   (RETURNS-13: a method's returns, error, progress and cardinality, read
 --   from the plexus 0.7 schema) and 2.1's forms (SYNAPSE-CC-8). A cache holding any other is discarded and
 --   built again.
@@ -289,7 +289,7 @@ instance FromJSON EnumRepr where
 -- | Empty IR for folding
 emptyIR :: IR
 emptyIR = IR
-  { irVersion = currentIrVersion  -- 3.1 (ASK-3): 3.0 with mdAsks in place of mdBidir*; 3.0: MethodDef carries returns · error · progress · cardinality (plexus 0.7); 2.1's SYNAPSE-CC-8 forms kept
+  { irVersion = currentIrVersion  -- 3.1 (ASK-1): 3.0 without mdBidir*; 3.0: MethodDef carries returns · error · progress · cardinality (plexus 0.7); 2.1's SYNAPSE-CC-8 forms kept
   , irBackend = ""  -- Will be set by buildIR
   , irHash = Nothing
   , irMetadata = Nothing
@@ -435,14 +435,9 @@ data MethodDef = MethodDef
   , mdCardinality :: Cardinality
     -- ^ One item or many. From @MethodSchema.cardinality@ — never inferred
     --   from the shape of 'mdReturns'.
-  , mdAsks        :: Bool
-    -- ^ ASK-1: the method may finish a call with a proposal (a data item
-    --   @{"type":"needs_input", …}@) and takes @confirm@, the token that
-    --   answers it. From @MethodSchema.asks@; an older schema's
-    --   @bidirectional@ reads as 'False'. IR 3.1 (as plexus-core writes it,
-    --   ASK-2): always written; a 3.0 IR's absent one reads as 'False' and
-    --   its @mdBidirType@ / @mdBidirResponseType@ / @mdBidirResponseSchema@
-    --   are read past.
+    -- ASK-1: bidir is gone, with nothing in its place. A 3.0 IR's
+    -- @mdBidirType@ / @mdBidirResponseType@ / @mdBidirResponseSchema@ (and
+    -- an @mdAsks@, from a build of the withdrawn ASK-3) are read past.
   , mdRole        :: MethodRole
     -- ^ Structural role of this method in the activation graph
     -- (IR-12). Mirrors 'Plexus.Schema.Recursive.MethodRole' /
@@ -487,7 +482,6 @@ instance ToJSON MethodDef where
     , "mdError"               .= mdError
     , "mdProgress"            .= mdProgress
     , "mdCardinality"         .= mdCardinality
-    , "mdAsks"                .= mdAsks
     , "mdRole"                .= mdRole
     ] <> catMaybes
     -- AUTH-9: present only when the schema says them, so a pre-AUTH
@@ -511,7 +505,6 @@ instance FromJSON MethodDef where
     <*> o .:? "mdError"
     <*> o .:? "mdProgress"
     <*> o .:  "mdCardinality"
-    <*> o .:? "mdAsks" .!= False
     <*> o .:? "mdRole" .!= MethodRoleRpc
     <*> o .:? "mdGrant"
     <*> o .:? "mdTarget"

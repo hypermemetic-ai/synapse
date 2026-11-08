@@ -64,7 +64,6 @@ baseMethod = MethodSchema
   , methodError          = Nothing
   , methodProgress       = Nothing
   , methodCardinality    = CardinalityOne
-  , methodAsks  = False
   , methodHttpMethod     = "POST"
   , methodDeprecation    = Nothing
   , methodParamSchemas   = Nothing

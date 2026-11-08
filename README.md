@@ -202,7 +202,7 @@ CA (a throwaway proxy, `caddy … tls internal`), pass its root with `--cacert`.
 
 **Everything rides the same address**: the `_info` probe, calls, streams and
 their reconnects (SYNAPSE-20 — the outage line names the URL), `-s`, `-i`,
-`_find`, a proposal's answer call (ASK-3), `_login` / `_logout` and the
+`_find`, `_login` / `_logout` and the
 session every later call carries. The upgrade's `Host` is the host alone on 443
 (`host:port` otherwise). A registry lists plain `ws://HOST:PORT` backends, so an
 address behind TLS or on a path is never auto-registered: name it each time,
@@ -351,7 +351,7 @@ Once synapse has found the method, it reads each flag by its parameter's type:
 | `--body VALUE` | the next argument is the value, whatever it begins with: `---`, `--force`, `-5`, `--`, or nothing (`''`) |
 | `--body=VALUE` | everything after the first `=`, which may be empty or contain `=` |
 | `--body @body.md` | the file's contents, UTF-8, exactly as they are (3.14.8, SYNAPSE-10): no argument carries the value, so a body may be as large as the backend accepts; `~/` and a relative path resolve as the shell's would; a file that cannot be read is a refusal naming the flag and the path |
-| `--body -` | standard input, read once however many values ask for it; a run that read it answers a proposal (ASK-3) as one with no terminal |
+| `--body -` | standard input, read once however many values ask for it |
 | `--handle @@alice` | the text `@alice`: one `@` is dropped, so a value that really begins with `@` can still be sent |
 | `--summary` (a boolean) | `true`; it takes the next argument only when that is `true` or `false` (or `1`, `0`), so `--summary --limit 3` is two flags |
 | `--summary=false` | `false` |
@@ -532,17 +532,15 @@ synapse -P 4455 --output /tmp/t.txt menger tickets get --id MENGER-12
 - It is written to a temporary file beside FILE and renamed over FILE when
   the call ends with 0, so a reader never sees half an answer. FILE is
   `0600` (an answer may carry a session token — `session login`).
-- A call that ends with 10 (a proposal nobody answered, ASK-3) is answered: FILE holds the proposal.
 - A call that ends with anything else leaves no FILE — an older FILE is
   removed too, so nothing stale is read as this call's answer — and no
   temporary file. The exit code is the call's (75, 77, 69…).
 - A stream (`watch`) has no end: its items are appended to FILE and flushed
   as each comes. A stream that fails keeps what it wrote.
 - A write's answer is written whole, whoever reads it.
-- What must be seen while the call waits goes to **stderr**, not FILE: a
-  proposal's prompt (ASK-3), and under
-  `-j` an error or a refusal (its `-j` line goes with the failed run's FILE,
-  so a refused call says why on stderr and exits 77).
+- Under `-j` an error or a refusal goes to **stderr**, not FILE (its `-j`
+  line goes with the failed run's FILE, so a refused call says why on stderr
+  and exits 77).
 - `-o -` is stdout. A FILE that cannot be made (no such directory, a
   directory) is said on stderr and the run **exits 73** before anything is
   sent; a write to it that fails later (a full disk, a file size limit) is
@@ -575,7 +573,7 @@ network blip — for **ten minutes** by default.
 
 - **A read is sent again; a write is not.** A method is a read when its
   schema's `group` is `read` (else when its name is a read's: `get`, `list`,
-  `watch`, …); anything else, and any method that asks (ASK-1), is a write. A
+  `watch`, …); anything else is a write. A
   write whose request went out before the connection was lost may have
   happened, so synapse says so and **exits 75** (`connection to … lost
   before an answer — the write may have happened; check before sending it
@@ -620,7 +618,6 @@ connection limits (429) is waited out like any outage.
 
 | exit | meaning |
 | -- | -- |
-| 10 | the call proposed (ASK-1's `needs_input`) and nobody answered: nothing was done; the command that confirms it is on stderr (ASK-3) |
 | 69 | the backend stayed unreachable for the whole window |
 | 75 | a write went out and its answer never came — it may have happened |
 | 77 | the service refused the call (AUTH-8) |
@@ -766,52 +763,6 @@ in the test's process):
 | a loop of 500 calls to 500 short-lived servers | — | 1 holder, 103 s; RSS 29.8 MB at call 50, 31.2 MB at 500; nothing held 10 s on |
 | connections held to stopped servers, 10 s on | each holder's, for 10 min | 0 (let go within a second) |
 
-## A method that asks: `needs_input` (ASK-3)
-
-A method whose schema says `asks: true` may finish a call with a proposal
-and change nothing: a data item whose content is
-`{"type":"needs_input","summary","effects","fields","token","expires"}`.
-It is answered by the same call — the same method, the same params — with
-each field's value under its own name and `confirm: TOKEN`. synapse never
-calls a method the server names. (This replaces bidir: the `request` item,
-`{ns}.respond`, `--bidir-mode`, `--bidir-cmd`, `--bidir-respond` and the
-`respond` subcommand are gone.)
-
-- **On a terminal** (stdin a tty): the effects, then
-  `? SUMMARY  [y/N] `; with fields, a prompt per field — a menu when it has
-  options, its default in brackets, Enter for the default — then
-  `? go ahead with FIELD = VALUE  [y/N] `. `y` makes the answer call and
-  its answer prints as any call's; anything else prints `nothing done` and
-  exits 0. A plan that moved (the answer brought a fresh proposal) is shown
-  and asked again. The prompts go to stdout, or to stderr under `-o` or
-  when stdout is not a terminal.
-- **With no terminal**: the proposal is printed (under `-j` / `--raw` its
-  item is the line), and on stderr the command that confirms it — this
-  run's own arguments with `--confirm TOKEN` and `--FIELD DEFAULT`, or
-  `--FIELD ???` where a field has no default (`-p` params come back whole in
-  `-p`, with `confirm`) — and the run **exits 10**. Under `-o` FILE holds the
-  proposal.
-
-  ```
-  $ synapse -P 4455 menger tickets archive --filter 'label stale' </dev/null
-  needs input: archive MENGER-4, MENGER-5, MENGER-6 (3 not done)
-    · MENGER-4
-    · MENGER-5
-    · MENGER-6
-  expires 2026-11-07T12:00:00Z
-  synapse: nothing done — to confirm, run:
-    synapse -P 4455 menger tickets archive --filter 'label stale' --confirm v1.…
-  ```
-
-- **`--yes`** (before the service name) confirms without asking when every
-  field has a default (the defaults are sent); otherwise nothing is done,
-  the field is named (`--yes cannot confirm: the field reason has no
-  default`) and the run exits 10 with the command.
-- `--help` on such a method lists `[--confirm TOKEN]` and says it may ask.
-  The IR (`-i`) says `"mdAsks": true` and carries `confirm` (a string,
-  `ConfirmToken`) among its params. A schema from before ASK-1 that says
-  `bidirectional` is read as not asking.
-
 ## A stream in: `--input` (BIDIR-18)
 
 A method with an input half (`Input<T>`, plexus-wire spec/10: its schema
@@ -862,12 +813,11 @@ Synapse emits a structured Intermediate Representation for building typed client
 $ synapse --emit-ir <backend> conformance > conformance.ir.json
 ```
 
-IR 3.1 (plexus 0.7; 3.1 is ASK-3's) carries each method's contract as its
-schema states it: its item type (`mdReturns`), its error type when it can say
-no (`mdError`), its progress type when it reports progress (`mdProgress`),
-whether it yields one item or many (`mdCardinality`), and whether it may
-propose instead of acting (`mdAsks`, ASK-1; 3.0's `mdBidir*` are gone and
-read past). An excerpt of RETURNS-7's
+IR 3.1 (plexus 0.7; 3.1 is 3.0 without the bidir keys, ASK-1) carries each
+method's contract as its schema states it: its item type (`mdReturns`), its
+error type when it can say no (`mdError`), its progress type when it reports
+progress (`mdProgress`), and whether it yields one item or many
+(`mdCardinality`); 3.0's `mdBidir*` are gone and read past. An excerpt of RETURNS-7's
 conformance fixture, whose whole IR is
 `plexus-macros/fixtures/conformance/expected/ir.json`:
 
@@ -891,7 +841,6 @@ conformance fixture, whose whole IR is
   },
   "irMethods": {
     "conformance.load": {
-      "mdAsks": false,
       "mdCardinality": "many",
       "mdParams": [
         {"pdName": "n", "pdType": {"tag": "RefPrimitive", "contents": ["integer", "uint32"]}, "pdRequired": true}

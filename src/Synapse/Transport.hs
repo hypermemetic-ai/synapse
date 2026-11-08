@@ -345,9 +345,7 @@ invokeStreaming namespacePath method params onItem = do
     getPort _ c = substratePort c
 
 -- | Invoke a method, each item to the handler as it comes, through an
--- outage as its shape says (SYNAPSE-20). A proposal (ASK-1's
--- @needs_input@) is an item like any other: the caller answers it with a
--- call of its own.
+-- outage as its shape says (SYNAPSE-20).
 invokeStreamingCall
   :: R.CallShape                                           -- ^ SYNAPSE-20: how it rides out an outage
   -> IO (Maybe WS.Headers)                                 -- ^ SYNAPSE-20: sign in again; the upgrade's new headers

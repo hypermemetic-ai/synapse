@@ -24,7 +24,6 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException, try)
 import Control.Monad (forM_)
 import Data.Aeson
-import qualified Data.Aeson.KeyMap as KM
 import qualified Data.Aeson.Key as Key
 import Data.Bits ((.&.))
 import qualified Data.ByteString as BS
@@ -250,18 +249,15 @@ outputSpec exe = describe "synapse -o FILE (SYNAPSE-39)" $ do
         err `shouldContain` "tickets.set_status"
         doesFileExist file >>= (`shouldBe` False)
 
-  -- ASK-3: a proposal nobody can answer (no terminal) is the call's
-  -- answer: FILE holds it; the command that confirms it goes to stderr
-  it "a proposal with no terminal: FILE holds it, the command to confirm on stderr, exit 10" $
+  -- ASK-1: a write is an ordinary call; under -j its line goes to FILE
+  it "a write under -j: its answer in FILE, nothing on stdout, exit 0" $
     withRun $ \dir spawn -> do
       warm spawn
-      resetAsks
       let file = dir </> "answer.out"
-      (code, out, err) <- reading (spawn ["-j", "-o", file]) ["tickets", "archive", "--filter", "label stale"]
-      (code, out) `shouldBe` (ExitFailure 10, "")
-      err `shouldContain` "--confirm v1.1794100000.archive-1"
+      (code, out, _) <- reading (spawn ["-j", "-o", file]) ["tickets", "set_status", "--id", "MENGER-12"]
+      (code, out) `shouldBe` (ExitSuccess, "")
       body <- readFile' file
-      body `shouldContain` "\"needs_input\""
+      body `shouldContain` "status_changed"
       modeOf file `shouldReturn` 0o600
       leftovers dir "answer.out" >>= (`shouldBe` [])
 
@@ -352,7 +348,6 @@ ticketsWithWrites = object
       , m "amend" "Replace a ticket's body" (Just "write") False [("id", True), ("body", False)]
       , m "flood" "Ticks, every 100 ms, until unsubscribed" (Just "read") True []
       , m "set_status" "Change a ticket's status" (Just "write") False [("id", True)]
-      , asking "archive" "Archive the tickets a filter matches" [("filter", True)]
         -- the service's tickets.watch, said here to be unary: one item, and no end
       , m "watch" "One item, and no end" (Just "read") False [] ] ]
   where
@@ -364,8 +359,3 @@ ticketsWithWrites = object
           , "required" .= [ p | (p, True) <- ps ]
           , "properties" .= object [ Key.fromText p .= object ["type" .= ("string" :: Text)] | (p, _) <- ps ] ] ]
       <> maybe [] (\g' -> ["group" .= g']) g
-    -- ASK-3: a method that asks (ASK-1)
-    asking :: Text -> Text -> [(Text, Bool)] -> Value
-    asking n d ps = case m n d (Just "write") False (ps ++ [("confirm", False)]) of
-      Object o -> Object (KM.insert "asks" (Bool True) o)
-      v -> v

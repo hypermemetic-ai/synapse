@@ -169,7 +169,6 @@ renderMethodPage MethodPage{..} ir md = T.unlines (dropTrailing body)
       , [""]
       , usageLines
       , optionsBlock
-      , asksBlock
       , inputBlock
       , exampleBlock
       , requiresBlock
@@ -239,17 +238,7 @@ renderMethodPage MethodPage{..} ir md = T.unlines (dropTrailing body)
 
     flagCol = 2 + min 28 (maximum (0 : map (T.length . flagText) callerParams ++ map (T.length . pdName) serverParams)) + 2
 
-    -- ASK-3: a method that asks takes the token of its proposal
-    flagText p
-      | mdAsks md, pdName p == "confirm" = "[--confirm TOKEN]"
-      | otherwise = flagLabel ir p
-    asksBlock
-      | not (mdAsks md) = []
-      | otherwise = "" : wrapWords width
-          ("It may ask for confirmation: a call that would change something does nothing and \
-           \proposes what it would do, with a token; the same call with --confirm TOKEN does it. \
-           \On a terminal synapse asks [y/N] and makes that call; with no terminal it prints the \
-           \command and exits 10; --yes before the service name confirms when every field has a default.")
+    flagText = flagLabel ir
 
     optionRows p = hangAt flagCol ("  " <> flagText p) (descOf p ++ extras p)
     serverRows p = hangAt flagCol ("  " <> pdName p) ["\x2190 " <> sourceLabel p]

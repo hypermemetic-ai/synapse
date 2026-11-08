@@ -102,7 +102,7 @@ method :: Text -> Text -> Text -> MethodDef
 method ns name desc = MethodDef
   { mdName = name, mdFullPath = ns <> "." <> name, mdNamespace = ns
   , mdDescription = Just desc, mdParams = []
-  , mdReturns = RefUnknown, mdError = Nothing, mdProgress = Nothing, mdCardinality = CardinalityOne, mdAsks = False
+  , mdReturns = RefUnknown, mdError = Nothing, mdProgress = Nothing, mdCardinality = CardinalityOne
   , mdRole = MethodRoleRpc
   , mdGrant = Nothing, mdTarget = Nothing, mdLongDescription = Nothing
   , mdInjected = [], mdInput = Nothing

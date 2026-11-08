@@ -52,7 +52,6 @@ fixture = PluginSchema
       , methodError         = Nothing
       , methodProgress      = Nothing
       , methodCardinality   = Plexus.Schema.Recursive.CardinalityOne
-      , methodAsks = False
       , methodHttpMethod    = "POST"
       , methodDeprecation   = Nothing
       , methodParamSchemas  = Nothing

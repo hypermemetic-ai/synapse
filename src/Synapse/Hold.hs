@@ -534,10 +534,8 @@ heldCount mux = sum . map length . Map.elems <$> readMVar (muxUps mux)
 -- would drop it. 5 was VISION-7's unmerged question routing (a
 -- @{ns}.respond@ sent on the asking connection), never released and never
 -- reused; 6 is 4 with bidir gone (ASK-3): its items are plexus-protocol
--- 0.7's, with no @request@ item, and nothing about it routes an answer — a
--- proposal (ASK-1's @needs_input@) is an ordinary item, and its answer an
--- ordinary call. A 4 or 5 holder is never reused by a 6 run, nor the
--- reverse.
+-- 0.7's, with no @request@ item, and nothing about it routes an answer. A
+-- 4 or 5 holder is never reused by a 6 run, nor the reverse.
 holdProtocol :: Int
 holdProtocol = 6
 

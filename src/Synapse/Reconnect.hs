@@ -29,8 +29,7 @@
 -- callbacks raise is marked where it is raised, and the call ends there,
 -- never retried. Those callbacks are the caller's side of the call: the
 -- printer (each item, the @-j@ reconnected line, the stderr lines). A
--- proposal (ASK-1's @needs_input@) is answered after its call ended, by a
--- call of its own. A closed stdout (or stderr) exits
+-- closed stdout (or stderr) exits
 -- 'exitOutputClosed' (141, what a shell says of a filter the pipe closed
 -- on) saying nothing, with the stream unsubscribed and the socket closed
 -- as the transport unwinds; any other failure there is reported as
@@ -148,11 +147,11 @@ data CallShape = CallShape
 
 -- | A method's shape from its schema: a read when its group says @read@
 -- (menger's methods do), else when its name is a read's; anything else —
--- and any method that asks (ASK-1) — is a write, never sent twice.
+-- is a write, never sent twice.
 callShape :: MethodSchema -> CallShape
 callShape m = CallShape
   { csStream = methodCardinality m == CardinalityMany
-  , csRead   = not (methodAsks m) && isRead
+  , csRead   = isRead
   , csSince  = takesSince (methodParams m)
   }
   where

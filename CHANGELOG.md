@@ -6,19 +6,14 @@ Everything since 3.17.3 (3.17.4 was never published; its change is listed here).
 
 ### Breaking
 
-- **bidir is gone; a method that asks proposes (ASK-1, ASK-3).**
-  `--bidir-mode`, `--bidir-cmd`, `--bidir-respond`, the `respond`
-  subcommand and `Synapse.Bidir` are removed, with spec/08's `request` item
-  and `{ns}.respond` (plexus-protocol 0.7). A call that yields a
-  `needs_input` proposal is answered by the same call with its fields and
-  `confirm`: on a terminal by asking `[y/N]` (a prompt per field), with
-  `--yes` (new global option) by the fields' defaults, and with neither by
-  printing the proposal and the command that confirms it, **exit 10** (`-o`
-  FILE keeps the proposal). `--help` on a method that asks lists `--confirm
-  TOKEN`; the IR's `mdBidirType` / `mdBidirResponseType` /
-  `mdBidirResponseSchema` give way to `mdAsks` (written when true; an older
-  IR's are read past), and a method that asks gets a `confirm` param.
-  Requires `plexus-protocol >= 0.7`.
+- **bidir is gone (ASK-1, ASK-3).** `--bidir-mode`, `--bidir-cmd`,
+  `--bidir-respond`, the `respond` subcommand and `Synapse.Bidir` are
+  removed, with spec/08's `request` item and `{ns}.respond`
+  (plexus-protocol 0.7). Nothing replaces them: synapse has no in-call or
+  protocol-wide confirmation, and an item a service names `needs_input` is
+  printed like any other. IR 3.1 is 3.0 without `mdBidirType` /
+  `mdBidirResponseType` / `mdBidirResponseSchema` (an older IR's are read
+  past). Requires `plexus-protocol >= 0.7`.
 
 - **IR 3.0, on the plexus 0.7 schema.** Requires `plexus-protocol >= 0.6`.
   A method's `returns`, `error`, `progress` and `cardinality` are read from
