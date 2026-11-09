@@ -106,6 +106,7 @@ main = hspec $ do
             MethodRoleDynamicChild
               { listMethod   = Just "planet_names"
               , searchMethod = Nothing
+              , childSchema  = Nothing
               }
 
     it "decodes StaticChild" $ do
@@ -130,6 +131,7 @@ main = hspec $ do
       let role = MethodRoleDynamicChild
             { listMethod   = Just "planet_names"
             , searchMethod = Nothing
+            , childSchema  = Nothing
             }
           encoded = Aeson.toJSON role
       case encoded of
@@ -151,6 +153,7 @@ main = hspec $ do
             { mdRole = MethodRoleDynamicChild
                 { listMethod   = Just "planet_names"
                 , searchMethod = Nothing
+                , childSchema  = Nothing
                 }
             }
           encoded = Aeson.toJSON md
@@ -169,6 +172,7 @@ main = hspec $ do
             { mdRole = MethodRoleDynamicChild
                 { listMethod   = Just "planet_names"
                 , searchMethod = Just "search_planets"
+                , childSchema  = Nothing
                 }
             }
       case eitherDecode (encode original) :: Either String MethodDef of

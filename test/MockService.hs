@@ -570,6 +570,8 @@ remoteError m extra
       [ "kind" .= ("method_not_found" :: Text), "activation" .= T.dropEnd 1 a, "method" .= dm ]
   | Just a <- T.stripPrefix "Activation not found: " m = object
       [ "kind" .= ("activation_not_found" :: Text), "activation" .= a ]
+  | lookup "error_kind" extra == Just (String "not_found") = object
+      [ "kind" .= ("not_found" :: Text), "name" .= m ]
   | otherwise = object [ "kind" .= ("execution" :: Text), "message" .= m ]
   where
     field k = maybe (String "") id (lookup k extra)
@@ -598,6 +600,12 @@ callMethod sc signedIn inner args dat err = do
  override <- readIORef schemaOverride
  let ns = if inner == "menger.schema" then "" else T.dropEnd (T.length ".schema") inner
  case override >>= lookup ns of
+  -- SYNAPSE-41: a schema the override says is refused, or (as a slot
+  -- answers an unknown name: plexus-core's PeerError) not there
+  Just (String "forbidden") | ".schema" `T.isSuffixOf` inner ->
+    err ("needs `" <> inner <> "`") [("error_kind", "forbidden"), ("grant", String inner), ("scope", "*")]
+  Just (String "not_found") | ".schema" `T.isSuffixOf` inner ->
+    err ("no peer named `" <> ns <> "`") [("error_kind", "not_found")]
   Just v | ".schema" `T.isSuffixOf` inner -> dat inner v
   _ -> callMethod' sc signedIn inner args dat err
 
