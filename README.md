@@ -202,7 +202,7 @@ CA (a throwaway proxy, `caddy … tls internal`), pass its root with `--cacert`.
 
 **Everything rides the same address**: the `_info` probe, calls, streams and
 their reconnects (SYNAPSE-20 — the outage line names the URL), `-s`, `-i`,
-`_find`, bidirectional requests and their `respond`, `_login` / `_logout` and the
+`_find`, `_login` / `_logout` and the
 session every later call carries. The upgrade's `Host` is the host alone on 443
 (`host:port` otherwise). A registry lists plain `ws://HOST:PORT` backends, so an
 address behind TLS or on a path is never auto-registered: name it each time,
@@ -351,7 +351,7 @@ Once synapse has found the method, it reads each flag by its parameter's type:
 | `--body VALUE` | the next argument is the value, whatever it begins with: `---`, `--force`, `-5`, `--`, or nothing (`''`) |
 | `--body=VALUE` | everything after the first `=`, which may be empty or contain `=` |
 | `--body @body.md` | the file's contents, UTF-8, exactly as they are (3.14.8, SYNAPSE-10): no argument carries the value, so a body may be as large as the backend accepts; `~/` and a relative path resolve as the shell's would; a file that cannot be read is a refusal naming the flag and the path |
-| `--body -` | standard input, read once however many values ask for it; it cannot be combined with `--bidir-mode json`, which reads stdin too |
+| `--body -` | standard input, read once however many values ask for it |
 | `--handle @@alice` | the text `@alice`: one `@` is dropped, so a value that really begins with `@` can still be sent |
 | `--summary` (a boolean) | `true`; it takes the next argument only when that is `true` or `false` (or `1`, `0`), so `--summary --limit 3` is two flags |
 | `--summary=false` | `false` |
@@ -538,11 +538,9 @@ synapse -P 4455 --output /tmp/t.txt menger tickets get --id MENGER-12
 - A stream (`watch`) has no end: its items are appended to FILE and flushed
   as each comes. A stream that fails keeps what it wrote.
 - A write's answer is written whole, whoever reads it.
-- What must be seen while the call waits goes to **stderr**, not FILE: a
-  two-way request (the interactive prompt, `--bidir-mode json`'s and
-  `respond`'s request lines — the answer still goes to FILE), and under
-  `-j` an error or a refusal (its `-j` line goes with the failed run's FILE,
-  so a refused call says why on stderr and exits 77).
+- Under `-j` an error or a refusal goes to **stderr**, not FILE (its `-j`
+  line goes with the failed run's FILE, so a refused call says why on stderr
+  and exits 77).
 - `-o -` is stdout. A FILE that cannot be made (no such directory, a
   directory) is said on stderr and the run **exits 73** before anything is
   sent; a write to it that fails later (a full disk, a file size limit) is
@@ -575,7 +573,7 @@ network blip — for **ten minutes** by default.
 
 - **A read is sent again; a write is not.** A method is a read when its
   schema's `group` is `read` (else when its name is a read's: `get`, `list`,
-  `watch`, …); anything else, and anything bidirectional, is a write. A
+  `watch`, …); anything else is a write. A
   write whose request went out before the connection was lost may have
   happened, so synapse says so and **exits 75** (`connection to … lost
   before an answer — the write may have happened; check before sending it
@@ -644,7 +642,7 @@ Two things make it so:
 - **A connection held between runs**, as ssh's ControlMaster holds one. The
   first call starts a holder (`synapse _hold`, a process of synapse's own)
   that keeps the signed-in WebSocket open and listens on a unix socket:
-  `$XDG_RUNTIME_DIR/synapse/holder-4.sock` (0600, in a 0700 directory of
+  `$XDG_RUNTIME_DIR/synapse/holder-6.sock` (0600, in a 0700 directory of
   yours). Later runs hand it their requests and read the replies back, so
   the TCP, TLS and upgrade handshakes (about 0.3 s to a hosted service) are
   paid once. Since 3.17.4 it is **one holder for all your calls**
@@ -703,7 +701,7 @@ living its 10 idle minutes after its server had gone; a test loop calling
 throwaway servers on fresh ports left one per port, 1,634 of them (24.9 GB)
 on 2026-11-02. Now one process holds every connection your runs keep,
 however many services and agents you call — `synapse _hold`, at
-`$XDG_RUNTIME_DIR/synapse/holder-4.sock` — and inside it a connection per
+`$XDG_RUNTIME_DIR/synapse/holder-6.sock` — and inside it a connection per
 address, agent and credential. A call as one agent never rides another
 agent's connection, even when neither carries a credential; a session made
 again from the key is a connection beside the old one, which closes once
@@ -815,16 +813,17 @@ Synapse emits a structured Intermediate Representation for building typed client
 $ synapse --emit-ir <backend> conformance > conformance.ir.json
 ```
 
-IR 3.0 (plexus 0.7) carries each method's contract as its schema states it:
-its item type (`mdReturns`), its error type when it can say no (`mdError`),
-its progress type when it reports progress (`mdProgress`), and whether it
-yields one item or many (`mdCardinality`). An excerpt of RETURNS-7's
+IR 3.1 (plexus 0.7; 3.1 is 3.0 without the bidir keys, ASK-1) carries each
+method's contract as its schema states it: its item type (`mdReturns`), its
+error type when it can say no (`mdError`), its progress type when it reports
+progress (`mdProgress`), and whether it yields one item or many
+(`mdCardinality`); 3.0's `mdBidir*` are gone and read past. An excerpt of RETURNS-7's
 conformance fixture, whose whole IR is
 `plexus-macros/fixtures/conformance/expected/ir.json`:
 
 ```json
 {
-  "irVersion": "3.0",
+  "irVersion": "3.1",
   "irTypes": {
     "conformance.Loaded": {
       "tdKind": {"tag": "KindStruct", "ksFields": [

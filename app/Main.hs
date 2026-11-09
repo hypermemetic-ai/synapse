@@ -76,8 +76,6 @@ import qualified Data.Map.Strict as Map
 import qualified Synapse.CLI.Template as TemplateIR
 import Synapse.Deprecation (emitActivationWarning, emitMethodWarning)
 import Synapse.Transport
-import Synapse.Bidir (BidirMode(..), parseBidirMode, detectBidirMode, handleBidirRequest)
-import Plexus.Types (Response(..))
 import Synapse.CLI.Transform (TransformEnv(..), mkTransformEnv, transformParams, defaultTransformers, injectBooleanDefaults, injectSmartDefaults)
 import Synapse.CLI.Source (SourceEnv, mkSourceEnv, expandSources, expandValue, stdinWasRead, renderSourceError)
 import Synapse.IR.Builder (buildIR)
@@ -131,8 +129,6 @@ data SynapseOpts = SynapseOpts
   , soParams        :: Maybe Text    -- ^ JSON params via -p
   , soRpc           :: Maybe Text    -- ^ Raw JSON-RPC passthrough
   , soGeneratorInfo :: [Text]        -- ^ Generator tool info (tool:version pairs)
-  , soBidirMode     :: Maybe Text    -- ^ Bidirectional mode override
-  , soBidirCmd      :: Maybe Text    -- ^ Bidirectional subprocess command (--bidir-cmd)
   , soNoCache       :: Bool          -- ^ Disable IR caching
   , soLogLevel      :: Maybe Text    -- ^ Log level: info, debug, trace
   , soLogSubsystems :: [Text]        -- ^ Filter logs by subsystems (empty = all)
@@ -1156,12 +1152,8 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
           sourcedParams <- if helpRequested then pure rawParams else keepStreamFlags rawParams
           inlineParams <- liftIO $ transformParams transformEnv defaultTransformers sourcedParams
 
-          -- Mode 1.5: Respond subcommand (agent sends a response to a pending bidir request)
-          if not (null pathSegs) && head pathSegs == "respond"
-            then expandStreamFlags sourcedParams >>= handleRespondCommand
-
           -- Mode 2: Schema request
-          else if soSchema
+          if soSchema
             then do
               -- Try to navigate and determine if last segment is a method
               schemaResult <- fetchSchemaForPath pathSegs
@@ -1496,18 +1488,6 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
             }
       liftIO $ TIO.putStr (renderAnonymousPage page)
 
-    handleRespondCommand :: [(Text, Text)] -> SynapseM ()
-    handleRespondCommand params = do
-      let mRequestId = lookup "request_id" params
-          mResponseStr = lookup "response" params
-      case (mRequestId, mResponseStr) of
-        (Nothing, _) -> throwParse "Missing --request-id for respond subcommand"
-        (_, Nothing) -> throwParse "Missing --response for respond subcommand"
-        (Just requestId, Just responseStr) ->
-          case eitherDecode (LBS.fromStrict $ TE.encodeUtf8 responseStr) of
-            Left err -> throwParse $ "Invalid --response JSON: " <> T.pack err
-            Right (resp :: Response Value) -> sendResponse requestId resp
-
     -- BIDIR-18: what an input call reads and how: the flag's name, the
     -- item's kind, the chunk, --progress, the source. No stream named is
     -- refused before anything is sent, naming the flag.
@@ -1535,22 +1515,9 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
       let methodName' = last path
       -- Set method path hint for template resolution
       let rendererCfg' = withMethodPath rendererCfg path
-      -- Determine bidirectional mode (--bidir-cmd takes precedence)
-      bidirMode <- liftIO $ case soBidirCmd of
-        Just cmd -> pure $ BidirCmd cmd
-        Nothing  -> case soBidirMode of
-          Just modeStr -> case parseBidirMode modeStr of
-            Just mode -> pure mode
-            Nothing -> do
-              TIO.hPutStrLn stderr $ "[synapse] Unknown --bidir-mode: " <> modeStr <> ", using auto-detect"
-              detectBidirMode
-          Nothing -> detectBidirMode
-      -- SYNAPSE-10: a value read from stdin (-) has taken it; the JSON
-      -- bidirectional mode reads stdin too, and the two cannot share
+      -- SYNAPSE-10: a value read from stdin (-) has taken it; an input
+      -- stream cannot read it too
       stdinTaken <- liftIO $ stdinWasRead srcEnv
-      case bidirMode of
-        BidirJson | stdinTaken -> throwParse "a value was read from stdin (-), so --bidir-mode json cannot read it too; answer the backend's requests with --bidir-cmd, or use a file (@FILE) for the value"
-        _ -> pure ()
       -- IDENTITY-43: while the stored session could still be made again,
       -- a "you have signed out" answered before anything else is held back
       -- for 'run' to log in again and retry.
@@ -1619,16 +1586,8 @@ dispatch Args{argOpts = soOpts@SynapseOpts{..}, argBackend, argPath, argFind} re
         invokeWithInput (Reconnect.callShape method) refreshAuth kind chunk progress src
           namespacePath methodName' params printer'
        Nothing ->
-        -- Use bidirectional streaming handler
-        invokeStreamingWithBidir
-        (Reconnect.callShape method)
-        refreshAuth
-        resumed
-        namespacePath
-        methodName'
-        params
-        printer
-        (handleBidirRequest bidirMode Nothing)
+        invokeStreamingCall (Reconnect.callShape method) refreshAuth resumed
+          namespacePath methodName' params printer
 
     endedMessage item = case item of
       ServiceData _ _ _ (Object o) | Just (String m) <- KM.lookup "message" o -> m
@@ -1788,13 +1747,17 @@ metaCommands =
       , ""
       , "A connection held between runs (SYNAPSE-28, SYNAPSE-40):"
       , "  the first call starts the holder, one process for all your calls"
-      , "  ($XDG_RUNTIME_DIR/synapse/holder-4.sock), which keeps a signed-in socket per"
+      , "  ($XDG_RUNTIME_DIR/synapse/holder-6.sock), which keeps a signed-in socket per"
       , "  address and agent; later calls cost one round trip. A socket whose server is"
       , "  gone is let go at once, one idle for --hold-for (10m) closed, past 256 the"
       , "  longest idle first; the holder exits when it has held nothing for --hold-for."
       , "  --no-hold dials a connection of the run's own; synapse _hold status says what"
       , "  is held. A call is sent from the schema cache (~/.cache/synapse/schemas-4) and"
       , "  checked against the server only when it fails"
+      , ""
+      , "Exit codes: 69 unreachable for the whole window, 75 a write may have"
+      , "  happened, 77 refused, 73 / 74 -o FILE could not be made / written, 141"
+      , "  stdout's reader closed the pipe"
       , ""
       , "Meta-commands:"
       , ""
@@ -2170,12 +2133,6 @@ optsParser = do
   soGeneratorInfo <- many $ T.pack <$> strOption
     ( long "generator-info" <> metavar "TOOL:VERSION"
    <> help "Generator tool version info (can be specified multiple times)" )
-  soBidirMode <- optional $ T.pack <$> strOption
-    ( long "bidir-mode" <> short 'b' <> metavar "MODE"
-   <> help "Bidirectional mode: interactive (TTY), json (pipe protocol), auto-cancel, defaults, respond" )
-  soBidirCmd <- optional $ T.pack <$> strOption
-    ( long "bidir-cmd" <> metavar "CMD"
-   <> help "Shell command to handle bidir requests (stdin=JSON request, stdout=JSON response)" )
   soNoCache <- switch
     ( long "no-cache"
    <> help "Disable IR caching (force rebuild from schema)" )

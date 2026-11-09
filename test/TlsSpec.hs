@@ -15,7 +15,8 @@ module Main (main) where
 import Control.Concurrent (forkIO, killThread)
 import Control.Exception (SomeException, bracket, finally, try)
 import Control.Monad (forever, void)
-import Data.Aeson (Value(..), decodeStrict, object)
+import Data.Aeson (Value(..), decodeStrict, object, (.=))
+import Data.Text (Text)
 import qualified Data.Aeson.KeyMap as KM
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base64.URL as B64U
@@ -42,9 +43,8 @@ import qualified Synapse.Identity.Session as Session
 import qualified Synapse.Log as Log
 import Synapse.Monad (initEnvAt, runSynapseM)
 import Synapse.Schema.Types (pattern ServiceData)
-import Synapse.Transport (invoke, invokeStreamingWithBidir)
+import Synapse.Transport (invoke, invokeStreamingCall)
 import Synapse.Reconnect (CallShape(..))
-import Plexus.Types (Response(..))
 
 main :: IO ()
 main = do
@@ -160,25 +160,25 @@ specs = do
         proofs `shouldSatisfy` (not . null)
         mapM_ (\p -> KM.lookup "aud" p `shouldBe` Just (String ("wss://localhost:" <> T.pack (show port)))) proofs
 
-    it "carries a bidirectional request and its answer (respond goes over wss too)" $ \pki ->
+    -- ASK-1: a write is an ordinary call; the call after it another, both
+    -- through TLS at the path
+    it "carries a write and the call after it (two calls, both over wss)" $ \pki ->
       withMockService todaysService $ \service -> withTerminator pki service $ \port heads -> do
         lg <- logger
         env <- initEnvAt (Endpoint "localhost" port True "/ws" [pkiCa pki]) "menger" lg Nothing
         seen <- newIORef []
-        asked <- newIORef []
-        r <- runSynapseM env $ invokeStreamingWithBidir
-          (CallShape { csStream = False, csRead = False, csSince = False })
-          (pure Nothing) (const (pure ())) ["tickets"] "ask" (object [])
-          (\i -> modifyIORef' seen (++ [i]))
-          (\rid _ -> modifyIORef' asked (++ [rid]) >> pure (Just (Confirmed True :: Response Value)))
-        r `shouldSatisfy` either (const False) (const True)
-        readIORef asked `shouldReturn` ["req-1"]
+        let shape = CallShape { csStream = False, csRead = False, csSince = False }
+            call m ps = runSynapseM env $ invokeStreamingCall shape (pure Nothing) (const (pure ()))
+              ["tickets"] m ps (\i -> modifyIORef' seen (++ [i]))
+        call "set_status" (object ["id" .= ("MENGER-12" :: Text), "status" .= ("Ready" :: Text)])
+          >>= (`shouldSatisfy` either (const False) (const True))
+        call "get" (object ["id" .= ("MENGER-12" :: Text)])
+          >>= (`shouldSatisfy` either (const False) (const True))
         items <- readIORef seen
-        [v | ServiceData _ _ _ (Object v) <- items, KM.lookup "type" v == Just (String "answered")]
-          `shouldBe` [KM.fromList [("type", String "answered"), ("response", object [("type", String "confirmed"), ("value", Bool True)])]]
-        -- the call and the respond: two upgrades, both through TLS at the path
+        [ t | ServiceData _ _ _ (Object v) <- items, Just (String t) <- [KM.lookup "type" v] ]
+          `shouldBe` ["status_changed", "ticket"]
         hs <- readIORef heads
-        length (filter (BS.isPrefixOf "GET /ws HTTP/1.1") hs) `shouldSatisfy` (>= 2)
+        length (filter (BS.isPrefixOf "GET /ws HTTP/1.1") hs) `shouldSatisfy` (>= 1)
 
   describe "refusing what it cannot verify" $ do
     it "refuses a certificate the trust store does not vouch for — nothing is sent" $ \pki ->

@@ -43,7 +43,6 @@ data Subsystem
   | SubsystemNavigation
   | SubsystemRendering
   | SubsystemCLI
-  | SubsystemBidir
   deriving (Show, Eq)
 
 -- | Logger handle
@@ -63,7 +62,6 @@ subsystemToNamespace SubsystemCache      = "cache"
 subsystemToNamespace SubsystemNavigation = "navigation"
 subsystemToNamespace SubsystemRendering  = "rendering"
 subsystemToNamespace SubsystemCLI        = "cli"
-subsystemToNamespace SubsystemBidir      = "bidir"
 
 -- | Create a logger with specified minimum severity
 -- Default: ErrorS (only show errors)

@@ -128,7 +128,6 @@ parseMessage (Object o) = do
                 String "progress" -> Just StreamProgressMsg
                 String "error" -> Just StreamErrorMsg
                 String "guidance" -> Just StreamGuidanceMsg
-                String "request" -> Just StreamRequestMsg
                 _ -> Just UnknownMsg
             _ -> Just UnknownMsg
 
@@ -144,7 +143,6 @@ data MessageType
   | StreamProgressMsg
   | StreamErrorMsg
   | StreamGuidanceMsg
-  | StreamRequestMsg
   | UnknownMsg
   deriving (Show, Eq)
 

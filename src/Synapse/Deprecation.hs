@@ -28,7 +28,7 @@
 -- The dedupe 'IORef' is a top-level, 'NOINLINE' global because "per session"
 -- in the ticket means "per process lifetime". Embedding the set in
 -- 'Synapse.Monad.SynapseEnv' would also work but would force every call site
--- that currently runs in 'IO' (e.g. bidir callbacks) to thread the env around.
+-- that currently runs in 'IO' (e.g. stream callbacks) to thread the env around.
 -- The IORef approach keeps the API callable from plain 'IO'.
 module Synapse.Deprecation
   ( -- * Emission
@@ -74,7 +74,7 @@ warnedKeys = unsafePerformIO (newIORef Set.empty)
 --   the key was already present (caller must stay silent).
 --
 --   'atomicModifyIORef'' makes this safe under the IO concurrency we care
---   about here (streaming RPC callback threads, bidir handlers). There is
+--   about here (streaming RPC callback threads). There is
 --   no correctness problem if two threads lose the race and both see the
 --   key as "already present" — the semantics we promise are "fires at
 --   least once per session", and 'atomicModifyIORef'' gives us exactly

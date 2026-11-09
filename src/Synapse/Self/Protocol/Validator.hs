@@ -124,20 +124,21 @@ validateType obj = case KM.lookup "type" obj of
         { pvMessage = "Missing 'type' field in stream item"
         , pvSeverity = Error
         , pvLocation = InConnection
-        , pvExpected = Just "type field with value: data, error, progress, done, or request"
+        , pvExpected = Just "type field with value: data, error, progress or done"
         , pvActual = Just "missing"
         , pvFix = Just "Add 'type' field to stream item"
         }
     ]
   Just (String typeStr) ->
-    if typeStr `elem` ["data", "error", "progress", "done", "request"]
+    -- ASK-3: spec/08's request item is gone with bidir (ASK-1)
+    if typeStr `elem` ["data", "error", "progress", "done"]
       then []
       else
         [ ProtocolViolation
             { pvMessage = "Invalid stream item type: " <> typeStr
             , pvSeverity = Error
             , pvLocation = InConnection
-            , pvExpected = Just "data, error, progress, done, or request"
+            , pvExpected = Just "data, error, progress or done"
             , pvActual = Just typeStr
             , pvFix = Just "Use one of the valid stream item types"
             }
@@ -166,12 +167,9 @@ validateType obj = case KM.lookup "type" obj of
 validateMetadata :: Value -> [ProtocolViolation]
 validateMetadata (Object obj) =
   -- Check if this item type should have metadata
-  case KM.lookup "type" obj of
-    Just (String "request") ->
-      -- Request items don't require metadata
-      []
+  -- Every item carries metadata
+  case () of
     _ ->
-      -- All other types require metadata
       case KM.lookup "metadata" obj of
         Nothing ->
           [ ProtocolViolation
@@ -411,7 +409,6 @@ validateByType obj = case KM.lookup "type" obj of
   Just (String "progress") -> validateProgressItem (Object obj)
   Just (String "error") -> validateErrorItem (Object obj)
   Just (String "done") -> validateDoneItem (Object obj)
-  Just (String "request") -> []  -- Request validation could be added
   _ -> []
 
 -- | Validate data item structure

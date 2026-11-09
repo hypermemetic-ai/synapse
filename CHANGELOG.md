@@ -6,6 +6,15 @@ Everything since 3.17.3 (3.17.4 was never published; its change is listed here).
 
 ### Breaking
 
+- **bidir is gone (ASK-1, ASK-3).** `--bidir-mode`, `--bidir-cmd`,
+  `--bidir-respond`, the `respond` subcommand and `Synapse.Bidir` are
+  removed, with spec/08's `request` item and `{ns}.respond`
+  (plexus-protocol 0.7). Nothing replaces them: synapse has no in-call or
+  protocol-wide confirmation, and an item a service names `needs_input` is
+  printed like any other. IR 3.1 is 3.0 without `mdBidirType` /
+  `mdBidirResponseType` / `mdBidirResponseSchema` (an older IR's are read
+  past). Requires `plexus-protocol >= 0.7`.
+
 - **IR 3.0, on the plexus 0.7 schema.** Requires `plexus-protocol >= 0.6`.
   A method's `returns`, `error`, `progress` and `cardinality` are read from
   its schema, never guessed; servers on the published 0.7.0 line are still
@@ -13,10 +22,12 @@ Everything since 3.17.3 (3.17.4 was never published; its change is listed here).
   collision (two types under one title) refuses that activation by name
   (`-i` exits 65 and says what was left out) instead of failing the whole
   walk.
-- **Holder protocol 4.** The connection holder's socket is
-  `$XDG_RUNTIME_DIR/synapse/holder-4.sock`. A 4.0 run never uses or
-  replaces a 3.x holder (`holder-2.sock`), nor the reverse; the two run
-  side by side.
+- **Holder protocol 6.** The connection holder's socket is
+  `$XDG_RUNTIME_DIR/synapse/holder-6.sock` (4 carried the input half; 5 was
+  VISION-7's unmerged question routing, never reused; 6 relays plexus-protocol
+  0.7's items, with no `request` item, and routes nothing). A run never uses
+  or replaces a holder of another protocol (3.x's `holder-2.sock`, an earlier
+  4.0's `holder-4.sock`), nor the reverse; they run side by side.
 - **Schema cache moved** to `$XDG_CACHE_HOME/synapse/schemas-4`
   (`~/.cache/synapse/schemas-4`). 3.x's `schemas` directory is never read,
   so a 4.0 run and a rolled-back 3.x never share an entry. The first 4.0

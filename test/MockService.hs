@@ -55,8 +55,6 @@ module MockService
   ) where
 
 import Control.Concurrent (forkIO, threadDelay)
-import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, tryPutMVar, tryTakeMVar)
-import System.Timeout (timeout)
 import Control.Exception (SomeException, bracket, finally, try)
 import Control.Monad (forever, void)
 import Data.Aeson
@@ -439,10 +437,6 @@ handleCall sc c next inputs signedIn _o rid method params = do
                     Right () -> threadDelay 100000 >> tick (n + 1)
           tick 0
           atomicModifyIORef' floodsEnded (\n -> (n + 1, ()))
-        -- waits for its answer off the connection's loop, as a real service
-        -- runs calls side by side (SYNAPSE-28: the answer may come on this
-        -- very connection)
-        "tickets.ask" -> void $ forkIO (askBack emit meta dat err >> done)
         -- SYNAPSE-28: a stream that never ends by itself (until unsubscribed)
         "tickets.watch" -> dat "tickets.watch" (object ["type" .= ("watching" :: Text)])
         -- BIDIR-18: a method with an input half: credit at once, then the
@@ -465,10 +459,6 @@ handleCall sc c next inputs signedIn _o rid method params = do
         "tickets.schema" | renamed, scView sc /= AnonymousView, not (scCatalog sc) ->
           dat "tickets.schema" (renameGet (ticketsSchema sc)) >> done
         _ -> callMethod sc signedIn inner args dat err >> done
-    -- SCAFFOLD-21: a bidirectional answer, on a connection of its own
-    "menger.respond" -> do
-      void (tryPutMVar responses (KM.lookup "response_data" params))
-      done
     _ -> err ("Invalid method format: " <> method) [] >> done
   where
     send :: Value -> IO ()
@@ -590,26 +580,6 @@ code070 m extra
   | lookup "error_kind" extra == Just (String "forbidden") = "-32003"
   | "not found" `T.isInfixOf` m = "-32601"
   | otherwise = "-32000"
-
--- | SCAFFOLD-21: the answers to 'askBack's requests (@menger.respond@'s
--- @response_data@), as they arrive on any connection.
-{-# NOINLINE responses #-}
-responses :: MVar (Maybe Value)
-responses = unsafePerformIO newEmptyMVar
-
--- | A bidirectional method (@tickets.ask@): it asks the caller to confirm
--- (a @request@ item), waits up to 5 s for @menger.respond@, and answers
--- with what came back.
-askBack :: (Value -> IO ()) -> Value -> (Text -> Value -> IO ()) -> (Text -> [(K.Key, Value)] -> IO ()) -> IO ()
-askBack emit meta dat err = do
-  _ <- tryTakeMVar responses
-  emit (object
-    [ "type" .= ("request" :: Text), "metadata" .= meta, "request_id" .= ("req-1" :: Text)
-    , "request" .= object ["type" .= ("confirm" :: Text), "message" .= ("go on?" :: Text)] ])
-  got <- timeout 5000000 (takeMVar responses)
-  case got of
-    Just (Just r) -> dat "tickets.ask" (object ["type" .= ("answered" :: Text), "response" .= r])
-    _ -> err "no response to req-1" []
 
 infoFor :: Scenario -> Value
 infoFor sc = case scView sc of

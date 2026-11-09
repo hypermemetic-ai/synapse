@@ -36,14 +36,6 @@ module Synapse.Schema.Types
   , jsonLine
   , pattern ServiceDone
   , pattern ServiceGuidance
-  , pattern ServiceRequest
-
-    -- * Bidirectional Types (re-exported)
-  , Request(..)
-  , StandardRequest
-  , Response(..)
-  , StandardResponse
-  , SelectOption(..)
   ) where
 
 import Data.Aeson (Value(..), encode, object, toJSON, (.=))
@@ -75,11 +67,6 @@ import Plexus.Types
   , Provenance
   , GuidanceErrorType
   , GuidanceSuggestion
-  , Request(..)
-  , StandardRequest
-  , Response(..)
-  , StandardResponse
-  , SelectOption(..)
   , StreamMetadata(..)
   , itemErrorMessage
   )
@@ -186,6 +173,3 @@ pattern ServiceDone hash prov = StreamDone hash prov
 pattern ServiceGuidance :: Text -> Provenance -> GuidanceErrorType -> GuidanceSuggestion -> Maybe [Text] -> Maybe Value -> ServiceStreamItem
 pattern ServiceGuidance hash prov errType suggestion methods schema = StreamGuidance hash prov errType suggestion methods schema
 
--- | Pattern synonym for bidirectional request events
-pattern ServiceRequest :: Text -> Provenance -> Text -> Request Value -> Maybe Int -> ServiceStreamItem
-pattern ServiceRequest hash prov reqId reqData timeout = StreamRequest hash prov reqId reqData timeout

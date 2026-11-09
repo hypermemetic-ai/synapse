@@ -26,16 +26,13 @@
 -- at once, past the runtime's last flush, which would fail on what is left
 -- in stdout's buffer and make the exit 1.
 --
--- What must be seen while the call waits goes to stderr under @-o@, not
--- FILE: a two-way request's prompt ('promptHandle'), and under @-j@ an error
--- or a refusal — FILE goes with the failed run, so its line alone would be
--- lost. A SIGTERM or SIGHUP ends the run as a failed one (143, 129): the
+-- Under @-o@ with @-j@ an error or a refusal goes to stderr, not FILE:
+-- FILE goes with the failed run, so its line alone would be lost. A SIGTERM or SIGHUP ends the run as a failed one (143, 129): the
 -- temporary file is removed. A SIGKILL can leave it behind.
 module Synapse.Output
   ( withOutputFile
   , streaming
   , active
-  , promptHandle
   , exitCannotCreate
   , exitCannotWrite
   ) where
@@ -147,13 +144,6 @@ finish out code = do
 -- | Whether @-o FILE@ holds stdout.
 active :: IO Bool
 active = maybe False (const True) <$> readIORef current
-
--- | Where a prompt goes that must be seen while the call waits: stderr
--- under @-o@ (stdout is FILE), else stdout.
-promptHandle :: IO Handle
-promptHandle = do
-  a <- active
-  pure (if a then stderr else stdout)
 
 -- | The call is a stream: FILE is its temporary file from now on, each
 -- item in it as it is printed.

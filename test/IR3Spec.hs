@@ -203,8 +203,8 @@ goldenSpec schemaPath irPath ir golden = describe "golden: the conformance fixtu
   it "expected/ir.json decodes back to the same IR" $
     eitherDecode golden `shouldBe` Right ir
 
-  it "is IR 3.0" $
-    irVersion ir `shouldBe` "3.0"
+  it "is IR 3.1 (ASK-1: 3.0 without the bidir keys)" $
+    irVersion ir `shouldBe` "3.1"
 
   it "has every method of the schema, keyed by full path" $
     Map.keys (irMethods ir) `shouldBe`

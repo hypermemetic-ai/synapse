@@ -18,11 +18,8 @@ module Synapse.Transport
 
     -- * Method Invocation (streaming)
   , invokeStreaming
-  , invokeStreamingWithBidir
+  , invokeStreamingCall
   , invokeWithInput
-
-    -- * Bidirectional Response
-  , sendResponse
 
     -- * Upgrade headers (IDENTITY-16: discovery probes carry them too)
   , mergeUpgradeHeaders
@@ -347,35 +344,21 @@ invokeStreaming namespacePath method params onItem = do
     getPort (PT.ConnectionTimeout _ p) _ = p
     getPort _ c = substratePort c
 
--- | Invoke a method with streaming output and bidirectional request handling
--- When a StreamRequest is received, the bidirectional handler is called and
--- the response is sent back via {backend}.respond (if the handler returns Just).
--- If the handler returns Nothing (BidirRespond mode), no response is sent immediately.
-invokeStreamingWithBidir
+-- | Invoke a method, each item to the handler as it comes, through an
+-- outage as its shape says (SYNAPSE-20).
+invokeStreamingCall
   :: R.CallShape                                           -- ^ SYNAPSE-20: how it rides out an outage
   -> IO (Maybe WS.Headers)                                 -- ^ SYNAPSE-20: sign in again; the upgrade's new headers
   -> (R.Resumed -> IO ())                                  -- ^ told when a stream resumed after a gap
   -> Path
   -> Text
   -> Value
-  -> (ServiceStreamItem -> IO ())                              -- ^ Handler for non-request items
-  -> (Text -> PT.Request Value -> IO (Maybe (PT.Response Value)))  -- ^ Handler for bidirectional requests
+  -> (ServiceStreamItem -> IO ())                          -- ^ each item
   -> SynapseM ()
-invokeStreamingWithBidir shape refreshAuth onResume namespacePath method params onItem onBidirRequest = do
+invokeStreamingCall shape refreshAuth onResume namespacePath method params onItem = do
   cfg <- getConfig
   cfgRef <- liftIO $ newIORef cfg
-  let wrappedHandler item = case item of
-        PT.StreamRequest _ _ reqId reqData _timeout -> do
-          -- Handle the bidirectional request
-          mResponse <- onBidirRequest reqId reqData
-          -- Send the response back via {backend}.respond (if present)
-          case mResponse of
-            Just response -> do
-              _ <- ST.sendBidirectionalResponse cfg reqId response
-              pure ()
-            Nothing -> pure ()  -- agent will respond via separate call
-        _ -> onItem item
-      attempt ps subscribed h = do
+  let attempt ps subscribed h = do
         c <- readIORef cfgRef
         ST.invokeMethodStreamingWith c subscribed namespacePath method ps h
       reauth = refreshAuth >>= \case
@@ -384,7 +367,7 @@ invokeStreamingWithBidir shape refreshAuth onResume namespacePath method params 
   -- SYNAPSE-20: through an outage — a read sent again, a stream resumed
   -- (with since when it takes one), a write that went out never repeated
   result <- liftIO $
-    R.resilientCall (whereOf cfg) shape attempt reauth params onResume wrappedHandler
+    R.resilientCall (whereOf cfg) shape attempt reauth params onResume onItem
       >>= R.reportEnding (whereOf cfg)
   case result of
     Left transportErr -> do
@@ -442,9 +425,7 @@ invokeWithInput shape0 refreshAuth kind chunk progress src namespacePath method 
               case In.inputRefusal i of
                 Just r -> modifyIORef' refusal (maybe (Just r) Just)
                 Nothing -> pure ()
-              case i of
-                PT.StreamRequest{} -> pure ()   -- an input call answers no request
-                _ -> onItem untouched i
+              onItem untouched i
             attempt ps subscribed h = do
               c <- readIORef cfgRef
               ST.invokeMethodDuplex c half subscribed namespacePath method ps h
@@ -497,25 +478,6 @@ whereOf :: SubstrateConfig -> Text
 whereOf c = case (substrateTls c, substratePath c) of
   (Nothing, "/") -> T.pack (substrateHost c) <> ":" <> T.pack (show (substratePort c))
   (tls, path) -> maybe "ws" (const "wss") tls <> "://" <> T.pack (hostHeader c) <> T.pack path
-
--- | Send a response for a bidirectional request
-sendResponse :: Text -> PT.Response Value -> SynapseM ()
-sendResponse requestId response = do
-  cfg <- getConfig
-  result <- liftIO $ ST.sendBidirectionalResponse cfg requestId response
-  case result of
-    Left transportErr -> do
-      backend <- asks seBackend
-      let ctx = TransportContext
-            { tcMessage  = transportErrorToText transportErr
-            , tcHost     = T.pack $ substrateHost cfg
-            , tcPort     = substratePort cfg
-            , tcBackend  = backend
-            , tcPath     = ["respond"]
-            , tcCategory = transportErrorToCategory transportErr
-            }
-      throwTransportWith ctx
-    Right () -> pure ()
 
 -- | Get SubstrateConfig from environment
 getConfig :: SynapseM SubstrateConfig

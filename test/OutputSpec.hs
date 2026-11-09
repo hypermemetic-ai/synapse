@@ -249,25 +249,17 @@ outputSpec exe = describe "synapse -o FILE (SYNAPSE-39)" $ do
         err `shouldContain` "tickets.set_status"
         doesFileExist file >>= (`shouldBe` False)
 
-  it "a two-way request's line goes to stderr, its answer to FILE" $
+  -- ASK-1: a write is an ordinary call; under -j its line goes to FILE
+  it "a write under -j: its answer in FILE, nothing on stdout, exit 0" $
     withRun $ \dir spawn -> do
       warm spawn
       let file = dir </> "answer.out"
-      (Just inp, Just out, Just err, ph) <- createProcess (spawn ["--bidir-mode", "json", "-o", file] ["tickets", "ask"])
-      let untilRequest = do
-            l <- hGetLine err
-            if "bidir_request" `isInfixOf` l then pure l else untilRequest
-      req <- timeout 10000000 untilRequest
-      req `shouldSatisfy` (/= Nothing)
-      hPutStrLn inp "{\"type\":\"confirmed\",\"value\":true}"
-      hFlush inp
-      code <- timeout 10000000 (waitForProcess ph)
-      code `shouldBe` Just ExitSuccess
-      o <- BS.hGetContents out
-      BS.length o `shouldBe` 0
+      (code, out, _) <- reading (spawn ["-j", "-o", file]) ["tickets", "set_status", "--id", "MENGER-12"]
+      (code, out) `shouldBe` (ExitSuccess, "")
       body <- readFile' file
-      body `shouldContain` "answered"
-      body `shouldNotContain` "bidir_request"
+      body `shouldContain` "status_changed"
+      modeOf file `shouldReturn` 0o600
+      leftovers dir "answer.out" >>= (`shouldBe` [])
 
   forM_ [("a SIGTERM", ExitFailure 143)] $ \(how, want) ->
    it (how <> " during an answer leaves no FILE and no temporary file") $
@@ -356,7 +348,6 @@ ticketsWithWrites = object
       , m "amend" "Replace a ticket's body" (Just "write") False [("id", True), ("body", False)]
       , m "flood" "Ticks, every 100 ms, until unsubscribed" (Just "read") True []
       , m "set_status" "Change a ticket's status" (Just "write") False [("id", True)]
-      , m "ask" "Ask the caller to confirm" (Just "write") False []
         -- the service's tickets.watch, said here to be unary: one item, and no end
       , m "watch" "One item, and no end" (Just "read") False [] ] ]
   where
