@@ -1,5 +1,15 @@
 # Changelog for plexus-synapse
 
+## Unreleased
+
+- **A dynamic child's names are navigated** (NEST-21). A segment that is
+  neither a child nor a method of a schema with a `dynamic_child` slot
+  (NEST-5: plexus-core's `config.{key}`) is asked of the service as the
+  slot's instance (`<path>.<segment>.schema`) and stepped into, so
+  `synapse … config transport insecure_ws set --value true` reaches
+  `config.transport.insecure_ws.set`. A name the service does not answer is
+  still `Command not found`. Test: `nav-dynamic-test`.
+
 ## 4.1.0
 
 bidir removed (ASK-1, ASK-3); plexus 0.10's schemas read (NEST-10). Breaking

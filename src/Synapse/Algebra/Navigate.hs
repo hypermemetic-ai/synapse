@@ -32,7 +32,9 @@ import Data.Text (Text)
 import Data.List (find)
 
 import Synapse.Schema.Types
+import Plexus.Schema.Recursive (MethodRole(..))
 import Synapse.Monad
+import Control.Monad.Except (catchError)
 import Synapse.Transport (fetchSchemaAt)
 import Synapse.Cache (fetchCached)
 
@@ -95,7 +97,24 @@ navigateFrom schema visited = \case
           Just method
             | null rest -> pure $ ViewMethod method (visited ++ [seg])
             | otherwise -> throwNav $ MethodNotTerminal seg visited
-          Nothing -> throwNav $ NotFound seg visited (Just schema)
+          Nothing
+            -- NEST-21: a dynamic child (NEST-5's slot, `config.{key}`):
+            -- its names are open, so a segment that is neither a child nor
+            -- a method is asked of the service as an instance of the slot —
+            -- `<path>.<seg>.schema` — and navigated into if it answers.
+            | hasDynamicChild schema -> do
+                found <- (Just <$> fetchSchemaAt (visited ++ [seg])) `catchError` \_ -> pure Nothing
+                case found of
+                  Just childSchema -> navigateFrom childSchema (visited ++ [seg]) rest
+                  Nothing -> throwNav $ NotFound seg visited (Just schema)
+            | otherwise -> throwNav $ NotFound seg visited (Just schema)
+
+-- | NEST-21: whether a schema has a dynamic child slot (its names open).
+hasDynamicChild :: PluginSchema -> Bool
+hasDynamicChild = any (isDynamic . methodRole) . psMethods
+  where
+    isDynamic MethodRoleDynamicChild{} = True
+    isDynamic _ = False
 
 -- | Find a child by namespace
 findChild :: Text -> PluginSchema -> Maybe ChildSummary
