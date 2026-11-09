@@ -368,9 +368,17 @@ tableSpec fixture = describe "IR 3.0 Required behavior" $ do
     it "plexus-core's MethodRole (in the fixture's SchemaResult) is tagged by kind" $
       kindOf fixture "conformance.MethodRole" `shouldBe` Just (taggedEnum "kind"
         [ variant "rpc" Nothing []
-        , variant "static_child" Nothing []
+        -- NEST-7: a peer slot is a static child marked `peer`, with its
+        -- interface and its list / search methods.
+        , variant "static_child" Nothing
+            [ FieldDef "interface" (RefOptional (RefNamed (QualifiedName "conformance" "Interface"))) Nothing False Nothing
+            , FieldDef "list_method" (RefOptional (RefPrimitive "string" Nothing)) Nothing False Nothing
+            , FieldDef "peer" (RefPrimitive "boolean" Nothing) Nothing False Nothing
+            , FieldDef "search_method" (RefOptional (RefPrimitive "string" Nothing)) Nothing False Nothing ]
+        -- NEST-5: a dynamic child carries its slot's type.
         , variant "dynamic_child" Nothing
-            [ FieldDef "list_method" (RefOptional (RefPrimitive "string" Nothing)) Nothing False Nothing
+            [ FieldDef "child" (RefOptional (RefNamed (QualifiedName "conformance" "PluginSchema"))) Nothing False Nothing
+            , FieldDef "list_method" (RefOptional (RefPrimitive "string" Nothing)) Nothing False Nothing
             , FieldDef "search_method" (RefOptional (RefPrimitive "string" Nothing)) Nothing False Nothing ] ])
 
     it "a tag called kind" $ do
