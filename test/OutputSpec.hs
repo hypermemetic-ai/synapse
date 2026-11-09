@@ -40,6 +40,8 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Files (fileMode, getFileStatus)
 import System.Process
 import System.Timeout (timeout)
+import Data.Version (showVersion)
+import qualified Paths_plexus_synapse as Paths
 import Test.Hspec
 
 import MockService
@@ -55,7 +57,8 @@ outputSpec :: FilePath -> Spec
 outputSpec exe = describe "synapse -o FILE (SYNAPSE-39)" $ do
   it "is this build" $ do
     (_, out, _) <- readProcessWithExitCode exe ["--version"] ""
-    out `shouldStartWith` "4.0.0"
+    -- the built synapse, at this package's version (cabal test puts it on PATH)
+    out `shouldStartWith` showVersion Paths.version
 
   forM_ [ ([], "", ["tickets", "get", "--id", "MENGER-12"])
         , (["-j"], " with -j", ["tickets", "get", "--id", "MENGER-12"])

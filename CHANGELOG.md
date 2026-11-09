@@ -1,14 +1,32 @@
 # Changelog for plexus-synapse
 
-## Unreleased
+## 4.1.1
+
+synapse steps into a schema's slots (NEST-21, SYNAPSE-41). Requires
+`plexus-protocol >= 0.8` (its `MethodRole` carries the peer slot and the
+dynamic child's slot type).
+
+### Fixed
 
 - **A dynamic child's names are navigated** (NEST-21). A segment that is
   neither a child nor a method of a schema with a `dynamic_child` slot
   (NEST-5: plexus-core's `config.{key}`) is asked of the service as the
   slot's instance (`<path>.<segment>.schema`) and stepped into, so
   `synapse … config transport insecure_ws set --value true` reaches
-  `config.transport.insecure_ws.set`. A name the service does not answer is
-  still `Command not found`. Test: `nav-dynamic-test`.
+  `config.transport.insecure_ws.set`.
+- **A peer slot's names are navigated** (SYNAPSE-41, NEST-7). After a method
+  marked `peer` (plexus-dyn's `dyn.peer`) the next segment is a peer's name:
+  `synapse … dyn peer <name> <ns> <method>` reaches
+  `dyn.peer.<name>.<ns>.<method>`, whether or not the slot lists its peers
+  as children.
+- **A slot's instance is a tree of its own.** A peer is another service, so
+  its activations' hashes (its `dyn` has the host's `dyn`'s) are no longer a
+  `Cycle detected` with the path that reached it; the same for a dynamic
+  child's keys, which share their type's hash.
+- A name the service says is not there (activation or method not found, or a
+  slot's `not_found`) is still `Command not found`; any other failure while
+  asking for it — an outage, a refusal, a sign-in — is that failure, never
+  `Command not found`. Test: `nav-dynamic-test` (11).
 
 ## 4.1.0
 

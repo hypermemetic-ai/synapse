@@ -51,6 +51,8 @@ import System.FilePath ((</>), takeFileName)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Signals (signalProcess, sigKILL, sigTERM)
 import System.Process (CreateProcess(..), proc, readCreateProcessWithExitCode)
+import Data.Version (showVersion)
+import qualified Paths_plexus_synapse as Paths
 import Test.Hspec
 
 import Plexus.Client (SubstrateConfig(..), LostConnection(..), defaultConfig)
@@ -362,7 +364,8 @@ cliSpec :: FilePath -> Spec
 cliSpec exe = do
   it "is this build" $ do
     (_, out, _) <- readCreateProcessWithExitCode (proc exe ["--version"]) ""
-    out `shouldStartWith` "4.0"
+    -- the built synapse, at this package's version (cabal test puts it on PATH)
+    out `shouldStartWith` showVersion Paths.version
 
   -- re-review #5: help names the holder's socket as it is
   it "help names holder-6.sock" $ do

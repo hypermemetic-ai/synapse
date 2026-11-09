@@ -7,6 +7,7 @@
 module Synapse.Transport
   ( -- * Schema Fetching
     fetchSchema
+  , fetchSlotSchemaAt
   , fetchSchemaAt
   , fetchServiceIR
   , rootSchemaKnown
@@ -154,6 +155,42 @@ fetchSchemaAt path = do
           pure schema
       liftIO $ modifyIORef' memo (Map.insert path schema)
       pure schema
+
+-- | SYNAPSE-41: the schema of a name in a slot (a dynamic child's key, a
+--   peer's name) — @Nothing@ when the service says there is nothing there
+--   (activation or method not found, a slot's @not_found@). Every other
+--   failure propagates as 'fetchSchemaAt' raises it: an outage, a refusal,
+--   a sign-in, an unreadable answer, and a cache miss (which sends the call
+--   to the server, SYNAPSE-28). Memoized and cached as 'fetchSchemaAt'.
+fetchSlotSchemaAt :: Path -> SynapseM (Maybe PluginSchema)
+fetchSlotSchemaAt path = do
+  memo <- asks seFetched
+  known <- liftIO $ Map.lookup path <$> readIORef memo
+  case known of
+    Just schema -> pure (Just schema)
+    Nothing -> do
+      src <- asks seSchemaSource
+      found <- case src of
+        FromCache st -> do
+          cached <- liftIO $ Store.readSchema st path
+          maybe (throwError (CacheMiss ("no cached schema at " <> showPath path))) (pure . Just) cached
+        FromServer st -> do
+          logger <- getLogger
+          cfg <- getConfig
+          result <- liftIO $ R.retrying (whereOf cfg) $ ST.fetchSchemaAtIfAny cfg path
+          case result of
+            Left err -> do
+              Log.logInfo logger Log.SubsystemSchema $
+                "Slot schema fetch failed: " <> showPath path <> " - " <> transportErrorToText err
+              throwNav $ FetchError (transportErrorToText err) path
+            Right Nothing -> do
+              Log.logDebug logger Log.SubsystemSchema $ "Nothing in the slot at " <> showPath path
+              pure Nothing
+            Right (Just schema) -> do
+              liftIO $ mapM_ (\s -> Store.writeSchema s path schema) st
+              pure (Just schema)
+      forM_ found $ \schema -> liftIO $ modifyIORef' memo (Map.insert path schema)
+      pure found
 
 -- | RETURNS-40: the service's own IR of the walk from @path@ — one call,
 --   @<backend>.ir@ with the path as its namespace (none: the whole

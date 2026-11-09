@@ -35,6 +35,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import System.Environment (lookupEnv)
 import System.FilePath ((</>))
+import Data.Version (showVersion)
+import qualified Paths_plexus_synapse as Paths
 import Test.Hspec
 
 import Plexus.Schema.Recursive (MethodSchema(..), PluginSchema(..))
@@ -226,7 +228,8 @@ goldenSpec schemaPath irPath ir golden = describe "golden: the conformance fixtu
     danglingRefs ir `shouldBe` []
 
   it "reports synapse's own version" $
-    synapseVersion `shouldBe` "4.0.0"
+    -- the package's version, as the cabal file states it
+    synapseVersion `shouldBe` T.pack (showVersion Paths.version)
 
 -- ============================================================================
 -- The Required behavior table, one row at a time

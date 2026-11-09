@@ -32,6 +32,8 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Process
 import System.Timeout (timeout)
 import Control.Concurrent (threadDelay)
+import Data.Version (showVersion)
+import qualified Paths_plexus_synapse as Paths
 import Test.Hspec
 
 import MockService
@@ -47,7 +49,8 @@ pipeSpec :: FilePath -> Spec
 pipeSpec exe = describe "a closed stdout (SYNAPSE-26)" $ do
   it "is this build" $ do
     (_, out, _) <- readProcessWithExitCode exe ["--version"] ""
-    out `shouldStartWith` "4.0"
+    -- the built synapse, at this package's version (cabal test puts it on PATH)
+    out `shouldStartWith` showVersion Paths.version
 
   -- one reader takes a byte and closes, one closes before anything is
   -- printed

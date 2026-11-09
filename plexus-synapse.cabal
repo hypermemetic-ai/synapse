@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               plexus-synapse
-version:            4.1.0
+version:            4.1.1
 synopsis:           Schema-driven CLI for Plexus RPC servers
 description:        Synapse is the command-line frontend for Plexus RPC. It discovers a
                     server's methods at runtime and builds its commands, help text,
@@ -103,7 +103,7 @@ library
     base >= 4.17 && < 5,
     -- SYNAPSE-28: setCallRouter, substrateRpcSub, unsubscribe; RETURNS-12:
     -- the plexus 0.7 schema and envelope
-    plexus-protocol >= 0.7 && < 0.8,
+    plexus-protocol >= 0.8 && < 0.9,
     aeson >= 2.0 && < 2.3,
     aeson-pretty >= 0.8 && < 0.9,
     text >= 2.0 && < 2.2,
@@ -521,6 +521,8 @@ test-suite ir3-test
   -- of the ticket's Required behavior table.
   type:             exitcode-stdio-1.0
   main-is:          IR3Spec.hs
+  other-modules:    Paths_plexus_synapse
+  autogen-modules:  Paths_plexus_synapse
   build-depends:
     base >= 4.17 && < 5,
     plexus-protocol,
@@ -654,7 +656,8 @@ test-suite hold-test
   -- 500) through one holder whose memory stays flat.
   type:             exitcode-stdio-1.0
   main-is:          HoldSpec.hs
-  other-modules:    MockService, Plexus07
+  other-modules:    MockService, Plexus07, Paths_plexus_synapse
+  autogen-modules:  Paths_plexus_synapse
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -719,7 +722,8 @@ test-suite pipe-test
   -- resent, a write that went out exit 75).
   type:             exitcode-stdio-1.0
   main-is:          PipeSpec.hs
-  other-modules:    MockService, Plexus07
+  other-modules:    MockService, Plexus07, Paths_plexus_synapse
+  autogen-modules:  Paths_plexus_synapse
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
@@ -778,7 +782,8 @@ test-suite output-test
   -- nothing sent.
   type:             exitcode-stdio-1.0
   main-is:          OutputSpec.hs
-  other-modules:    MockService, Plexus07
+  other-modules:    MockService, Plexus07, Paths_plexus_synapse
+  autogen-modules:  Paths_plexus_synapse
   build-tool-depends: plexus-synapse:synapse
   build-depends:
     base >= 4.17 && < 5,
